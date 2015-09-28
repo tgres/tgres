@@ -10,7 +10,7 @@ min-cache-duration =   "1s"
 workers            =   4
 
 http-listen-spec = "0.0.0.0:8888"
-graphite-line-listen-spec = 0.0.0.0:2003
+graphite-line-listen-spec = "0.0.0.0:2003"
 graphite-text-listen-spec = "0.0.0.0:2003"
 graphite-udp-listen-spec = "0.0.0.0:2003"
 graphite-pickle-listen-spec = "0.0.0.0:2004"

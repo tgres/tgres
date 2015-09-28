@@ -1055,10 +1055,17 @@ type seriesNonNegativeDerivative struct {
 }
 
 func (f *seriesNonNegativeDerivative) CurrentValue() float64 {
-	return f.CurrentValue() - f.last
+	result := f.Series.CurrentValue() - f.last
+	if result < 0 {
+		return math.NaN()
+	}
+	return result
 }
 
 func (f *seriesNonNegativeDerivative) Next() bool {
+	if !f.Series.Next() {
+		return false
+	}
 	value := f.Series.CurrentValue()
 	for math.IsNaN(f.last) || value < f.last {
 		f.last = value
