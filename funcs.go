@@ -111,6 +111,7 @@ var funcs = FuncMap{
 	"stdev":                  dslMovingStdDev,
 	"weightedAverage":        dslWeightedAverage,
 	"aliasByMetric":          dslAliasByMetric,
+	"aliasByNode":            dslAliasByNode,
 	"aliasSub":               dslAliasSub,
 	"changed":                dslChanged,
 	"countSeries":            dslCountSeries,
@@ -761,6 +762,33 @@ func dslAliasByMetric(dc *DslCtx, args []interface{}) (SeriesMap, error) {
 	}
 
 	return result, nil
+}
+
+// aliasByNode()
+
+func dslAliasByNode(dc *DslCtx, args []interface{}) (SeriesMap, error) {
+
+	if len(args) != 2 {
+		return nil, fmt.Errorf("Expecting 2 arguments, got %d", len(args))
+	}
+
+	result, err := dc.seriesFromSeriesOrIdent(args[0])
+	if err != nil {
+		return nil, err
+	}
+	if nf, ok := args[1].(float64); ok {
+		n := int(nf)
+		for name, series := range result {
+			parts := strings.Split(name, ".")
+			if n >= len(parts) {
+				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
+			}
+			series.Alias(parts[n])
+		}
+		return result, nil
+	} else {
+		return nil, fmt.Errorf("Invalid argument: %v", args[1])
+	}
 }
 
 // aliasSub()
