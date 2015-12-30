@@ -66,6 +66,8 @@ var logFileCycler = func() {
 		for {
 			_ = <-cycleLogCh
 			if quitting {
+				// TODO This is not safe - "quitting" is not protected,
+				// but we should not exit in the middle of a clean up...
 				return
 			}
 			cycleLogFile()
@@ -75,11 +77,10 @@ var logFileCycler = func() {
 	go func() { // Periodic cycling
 		for {
 			time.Sleep(config.LogCycle.Duration)
+			cycleLogCh <- 1
 			if quitting {
-				cycleLogCh <- 1
 				return
 			}
-			cycleLogCh <- 1
 		}
 	}()
 }

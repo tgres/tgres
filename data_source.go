@@ -43,17 +43,16 @@ func (dp *trDataPoint) process() error {
 // completes the PDP. This state is kept in trDataSource.
 
 type trDataSource struct {
-	Id           int64
-	Name         string
-	StepMs       int64
-	HeartbeatMs  int64
-	LastUpdate   time.Time
-	LastDs       float64
-	Value        float64
-	UnknownMs    int64
-	RRAs         []*trRoundRobinArchive
-	LastUpdateRT time.Time
-	LastFlushRT  time.Time
+	Id          int64
+	Name        string
+	StepMs      int64
+	HeartbeatMs int64
+	LastUpdate  time.Time
+	LastDs      float64
+	Value       float64
+	UnknownMs   int64
+	RRAs        []*trRoundRobinArchive
+	LastFlushRT time.Time
 }
 
 type trDataSources struct {
@@ -376,7 +375,6 @@ func (ds *trDataSource) processDataPoint(dp *trDataPoint) error {
 	}
 
 	ds.LastUpdate = dp.TimeStamp
-	ds.LastUpdateRT = time.Now()
 	ds.LastDs = dp.Value
 
 	return nil
@@ -477,7 +475,17 @@ func (ds *trDataSource) clearRRAs() {
 	}
 }
 
-func (ds *trDataSource) flushCopy() *trDataSource {
+func (ds *trDataSource) shouldBeFlushed() bool {
+	pc := ds.pointCount()
+	if pc > config.MaxCachedPoints {
+		return ds.LastFlushRT.Add(config.MinCache.Duration).Before(time.Now())
+	} else if pc > 0 {
+		return ds.LastFlushRT.Add(config.MaxCache.Duration).Before(time.Now())
+	}
+	return false
+}
+
+func (ds *trDataSource) mostlyCopy() *trDataSource {
 
 	// Only copy elements that change or needed for saving/rendering
 	new_ds := new(trDataSource)
@@ -491,13 +499,13 @@ func (ds *trDataSource) flushCopy() *trDataSource {
 	new_ds.RRAs = make([]*trRoundRobinArchive, len(ds.RRAs))
 
 	for n, rra := range ds.RRAs {
-		new_ds.RRAs[n] = rra.flushCopy()
+		new_ds.RRAs[n] = rra.mostlyCopy()
 	}
 
 	return new_ds
 }
 
-func (rra *trRoundRobinArchive) flushCopy() *trRoundRobinArchive {
+func (rra *trRoundRobinArchive) mostlyCopy() *trRoundRobinArchive {
 
 	// Only copy elements that change or needed for saving/rendering
 	new_rra := new(trRoundRobinArchive)

@@ -102,6 +102,7 @@ func Init() { // not to be confused with init()
 		ch := make(chan os.Signal)
 		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 		s := <-ch
+		log.Printf("Got signal: %v", s)
 		if s == syscall.SIGHUP {
 			if gracefulChildPid == 0 {
 				gracefulRestart(t, cfgPath)

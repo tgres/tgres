@@ -22,6 +22,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -44,6 +45,7 @@ func newServiceManager(t *trTransceiver) *trServiceManager {
 			"gt":  &graphiteTextServiceManager{t: t},
 			"gu":  &graphiteUdpTextServiceManager{t: t},
 			"gp":  &graphitePickleServiceManager{t: t},
+			"su":  &statsdUdpTextServiceManager{t: t},
 			"www": &wwwServer{t: t},
 		},
 	}
@@ -264,7 +266,7 @@ func handleGraphitePickleProtocol(t *trTransceiver, conn net.Conn, timeout int) 
 							}
 						}
 					}
-					t.queueDataPoint(name, time.Unix(tstamp, 0), value)
+					t.queueDataPoint(&trDataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value})
 				} else {
 					err = fmt.Errorf("dp wrong length: %d", len(dp))
 					break
@@ -427,22 +429,16 @@ func handleGraphiteTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
 
 	// We use the Scanner, becase it has a MaxScanTokenSize of 64K
 
-	var (
-		name   string
-		tstamp int64
-		value  float64
-	)
-
 	connbuf := bufio.NewScanner(conn)
 
 	for connbuf.Scan() {
-		str := connbuf.Text()
-		n, err := fmt.Sscanf(str, "%s %f %d", &name, &value, &tstamp)
+		packetStr := connbuf.Text()
 
-		if n != 3 || err != nil {
-			log.Printf("handleGraphiteTextProtocol(): error %v scanning input: %q", err, str)
+		if dp, err := parseGraphitePacket(packetStr); err != nil {
+			log.Printf("handleGraphiteTextProtocol(): bad backet: %v")
+		} else {
+			t.queueDataPoint(dp)
 		}
-		t.queueDataPoint(name, time.Unix(tstamp, 0), value)
 
 		if timeout != 0 {
 			conn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
@@ -452,4 +448,151 @@ func handleGraphiteTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
 	if err := connbuf.Err(); err != nil {
 		log.Println("handleGraphiteTextProtocol(): Error reading: %v", err)
 	}
+}
+
+func parseGraphitePacket(packetStr string) (*trDataPoint, error) {
+
+	var (
+		name   string
+		tstamp int64
+		value  float64
+	)
+
+	if n, err := fmt.Sscanf(packetStr, "%s %f %d", &name, &value, &tstamp); n != 3 || err != nil {
+		return nil, fmt.Errorf("error %v scanning input: %q", err, packetStr)
+	}
+
+	name = sanitizeName(name)
+	return &trDataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value}, nil
+}
+
+var (
+	sanitizeRegexSpace       = regexp.MustCompile("\\s+")
+	sanitizeRegexSlash       = regexp.MustCompile("/")
+	sanitizeRegexNonAlphaNum = regexp.MustCompile("[^a-zA-Z_\\-0-9\\.]")
+)
+
+func sanitizeName(name string) string {
+	name = sanitizeRegexSpace.ReplaceAllString(name, "_")
+	name = sanitizeRegexSlash.ReplaceAllString(name, "-")
+	return sanitizeRegexNonAlphaNum.ReplaceAllString(name, "")
+}
+
+// TODO isn't this identical to handleGraphiteTextProtocol?
+func handleStatsdTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
+
+	defer conn.Close() // decrements tcpWg
+
+	if timeout != 0 {
+		conn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
+	}
+
+	// We use the Scanner, becase it has a MaxScanTokenSize of 64K
+
+	connbuf := bufio.NewScanner(conn)
+
+	for connbuf.Scan() {
+		if stat, err := parseStatsdPacket(connbuf.Text()); err == nil {
+			t.queueStat(stat)
+		} else {
+			log.Printf("parseStatsdPacket(): %v", err)
+		}
+
+		if timeout != 0 {
+			conn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
+		}
+	}
+
+	if err := connbuf.Err(); err != nil {
+		log.Println("handleStatsdTextProtocol(): Error reading: %v", err)
+	}
+}
+
+func parseStatsdPacket(packet string) (*trStat, error) {
+
+	var (
+		result = &trStat{}
+		parts  []string
+	)
+
+	parts = strings.Split(packet, ":")
+	if len(parts) < 1 {
+		return nil, fmt.Errorf("invalid packet: %q", packet)
+	}
+
+	result.name = sanitizeName(parts[0])
+	if len(parts) == 1 {
+		result.value, result.metric = 1, "c"
+		return result, nil
+	}
+
+	parts = strings.Split(parts[1], "|")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid packet: %q", packet)
+	}
+
+	if n, err := fmt.Sscanf(parts[0], "%f", &result.value); n != 1 || err != nil {
+		return nil, fmt.Errorf("error %v scanning input (cannot parse value|metric): %q", err, packet)
+	}
+	result.metric = parts[1]
+
+	if len(parts) > 2 {
+		if n, err := fmt.Sscanf(parts[2], "@%f", &result.sample); n != 1 || err != nil {
+			return nil, fmt.Errorf("error %v scanning input (bad @sample?): %q", err, packet)
+		}
+	}
+
+	return result, nil
+}
+
+// --
+
+type statsdUdpTextServiceManager struct {
+	t    *trTransceiver
+	conn net.Conn
+}
+
+func (g *statsdUdpTextServiceManager) Stop() {
+	if g.conn != nil {
+		g.conn.Close()
+	}
+}
+
+func (g *statsdUdpTextServiceManager) File() *os.File {
+	if g.conn != nil {
+		f, _ := g.conn.(*net.UDPConn).File()
+		return f
+	}
+	return nil
+}
+
+func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
+	var (
+		err     error
+		udpAddr *net.UDPAddr
+	)
+
+	if config.StatsdUdpListenSpec != "" {
+		if file != nil {
+			g.conn, err = net.FileConn(file)
+		} else {
+			udpAddr, err = net.ResolveUDPAddr("udp", config.StatsdUdpListenSpec)
+			if err == nil {
+				g.conn, err = net.ListenUDP("udp", udpAddr)
+			}
+		}
+	} else {
+		log.Printf("Not starting Statsd UDP protocol because statsd-udp-listen-spec is blank.")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("Error starting Statsd UDP Text Protocol serviceManager: %v", err)
+	}
+
+	fmt.Printf("Statsd UDP protocol Listening on %s\n", config.StatsdTextListenSpec)
+
+	// for UDP timeout must be 0
+	go handleStatsdTextProtocol(g.t, g.conn, 0)
+
+	return nil
 }

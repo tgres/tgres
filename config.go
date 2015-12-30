@@ -41,9 +41,13 @@ type trConfig struct {
 	GraphiteTextListenSpec   string   `toml:"graphite-text-listen-spec"`
 	GraphiteUdpListenSpec    string   `toml:"graphite-udp-listen-spec"`
 	GraphitePickleListenSpec string   `toml:"graphite-pickle-listen-spec"`
+	StatsdTextListenSpec     string   `toml:"statsd-text-listen-spec"`
+	StatsdUdpListenSpec      string   `toml:"statsd-udp-listen-spec"`
 	HttpListenSpec           string   `toml:"http-listen-spec"`
 	Workers                  int
 	DSs                      []trDSSpec `toml:"ds"`
+	StatFlush                duration   `toml:"stat-flush-interval"`
+	StatsNamePrefix          string     `toml:"stats-name-prefix"`
 }
 
 type duration struct {
@@ -236,8 +240,28 @@ func (c *trConfig) processMaxCacheDuration() error {
 func (c *trConfig) processMinCacheDuration() error {
 	if c.MinCache.Duration == 0 {
 		return fmt.Errorf("min-cache-duration is missing")
+	} else if c.MinCache.Duration > c.MaxCache.Duration/2 {
+		return fmt.Errorf("max-cache-duration should be at least twice min-cache-duration")
 	} else {
 		log.Printf("A Data Source will be flushed at most once per %v (min-cache-duration).", c.MinCache.Duration)
+	}
+	return nil
+}
+
+func (c *trConfig) processStatFlushInterval() error {
+	if c.StatFlush.Duration == 0 {
+		return fmt.Errorf("stat-flush-interval is missing")
+	} else {
+		log.Printf("Stats (a la statsd) will be flushed every %v (stat-flush-interval).", c.StatFlush.Duration)
+	}
+	return nil
+}
+
+func (c *trConfig) processStatsNamePrefix() error {
+	if c.StatsNamePrefix == "" {
+		log.Printf("stats-name-prefix is empty, defaulting to 'stats'")
+		c.StatsNamePrefix = "stats"
+
 	}
 	return nil
 }
@@ -285,6 +309,8 @@ type configer interface {
 	processMaxCachedPoints() error
 	processMaxCacheDuration() error
 	processMinCacheDuration() error
+	processStatFlushInterval() error
+	processStatsNamePrefix() error
 	processWorkers() error
 	processDSSpec() error
 }
@@ -310,6 +336,12 @@ func processConfig(c configer, wd string) error {
 		return err
 	}
 	if err := c.processMinCacheDuration(); err != nil {
+		return err
+	}
+	if err := c.processStatFlushInterval(); err != nil {
+		return err
+	}
+	if err := c.processStatsNamePrefix(); err != nil {
 		return err
 	}
 	if err := c.processWorkers(); err != nil {

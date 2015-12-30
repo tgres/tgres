@@ -5,20 +5,28 @@ pid-file =             "timeriver.pid"
 log-file =             "log/timeriver.log"
 log-cycle-interval =   "24h"
 max-cached-points  =   4096
-max-cache-duration =   "30s"
+max-cache-duration =   "5s"
 min-cache-duration =   "1s"
 workers            =   4
 
-http-listen-spec = "0.0.0.0:8888"
-graphite-line-listen-spec = "0.0.0.0:2003"
-graphite-text-listen-spec = "0.0.0.0:2003"
-graphite-udp-listen-spec = "0.0.0.0:2003"
+http-listen-spec            = "0.0.0.0:8888"
+graphite-line-listen-spec   = "0.0.0.0:2003"
+graphite-text-listen-spec   = "0.0.0.0:2003"
+graphite-udp-listen-spec    = "0.0.0.0:2003"
 graphite-pickle-listen-spec = "0.0.0.0:2004"
 
+statsd-text-listen-spec     = "0.0.0.0:8125"
+statsd-udp-listen-spec      = "0.0.0.0:8125"
+stat-flush-interval         = "10s"
+stats-name-prefix           = "stats"
+
+# RedHat and some others:
 db-connect-string = "host=/tmp dbname=timeriver sslmode=disable"
+# Debian and some others:
+#db-connect-string = "host=/var/run/postgresql dbname=timeriver sslmode=disable"
 
 [[foo]]
 regexp = "foo"
-step = "60s"
+step = "10s"
 heartbeat = "2h"
-rras = ["AVERAGE:1m:10d", "AVERAGE:10m:93d", "AVERAGE:1d:5y:1"]
+rras = ["AVERAGE:10s:6h", "AVERAGE:1m:10d", "AVERAGE:10m:93d", "AVERAGE:1d:5y:1"]

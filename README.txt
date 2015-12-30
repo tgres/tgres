@@ -2,12 +2,13 @@
 Timeriver is a "Time Series Database" which uses PostgreSQL for
 storage, written in Go.
 
-It is presently a work-in-progress, not recommended for production.
+It is presently work-in-progress, still under development, things in
+flux.
 
 Timeriver can receive data using Graphite Text, UDP and Pickle
-protocols, and supports enough of a Graphite HTTP API to be usable
-with Grafana. Timeriver implements the majority of the Graphite
-functions.
+protocols, as well as Statsd (counters, gauges and timers). It
+supports enough of a Graphite HTTP API to be usable with
+Grafana. Timeriver implements the majority of the Graphite functions.
 
 Timeriver places emphasis on accuracy and stores data similarly to
 RRDTool, using a weighted average of points that arrive within the
@@ -39,7 +40,7 @@ joined, analyzed, etc.
 Other (future) goals/notes:
 
 It has to be simple. There shouldn't be many daemons/components - just
-this one process and the database server.
+this one process to receive and serve the data and the database server.
 
 Horizontal scaling is an interesting problem, a consensus algorithm
 such as Raft may or may not be the right answer, we recognize that

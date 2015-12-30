@@ -17,6 +17,8 @@ package timeriver
 
 import (
 	"log"
+	"math"
+	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -25,21 +27,18 @@ import (
 )
 
 type trTransceiver struct {
-	serviceMgr     *trServiceManager
-	dss            *trDataSources
-	dpCh           chan *trDataPoint     // incoming data point
-	workerChs      []chan *trDataPoint   // incoming data point with ds
-	flusherChs     []chan *trDataSource  // ds to flush
-	dsCheckChs     []chan int64          // check ds id if it's time to flush
-	dsFlushChs     []chan int64          // flush ds id immediately
-	dsCopyChs      []chan *dsCopyRequest // request a copy of a DS
-	toFlushCh      chan int64            // should be flushed eventually
-	flushedCh      chan int64            // has been flushed
-	workerWg       sync.WaitGroup
-	flusherWg      sync.WaitGroup
-	flushWatcherWg sync.WaitGroup
-	dispatcherWg   sync.WaitGroup
-	startWg        sync.WaitGroup
+	serviceMgr   *trServiceManager
+	dss          *trDataSources
+	dpCh         chan *trDataPoint     // incoming data point
+	workerChs    []chan *trDataPoint   // incoming data point with ds
+	flusherChs   []chan *trDataSource  // ds to flush
+	dsCopyChs    []chan *dsCopyRequest // request a copy of a DS (used by HTTP)
+	stCh         chan *trStat          // incoming statd stats
+	workerWg     sync.WaitGroup
+	flusherWg    sync.WaitGroup
+	statWg       sync.WaitGroup
+	dispatcherWg sync.WaitGroup
+	startWg      sync.WaitGroup
 }
 
 type dsCopyRequest struct {
@@ -50,14 +49,14 @@ type dsCopyRequest struct {
 func newTransceiver() *trTransceiver {
 	dss := &trDataSources{}
 	return &trTransceiver{dss: dss,
-		dpCh:      make(chan *trDataPoint, 1048576), // so we can survive a graceful restart
-		toFlushCh: make(chan int64, 128),
-		flushedCh: make(chan int64, 128)}
+		dpCh: make(chan *trDataPoint, 1048576), // so we can survive a graceful restart
+	}
 }
 
 func (t *trTransceiver) start(gracefulProtos string) error {
 	t.startWorkers()
 	t.startFlushers()
+	t.startStatWorker()
 	t.serviceMgr = newServiceManager(t)
 
 	if err := t.serviceMgr.run(gracefulProtos); err != nil {
@@ -66,6 +65,7 @@ func (t *trTransceiver) start(gracefulProtos string) error {
 
 	// Wait for workers/flushers to start correctly
 	t.startWg.Wait()
+	log.Printf("All workers running, good to go!")
 
 	if gracefulProtos != "" {
 		parent := syscall.Getppid()
@@ -99,14 +99,6 @@ func (t *trTransceiver) stop() {
 
 }
 
-func (t *trTransceiver) stopFlushWatcher() {
-	log.Printf("stopFlushWatcher(): closing channel...")
-	close(t.toFlushCh) // triggers the flushWatcher to request every DS flush
-	log.Printf("stopFlushWatcher(): waiting on flushWatcher to finish...")
-	t.flushWatcherWg.Wait()
-	log.Printf("stopFlushWatcher(): flushWatcher finished.")
-}
-
 func (t *trTransceiver) stopWorkers() {
 	log.Printf("stopWorkers(): waiting for worker channels to empty...")
 	empty := false
@@ -118,14 +110,13 @@ func (t *trTransceiver) stopWorkers() {
 				break
 			}
 		}
-		if empty {
-			break
+		if !empty {
+			time.Sleep(100 * time.Millisecond)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
-	t.stopFlushWatcher()
+
 	log.Printf("stopWorkers(): closing all worker channels...")
-	for _, ch := range t.dsFlushChs { // this is correct
+	for _, ch := range t.workerChs {
 		close(ch)
 	}
 	log.Printf("stopWorkers(): waiting for workers to finish...")
@@ -143,6 +134,20 @@ func (t *trTransceiver) stopFlushers() {
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
+func (t *trTransceiver) stopStatWorker() {
+
+	log.Printf("stopStatWorker(): waiting for stat channel to empty...")
+	for len(t.stCh) > 0 {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	log.Printf("stopStatWorker(): closing stat channel...")
+	close(t.stCh)
+	log.Printf("stopStatWorker(): waiting for stat worker to finish...")
+	t.statWg.Wait()
+	log.Printf("stopStatWorker(): stat worker finished.")
+}
+
 func (t *trTransceiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
@@ -152,7 +157,8 @@ func (t *trTransceiver) dispatcher() {
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			t.stopWorkers() // stops the flush watcher too
+			t.stopStatWorker()
+			t.stopWorkers()
 			t.stopFlushers()
 			break
 		}
@@ -176,9 +182,14 @@ func (t *trTransceiver) dispatcher() {
 	}
 }
 
-func (t *trTransceiver) queueDataPoint(name string, tstamp time.Time, value float64) {
-	dp := &trDataPoint{Name: name, TimeStamp: tstamp, Value: value}
+// TODO: what is the point of this one-line method?
+func (t *trTransceiver) queueDataPoint(dp *trDataPoint) {
 	t.dpCh <- dp
+}
+
+// TODO: what is the point of this one-line method?
+func (t *trTransceiver) queueStat(st *trStat) {
+	t.stCh <- st
 }
 
 func (t *trTransceiver) requestDsCopy(id int64) *trDataSource {
@@ -192,97 +203,106 @@ func (t *trTransceiver) worker(id int64) {
 	t.workerWg.Add(1)
 	defer t.workerWg.Done()
 
-	log.Printf("worker(%d) starting.", id)
+	var (
+		ds              *trDataSource
+		flushEverything bool
+		recent          = make(map[int64]bool)
+	)
 
-	var ds *trDataSource
+	var periodicFlushCheck = make(chan int)
+	go func() {
+		for {
+			// Sleep randomly between min and max cache durations (is this wise?)
+			i := int(config.MaxCache.Duration.Nanoseconds()-config.MinCache.Duration.Nanoseconds()) / 1000
+			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + config.MinCache.Duration)
+			periodicFlushCheck <- 1
+		}
+	}()
 
+	log.Printf("  - worker(%d) started.", id)
 	t.startWg.Done()
-	for {
 
-		flush := false
+	for {
+		ds, flushEverything = nil, false
+
 		select {
-		case dp := <-t.workerChs[id]:
-			ds = dp.ds // at this point dp.ds has to be already set
-			if err := dp.process(); err != nil {
-				log.Printf("worker(%d): dp.process() error: %v", id, err)
-			} else {
-				t.toFlushCh <- ds.Id
-			}
-		case dsId := <-t.dsCheckChs[id]:
-			ds = t.dss.getById(dsId)
-			if ds == nil {
-				log.Printf("worker(%d): WAT? cannot lookup ds id (%d) sent from flushWatcher?", id, dsId)
-				continue
-			}
-		case dsId, ok := <-t.dsFlushChs[id]:
+		case <-periodicFlushCheck:
+			// Nothing to do here
+		case dp, ok := <-t.workerChs[id]:
 			if ok {
-				ds = t.dss.getById(dsId)
-				if ds == nil {
-					log.Printf("worker(%d): cannot lookup ds id (%d) sent from flushWatcher?", id, dsId)
-					continue
+				ds = dp.ds // at this point dp.ds has to be already set
+				if err := dp.process(); err == nil {
+					recent[ds.Id] = true
 				} else {
-					flush = true
+					log.Printf("worker(%d): dp.process() error: %v", id, err)
 				}
 			} else {
-				log.Printf("worker(%d): channel closed, exiting.", id)
-				return
+				flushEverything = true
 			}
 		case r := <-t.dsCopyChs[id]:
 			ds = t.dss.getById(r.dsId)
 			if ds == nil {
 				log.Printf("worker(%d): WAT? cannot lookup ds id (%d) sent for copy?", id, r.dsId)
+			} else {
+				r.resp <- ds.mostlyCopy()
+				close(r.resp)
 			}
-			r.resp <- ds.flushCopy()
-			close(r.resp)
 			continue
 		}
 
-		if !flush {
-			pc := ds.pointCount()
-			if pc > config.MaxCachedPoints {
-				flush = true
-			} else if ds.LastUpdateRT.Add(config.MaxCache.Duration).Before(time.Now()) {
-				flush = true
+		if ds == nil {
+			// flushEverything or periodic
+			for dsId, _ := range recent {
+				ds = t.dss.getById(dsId)
+				if ds == nil {
+					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
+					continue
+				} else if flushEverything || ds.shouldBeFlushed() {
+					t.flushDs(ds)
+					delete(recent, ds.Id)
+				}
 			}
+		} else if ds.shouldBeFlushed() {
+			// flush just this one ds
+			t.flushDs(ds)
+			delete(recent, ds.Id)
 		}
 
-		if flush {
-			if ds.LastFlushRT.Add(config.MinCache.Duration).Before(time.Now()) {
-				t.flusherChs[ds.Id%int64(config.Workers)] <- ds.flushCopy()
-				ds.LastFlushRT = time.Now()
-				ds.clearRRAs()
-				t.flushedCh <- ds.Id
-			}
+		if flushEverything {
+			break
 		}
 	}
+}
+
+func (t *trTransceiver) flushDs(ds *trDataSource) {
+	t.flusherChs[ds.Id%int64(config.Workers)] <- ds.mostlyCopy()
+	ds.LastFlushRT = time.Now()
+	ds.clearRRAs()
 }
 
 func (t *trTransceiver) startWorkers() {
 
 	t.workerChs = make([]chan *trDataPoint, config.Workers)
-	t.dsCheckChs = make([]chan int64, config.Workers)
-	t.dsFlushChs = make([]chan int64, config.Workers)
 	t.dsCopyChs = make([]chan *dsCopyRequest, config.Workers)
 
+	log.Printf("Starting %d workers...", config.Workers)
 	t.startWg.Add(config.Workers)
 	for i := 0; i < config.Workers; i++ {
 		t.workerChs[i] = make(chan *trDataPoint, 1024)
-		t.dsCheckChs[i] = make(chan int64, 1024)
-		t.dsFlushChs[i] = make(chan int64, 1024)
 		t.dsCopyChs[i] = make(chan *dsCopyRequest, 1024)
 
 		go t.worker(int64(i))
 	}
-	log.Printf("Started %d workers.", config.Workers)
+
 }
 
 func (t *trTransceiver) flusher(id int64) {
 	t.flusherWg.Add(1)
 	defer t.flusherWg.Done()
 
-	log.Printf("flusher(%d) starting.", id)
-
+	log.Printf("  - flusher(%d) started.", id)
 	t.startWg.Done()
+
 	for {
 		ds, ok := <-t.flusherChs[id]
 		if ok {
@@ -301,69 +321,130 @@ func (t *trTransceiver) startFlushers() {
 
 	t.flusherChs = make([]chan *trDataSource, config.Workers)
 
-	t.startWg.Add(config.Workers + 1)
+	log.Printf("Starting %d flushers...", config.Workers)
+	t.startWg.Add(config.Workers)
 	for i := 0; i < config.Workers; i++ {
 		t.flusherChs[i] = make(chan *trDataSource)
 		go t.flusher(int64(i))
 	}
-	go t.flushWatcher()
-
-	log.Printf("Started %d flushers and the flushWatcher", config.Workers)
 }
 
-func (t *trTransceiver) flushWatcher() {
+func (t *trTransceiver) startStatWorker() {
+	t.stCh = make(chan *trStat, 1024)
+	log.Printf("Starting statWorker...")
+	t.startWg.Add(1)
+	go t.statWorker()
+}
 
-	t.flushWatcherWg.Add(1)
-	defer t.flushWatcherWg.Done()
+func (t *trTransceiver) statWorker() {
 
-	var id int64
+	t.statWg.Add(1)
+	defer t.statWg.Done()
 
-	byId := make(map[int64]time.Time)
-	lastCheck := time.Now()
-
-	periodicWake := make(chan bool, 1)
+	var flushCh = make(chan int, 1)
 	go func() {
 		for {
-			time.Sleep(time.Duration(5) * time.Second) // TODO make me configurable?
-			periodicWake <- true
+			// NB: We do not use a time.Ticker here because my simple
+			// experiments show that it will not stay aligned on a
+			// multiple of durationif the system clock is
+			// adjusted. This thing will mostly remain aligned.
+			clock := time.Now()
+			time.Sleep(clock.Truncate(config.StatFlush.Duration).Add(config.StatFlush.Duration).Sub(clock))
+			if len(flushCh) == 0 {
+				flushCh <- 1
+			} else {
+				log.Printf("statWorker(): dropping stat flush timer on the floor - busy system?")
+			}
 		}
 	}()
 
+	log.Printf("  - statWorker() started.")
 	t.startWg.Done()
+
+	counts := make(map[string]int64)
+	gauges := make(map[string]float64)
+	timers := make(map[string][]float64)
+
+	prefix := config.StatsNamePrefix
+
+	var flushStats = func() {
+		for name, count := range counts {
+			perSec := float64(count) / config.StatFlush.Duration.Seconds()
+			t.queueDataPoint(&trDataPoint{Name: prefix + "." + name, TimeStamp: time.Now(), Value: perSec})
+		}
+		for name, gauge := range gauges {
+			t.queueDataPoint(&trDataPoint{Name: prefix + ".gauges." + name, TimeStamp: time.Now(), Value: gauge})
+		}
+		for name, times := range timers {
+			// count
+			t.queueDataPoint(&trDataPoint{Name: prefix + ".timers." + name + ".count", TimeStamp: time.Now(), Value: float64(len(times))})
+
+			// lower, upper, sum, mean
+			if len(times) > 0 {
+				var (
+					lower, upper = times[0], times[0]
+					sum          float64
+				)
+
+				for _, v := range times[1:] {
+					lower = math.Min(lower, v)
+					upper = math.Max(upper, v)
+					sum += v
+				}
+				t.queueDataPoint(&trDataPoint{Name: prefix + ".timers." + name + ".lower", TimeStamp: time.Now(), Value: lower})
+				t.queueDataPoint(&trDataPoint{Name: prefix + ".timers." + name + ".upper", TimeStamp: time.Now(), Value: upper})
+				t.queueDataPoint(&trDataPoint{Name: prefix + ".timers." + name + ".sum", TimeStamp: time.Now(), Value: sum})
+				t.queueDataPoint(&trDataPoint{Name: prefix + ".timers." + name + ".mean", TimeStamp: time.Now(), Value: sum / float64(len(times))})
+			}
+
+			// TODO - these will require sorting:
+			// count_ps ?
+			// mean_90
+			// median
+			// std
+			// sum_90
+			// upper_90
+
+		}
+		// clear the maps
+		counts = make(map[string]int64)
+		gauges = make(map[string]float64)
+		timers = make(map[string][]float64)
+	}
+
 	for {
-
-		var ok bool = true // flush everything if false
+		// It's important to flush stats at as precise time as
+		// possible. This non-blocking select will guarantee that we
+		// process flushCh even if there is stuff in the stCh.
 		select {
-		case id, ok = <-t.toFlushCh:
-			if ok {
-				byId[id] = time.Now()
-			}
-		case id = <-t.flushedCh:
-			delete(byId, id)
-		case <-periodicWake:
-			// nothing to do
+		case <-flushCh:
+			flushStats()
+		default:
 		}
 
-		// See what in the map needs to be flushed
-		if !ok || lastCheck.Add(config.MaxCache.Duration).Before(time.Now()) {
-			for i, tm := range byId {
-				if !ok {
-					t.dsFlushChs[i%int64(config.Workers)] <- i
-				} else if tm.Add(config.MaxCache.Duration).Before(time.Now()) {
-					t.dsCheckChs[i%int64(config.Workers)] <- i
-				}
+		select {
+		case <-flushCh:
+			flushStats()
+		case st, ok := <-t.stCh:
+			if !ok {
+				flushStats() // Final flush
+				return
 			}
-			lastCheck = time.Now()
-		}
-
-		if !ok {
-			log.Printf("flushWatcher(): toFlush channel closed, notified to flush everyting, then exiting.")
-			go func() {
-				for {
-					<-t.flushedCh // /dev/null
+			if st.metric == "c" {
+				if _, ok := counts[st.name]; !ok {
+					counts[st.name] = 0
 				}
-			}()
-			return
+				counts[st.name] += int64(st.value)
+			} else if st.metric == "g" {
+				gauges[st.name] = st.value
+			} else if st.metric == "ms" {
+				if _, ok := timers[st.name]; !ok {
+					timers[st.name] = make([]float64, 4)
+				}
+				timers[st.name] = append(timers[st.name], st.value)
+			} else {
+				log.Printf("statWorker(): invalid metric type: %q, ignoring.", st.metric)
+			}
 		}
 	}
 }
