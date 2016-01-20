@@ -16,10 +16,25 @@
 package main
 
 import (
-	"github.com/grisha/timeriver"
+	"flag"
+	"fmt"
+	"github.com/grisha/tgres"
+)
+
+var (
+	buildTime   = "UNKNOWN"
+	gitRevision = "UNKNOWN"
 )
 
 func main() {
-	timeriver.Init()
-	timeriver.Finish()
+
+	printVersion := flag.Bool("v", false, "Print version")
+	flag.Parse()
+	if *printVersion {
+		fmt.Printf("Build time: %s, git revision: %s\n", buildTime, gitRevision)
+	} else {
+		// NB: More flags defined in tgres package
+		tgres.Init()
+		tgres.Finish()
+	}
 }

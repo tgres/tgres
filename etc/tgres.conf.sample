@@ -1,8 +1,8 @@
 
 # This is a TOML file: https://github.com/toml-lang/toml
 
-pid-file =             "timeriver.pid"
-log-file =             "log/timeriver.log"
+pid-file =             "tgres.pid"
+log-file =             "log/tgres.log"
 log-cycle-interval =   "24h"
 max-cached-points  =   4096
 max-cache-duration =   "5s"
@@ -21,9 +21,9 @@ stat-flush-interval         = "10s"
 stats-name-prefix           = "stats"
 
 # RedHat and some others:
-db-connect-string = "host=/tmp dbname=timeriver sslmode=disable"
+db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 # Debian and some others:
-#db-connect-string = "host=/var/run/postgresql dbname=timeriver sslmode=disable"
+#db-connect-string = "host=/var/run/postgresql dbname=tgres sslmode=disable"
 
 [[foo]]
 regexp = "foo"

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package timeriver
+package tgres
 
 import (
 	"bytes"
@@ -657,7 +657,7 @@ func createDataSource(name string, dsSpec *trDSSpec) (*trDataSource, error) {
 // the array, we can identify which array element is last, it is:
 // slots_since_epoch % slots
 //
-// If we take a slot with a number slot_n, it's distance from the
+// If we take a slot with a number slot_n, its distance from the
 // latest slot can be calculated by this formula:
 //
 // distance = (total_slots + last_slot_n - slot_n) % total_slots

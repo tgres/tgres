@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package timeriver
+package tgres
 
 import (
 	"flag"
@@ -36,10 +36,12 @@ var (
 
 func parseFlags() (string, string) {
 
-	var textCfgPath, gracefulProtos string
+	var (
+		textCfgPath, gracefulProtos string
+	)
 
 	// Parse the flags, if any
-	flag.StringVar(&textCfgPath, "c", "./etc/timeriver.conf", "path to config file")
+	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
 	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
 	flag.Parse()
 
@@ -61,7 +63,7 @@ func Init() { // not to be confused with init()
 
 	// TODO this should be in log.go
 	log.SetPrefix(fmt.Sprintf("[%d] ", os.Getpid()))
-	log.Printf("Timeriver starting.")
+	log.Printf("Tgres starting.")
 
 	cfgPath, gracefulProtos := parseFlags()
 
