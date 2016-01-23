@@ -1050,7 +1050,7 @@ type seriesLogarithm struct {
 }
 
 func (f *seriesLogarithm) CurrentValue() float64 {
-	return math.Log(f.CurrentValue()) / math.Log(f.base)
+	return math.Log(f.Series.CurrentValue()) / math.Log(f.base)
 }
 
 func dslLogarithm(dc *DslCtx, args []interface{}) (SeriesMap, error) {
