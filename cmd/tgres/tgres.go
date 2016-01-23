@@ -18,7 +18,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/grisha/tgres"
+	"github.com/tgres/tgres"
 )
 
 var (
