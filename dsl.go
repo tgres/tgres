@@ -135,13 +135,9 @@ func (v *FuncVisitor) processStack() ast.Visitor {
 						ret = nil
 					}
 				}
-			case *ast.SelectorExpr:
+			case *ast.SelectorExpr, *ast.Ident:
 				literal := unEscapeBadChars(v.dc.escSrc[tok.Pos()-1 : tok.End()-1])
 				c.args[n] = literal
-			case *ast.Ident:
-				literal := v.dc.escSrc[tok.Pos()-1 : tok.End()-1]
-				fromT, toT := time.Unix(v.dc.from, 0), time.Unix(v.dc.to, 0)
-				c.args[n], v.err = seriesFromIdent(v.dc.t, literal, &fromT, &toT, v.dc.maxPoints)
 			case *ast.BasicLit:
 				if tok.Kind == token.INT || tok.Kind == token.FLOAT {
 					c.args[n], v.err = strconv.ParseFloat(tok.Value, 64)
