@@ -258,6 +258,10 @@ func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 		finalGroupByMs = finalGroupByMs/dps.groupByMs*dps.groupByMs + dps.groupByMs
 	}
 
+	if finalGroupByMs == 0 {
+		finalGroupByMs = 1000 // TODO Why would this happen (it did)?
+	}
+
 	// TODO: support milliseconds?
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 

@@ -142,7 +142,7 @@ func (v *FuncVisitor) processStack() ast.Visitor {
 				if tok.Kind == token.INT || tok.Kind == token.FLOAT {
 					c.args[n], v.err = strconv.ParseFloat(tok.Value, 64)
 				} else if tok.Kind == token.STRING {
-					c.args[n] = tok.Value[1 : len(tok.Value)-1] // remove surrounding quotes
+					c.args[n] = unEscapeBadChars(tok.Value[1 : len(tok.Value)-1]) // remove surrounding quotes
 				} else {
 					v.err = fmt.Errorf("unsupported token type: %v", tok.Kind)
 				}
@@ -190,15 +190,20 @@ func (v *FuncVisitor) Visit(node ast.Node) ast.Visitor {
 
 func escapeBadChars(target string) string {
 	s := strings.Replace(target, "*", "__ASTERISK__", -1)
+	s = strings.Replace(s, "=", "__ASSIGN__", -1)
 	return strings.Replace(s, "-", "__DASH__", -1)
 }
 
 func unEscapeBadChars(target string) string {
 	s := strings.Replace(target, "__ASTERISK__", "*", -1)
+	s = strings.Replace(s, "__ASSIGN__", "=", -1)
 	return strings.Replace(s, "__DASH__", "-", -1)
 }
 
 // Also - there are no single quoted strings in Go grammar
 func fixQuotes(target string) string {
+	// TODO if the string contains double quotes, they should be escaped
+	// e.g. '"Foo"Bar"' is a problem, it becomes ""Foo"Bar"", but
+	// should become "\"Foo\"Bar\""
 	return strings.Replace(target, "'", "\"", -1)
 }
