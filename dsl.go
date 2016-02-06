@@ -63,7 +63,7 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 		return obj, nil
 	case string:
 		fromT, toT := time.Unix(dc.from, 0), time.Unix(dc.to, 0)
-		series, err := seriesFromIdent(dc.t, obj, &fromT, &toT, dc.maxPoints)
+		series, err := seriesFromIdent(dc.t, obj, fromT, toT, dc.maxPoints)
 		return series, err
 	}
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)

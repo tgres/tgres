@@ -80,16 +80,83 @@ type trRoundRobinArchive struct {
 
 type Series interface {
 	Next() bool
+	Close() error
 
 	CurrentValue() float64
 	CurrentPosBeginsAfter() time.Time
 	CurrentPosEndsOn() time.Time
 
-	Close() error
 	StepMs() int64
-	SetGroupByMs(int64)
-	GroupByMs() int64
-	Alias(...string) *string
+	GroupByMs(...int64) int64
+	TimeRange(...time.Time) (time.Time, time.Time)
+	LastUpdate() time.Time
+	MaxPoints(...int64) int64
+
+	Alias(...string) string
+}
+
+type sliceSeries struct {
+	data   []float64
+	start  time.Time
+	pos    int
+	stepMs int64
+	alias  string
+}
+
+func (s *sliceSeries) Next() bool {
+	if s.pos < len(s.data) {
+		s.pos++
+		return true
+	}
+	return false
+}
+
+func (s *sliceSeries) CurrentValue() float64 {
+	if s.pos < len(s.data) {
+		return s.data[s.pos]
+	}
+	return math.NaN()
+}
+
+func (s *sliceSeries) CurrentPosBeginsAfter() time.Time {
+	// this is correct, first one is negative
+	return s.start.Add(time.Duration(s.stepMs*int64(s.pos-1)) * time.Millisecond)
+}
+
+func (s *sliceSeries) CurrentPosEndsOn() time.Time {
+	return s.start.Add(time.Duration(s.stepMs*int64(s.pos)) * time.Millisecond)
+}
+
+func (s *sliceSeries) Close() error {
+	s.pos = -1
+	return nil
+}
+
+func (s *sliceSeries) StepMs() int64 {
+	return s.stepMs
+}
+
+func (s *sliceSeries) GroupByMs(ms ...int64) int64 {
+	return s.stepMs
+}
+
+func (s *sliceSeries) TimeRange(...time.Time) (time.Time, time.Time) {
+	return time.Time{}, time.Time{} // not applicable
+}
+
+func (s *sliceSeries) LastUpdate() time.Time {
+	return time.Time{}
+}
+
+func (s *sliceSeries) MaxPoints(...int64) int64 {
+	return 0 // not applicable
+}
+
+func (s *sliceSeries) Alias(a ...string) string {
+	if len(a) > 0 {
+		s.alias = a[0]
+	}
+	return s.alias
 }
 
 func (dss *trDataSources) getByName(name string) *trDataSource {
@@ -556,7 +623,7 @@ func (rra *trRoundRobinArchive) slotTimeStamp(ds *trDataSource, slot int64) time
 	return rra.Latest.Add(time.Duration(rraStepMs*distance) * time.Millisecond * -1)
 }
 
-func seriesFromIdent(t *trTransceiver, ident string, from, to *time.Time, maxPoints int64) (map[string]Series, error) {
+func seriesFromIdent(t *trTransceiver, ident string, from, to time.Time, maxPoints int64) (map[string]Series, error) {
 	result := make(map[string]Series)
 	targets := t.dss.fsFind(ident)
 	for _, node := range targets {

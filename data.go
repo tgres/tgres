@@ -195,8 +195,8 @@ type trDbSeries struct {
 	posEnd   time.Time // pos ends on
 
 	// Time boundary
-	from *time.Time
-	to   *time.Time
+	from time.Time
+	to   time.Time
 
 	// Db stuff
 	rows *sql.Rows
@@ -208,29 +208,48 @@ type trDbSeries struct {
 	latest time.Time
 
 	// Alias
-	alias *string
+	alias string
 }
 
 func (dps *trDbSeries) StepMs() int64 {
 	return dps.ds.StepMs * int64(dps.rra.StepsPerRow)
 }
 
-func (dps *trDbSeries) SetGroupByMs(ms int64) {
-	dps.groupByMs = ms
-}
-
-func (dps *trDbSeries) GroupByMs() int64 {
+func (dps *trDbSeries) GroupByMs(ms ...int64) int64 {
+	if len(ms) > 0 {
+		defer func() { dps.groupByMs = ms[0] }()
+	}
 	if dps.groupByMs == 0 {
 		return dps.StepMs()
 	}
 	return dps.groupByMs
 }
 
+func (dps *trDbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
+	if len(t) == 1 {
+		defer func() { dps.from = t[0] }()
+	} else if len(t) == 2 {
+		defer func() { dps.from, dps.to = t[0], t[1] }()
+	}
+	return dps.from, dps.to
+}
+
+func (dps *trDbSeries) LastUpdate() time.Time {
+	return dps.ds.LastUpdate
+}
+
+func (dps *trDbSeries) MaxPoints(n ...int64) int64 {
+	if len(n) > 0 { // setter
+		defer func() { dps.maxPoints = n[0] }()
+	}
+	return dps.maxPoints // getter
+}
+
 func (dps *trDbSeries) Align() {}
 
-func (dps *trDbSeries) Alias(s ...string) *string {
+func (dps *trDbSeries) Alias(s ...string) string {
 	if len(s) > 0 {
-		dps.alias = &s[0]
+		dps.alias = s[0]
 	}
 	return dps.alias
 }
@@ -265,7 +284,7 @@ func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	// TODO: support milliseconds?
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 
-	rows, err = sql3.Query(aligned_from, *dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, *dps.from, *dps.to, finalGroupByMs)
+	rows, err = sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
 		log.Printf("seriesQuery(): error %v", err)
@@ -333,15 +352,15 @@ func (dps *trDbSeries) Next() bool {
 
 					var from, to time.Time
 
-					if dps.from == nil {
+					if dps.from.IsZero() {
 						from = time.Unix(0, 0)
 					} else {
-						from = *dps.from
+						from = dps.from
 					}
-					if dps.to == nil {
+					if dps.to.IsZero() {
 						to = dps.rra.Latest.Add(time.Millisecond)
 					} else {
-						to = *dps.to
+						to = dps.to
 					}
 					if earliest.Add(time.Millisecond).After(from) && earliest.Before(to.Add(time.Millisecond)) {
 						return true
@@ -720,18 +739,18 @@ func seriesQuerySql(dsId, rraId int64, from, to *time.Time, interval int64) (*sq
 	return rows, nil
 }
 
-func seriesQuery(ds *trDataSource, from, to *time.Time, maxPoints int64) (Series, error) {
+func seriesQuery(ds *trDataSource, from, to time.Time, maxPoints int64) (Series, error) {
 
-	rra := ds.bestRRA(*from, *to, maxPoints)
+	rra := ds.bestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
 	rraEarliest := time.Unix(rra.getStartGivenEndMs(ds, rra.Latest.Unix()*1000)/1000, 0)
 
-	if from == nil || rraEarliest.After(*from) {
-		from = &rraEarliest
+	if from.IsZero() || rraEarliest.After(from) {
+		from = rraEarliest
 	}
-	if to == nil || to.After(rra.Latest) {
-		to = &rra.Latest
+	if to.IsZero() || to.After(rra.Latest) {
+		to = rra.Latest
 	}
 
 	dps := &trDbSeries{ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}

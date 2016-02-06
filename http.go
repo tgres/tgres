@@ -100,8 +100,8 @@ func renderHandler(t *trTransceiver) http.HandlerFunc {
 				series := seriesMap[name]
 
 				alias := series.Alias()
-				if alias != nil {
-					name = *alias
+				if alias != "" {
+					name = alias
 				}
 
 				fmt.Fprintf(w, "\n"+`{"target": "%s", "datapoints": [`+"\n", name)

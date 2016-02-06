@@ -17,6 +17,7 @@ package tgres
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"regexp"
 	"sort"
@@ -233,6 +234,22 @@ var preprocessArgFuncs = FuncMap{
 		argDef{"seriesList", argSeries, nil}}},
 	"countSeries": dslFuncType{dslCountSeries, true, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
+	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"seasonLen", argString, "1d"},
+		argDef{"seasonLimit", argNumber, 7.0}, // most seasons to consider
+		argDef{"alpha", argNumber, 0.0},
+		argDef{"beta", argNumber, 0.0},
+		argDef{"gamma", argNumber, 0.0},
+		argDef{"devScale", argNumber, 10.0},
+		argDef{"show", argString, "smooth"}}}, // show smooth,conf,aberr
+	"holtWintersConfidenceBands": dslFuncType{dslHoltWintersConfidenceBands, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"delta", argNumber, 3.0}}},
+	"holtWintersAberration": dslFuncType{dslHoltWintersAberration, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"delta", argNumber, 3.0}}},
+
 	// COMBINE
 	// ** averageSeries
 	// ** avg
@@ -269,9 +286,9 @@ var preprocessArgFuncs = FuncMap{
 	// CALCULATE
 	// ** asPercent
 	// ** diffSeries
-	// ?? holtWintersAbberation
-	// ?? holtWintersConfidenceBands
-	// ?? holtWintersForecast
+	// ** holtWintersAberration
+	// ** holtWintersConfidenceBands
+	// ** holtWintersForecast
 	// ** nPercentile
 
 	// FILTER
@@ -493,6 +510,9 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 		}
 		argMap["_legend_"] = fmt.Sprintf("%s(%s)", name, argsAsString(args)) // only a suggestion
 		argMap["_args_"] = argSlice
+		argMap["_from_"] = dc.from
+		argMap["_to_"] = dc.to
+		argMap["_maxPoints_"] = dc.maxPoints
 		if series, err := argFunc.call(argMap); err == nil {
 			return series, nil
 		} else {
@@ -509,7 +529,7 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 type SeriesSlice []Series
 type SeriesList struct {
 	SeriesSlice
-	alias *string
+	alias string
 }
 
 func (sl *SeriesList) Next() bool {
@@ -556,11 +576,53 @@ func (sl *SeriesList) StepMs() int64 {
 	return sl.SeriesSlice[0].StepMs()
 }
 
-func (sl *SeriesList) SetGroupByMs(ms int64) {} // TODO ?
-
-func (sl *SeriesList) GroupByMs() int64 {
+func (sl *SeriesList) GroupByMs(ms ...int64) int64 {
+	// getter only, no setter
 	if len(sl.SeriesSlice) > 0 {
 		return sl.SeriesSlice[0].GroupByMs()
+	}
+	return 0
+}
+
+func (sl *SeriesList) TimeRange(t ...time.Time) (time.Time, time.Time) {
+	if len(t) == 1 { // setter 1 arg
+		defer func() {
+			for _, series := range sl.SeriesSlice {
+				series.TimeRange(t[0])
+			}
+		}()
+	} else if len(t) == 2 { // setter 2 args
+		defer func() {
+			for _, series := range sl.SeriesSlice {
+				series.TimeRange(t[0], t[1])
+			}
+		}()
+	}
+	// getter
+	if len(sl.SeriesSlice) > 0 {
+		return sl.SeriesSlice[0].TimeRange()
+	}
+	return time.Time{}, time.Time{}
+}
+
+func (sl *SeriesList) LastUpdate() time.Time {
+	if len(sl.SeriesSlice) > 0 {
+		return sl.SeriesSlice[0].LastUpdate()
+	}
+	return time.Time{}
+}
+
+func (sl *SeriesList) MaxPoints(n ...int64) int64 {
+	if len(n) > 0 { // setter
+		defer func() {
+			for _, series := range sl.SeriesSlice {
+				series.MaxPoints(n[0])
+			}
+		}()
+	}
+	// getter
+	if len(sl.SeriesSlice) > 0 {
+		return sl.SeriesSlice[0].MaxPoints()
 	}
 	return 0
 }
@@ -593,13 +655,13 @@ func (sl *SeriesList) Align() {
 	}
 
 	for _, series := range sl.SeriesSlice {
-		series.SetGroupByMs(result)
+		series.GroupByMs(result)
 	}
 }
 
-func (sl *SeriesList) Alias(s ...string) *string {
+func (sl *SeriesList) Alias(s ...string) string {
 	if len(s) > 0 {
-		sl.alias = &s[0]
+		sl.alias = s[0]
 	}
 	return sl.alias
 }
@@ -2131,4 +2193,251 @@ func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
 	name := args["_legend_"].(string)
 	return SeriesMap{name: &seriesCountSeries{*series, float64(len(series.SeriesSlice))}}, nil
+}
+
+// holtWintersForecast
+
+type seriesHoltWintersForecast struct {
+	Series
+	data      []float64
+	result    []float64
+	upper     []float64
+	lower     []float64
+	seasonLen time.Duration
+}
+
+// nanlessData returns the series as a slice, skipping all leading
+// NaNs and replacing the ones in the middle of the series with the
+// last non-NaN value
+func (f *seriesHoltWintersForecast) nanlessData() ([]float64, time.Time, error) {
+	result := make([]float64, 0)
+	var last float64
+	var start time.Time
+	for f.Series.Next() {
+		val := f.Series.CurrentValue()
+		for len(result) == 0 && math.IsNaN(val) {
+			if f.Series.Next() {
+				val = f.Series.CurrentValue()
+			} else {
+				return nil, time.Time{}, fmt.Errorf("Reached end of series while skipping leading NaNs")
+			}
+		}
+		if math.IsNaN(val) {
+			// Recycle the last value if NaN
+			val = last // TODO can we do better?
+		}
+		if start.IsZero() {
+			start = f.Series.CurrentPosEndsOn()
+		}
+		result = append(result, val)
+		last = val
+	}
+	f.Series.Close()
+	return result, start, nil
+}
+
+// season length in points
+func (f *seriesHoltWintersForecast) seasonPoints() int {
+	return int(f.seasonLen.Nanoseconds() / f.GroupByMs() / 1000000)
+}
+
+func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
+	series := args["seriesList"].(SeriesMap)
+	seasonLen := args["seasonLen"].(string)
+	seasonLimit := int(args["seasonLimit"].(float64))
+	α := args["alpha"].(float64)
+	β := args["beta"].(float64)
+	γ := args["gamma"].(float64)
+	devScale := args["devScale"].(float64)
+	show := args["show"].(string)
+
+	if α > 1 || β > 1 || γ > 1 || α < 0 || β < 0 || γ < 0 {
+		return nil, fmt.Errorf("Invalid alpha, beta or gamma - must be > 0 and < 1, or 0 to auto-compute (slower)")
+	}
+	if α == 0 || β == 0 || γ == 0 {
+		if α+β+γ != 0 {
+			return nil, fmt.Errorf("Alpha, beta, gamma - if one is zero, all must be zeros")
+		}
+	}
+
+	result := make(SeriesMap, 0)
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("holtWintersForecast(%v)", name))
+
+		var err error
+		var slen time.Duration
+
+		slen, err = betterParseDuration(seasonLen)
+		if err != nil {
+			return nil, err
+		}
+
+		// The specified timerange. NB: trDbSeres.TimeRange() is clipped
+		// to what is available in the db, which is why we need these
+		from := time.Unix(args["_from_"].(int64), 0)
+		to := time.Unix(args["_to_"].(int64), 0)
+		maxPoints := args["_maxPoints_"].(int64)
+
+		// Push back beginning of our data seasonLimit from no later than LastUpdate
+		var adjustedFrom time.Time
+		if to.Before(s.LastUpdate()) {
+			adjustedFrom = to.Add(-slen * time.Duration(seasonLimit))
+		} else {
+			adjustedFrom = s.LastUpdate().Add(-slen * time.Duration(seasonLimit))
+		}
+
+		// If we went beyond "viewport", adjust the underlying Series and MaxPoints
+		if adjustedFrom.Before(from) {
+			s.TimeRange(adjustedFrom)
+			s.MaxPoints(to.Sub(adjustedFrom).Nanoseconds() / (to.Sub(from).Nanoseconds() / maxPoints))
+		} else {
+			// Set it back to be same as from, disregard seasonLimit when viewport has enough seasons
+			adjustedFrom = from
+		}
+
+		// This struct knows how to permorm triple exponential smoothing
+		shw := &seriesHoltWintersForecast{
+			Series:    s,
+			seasonLen: slen}
+
+		// NB: This causes GroupByMs be calculated by trDbSeries
+		var nanlessBegin time.Time
+		if shw.data, nanlessBegin, err = shw.nanlessData(); err != nil {
+			return nil, err
+		}
+
+		// Calculate the forecast point count
+		var nPreds int = 0
+		if to.After(s.LastUpdate()) {
+			nPreds = int((to.Sub(s.LastUpdate()).Nanoseconds() / 1000000) / s.GroupByMs())
+		}
+
+		// Run the exponential smoothing algo
+		var smooth, dev []float64
+		if trend, err := hwInitialTrendFactor(shw.data, shw.seasonPoints()); err != nil {
+			return nil, err
+		} else {
+			if seasonal, err := hwInitialSeasonalFactors(shw.data, shw.seasonPoints()); err != nil {
+				return nil, err
+			} else {
+				if α == 0 {
+					var e int
+					smooth, dev, α, β, γ, _, e = hwMinimizeSSE(shw.data, shw.seasonPoints(), trend, seasonal, nPreds)
+					log.Printf("Nelder-Mead finished in %d evaluations, resulting in α: %f β: %f γ: %f", e, α, β, γ)
+				} else {
+					smooth, dev, _ = hwTripleExponentialSmoothing(shw.data, shw.seasonPoints(), trend, seasonal, nPreds, α, β, γ)
+				}
+			}
+		}
+
+		// If the "viewport" is smaller than our data, figure out how many points we should
+		// send across. Ensure from is aligned on GroupByMs first
+		from = time.Unix((from.Unix()*1000/s.GroupByMs()*s.GroupByMs())/1000, 0)
+		if nanlessBegin.Before(from) {
+			big := float64(to.Sub(nanlessBegin).Nanoseconds() / 1000000)
+			small := float64(from.Sub(nanlessBegin).Nanoseconds() / 1000000)
+			viewPoints := len(smooth) - int(small/big*float64(len(smooth)))
+			nanlessBegin = from
+			shw.result = smooth[len(smooth)-viewPoints:]
+		} else {
+			shw.result = smooth
+		}
+
+		// This is the actual output
+		ss := &sliceSeries{
+			data:   shw.result,
+			start:  nanlessBegin,
+			stepMs: shw.GroupByMs(),
+			pos:    -1,
+			alias:  shw.Alias(),
+		}
+
+		if strings.Contains(show, "smooth") {
+			result[name] = ss
+		}
+
+		if strings.Contains(show, "conf") || strings.Contains(show, "aberr") {
+
+			// upper band
+			uc := &sliceSeries{
+				data:   make([]float64, len(shw.result)),
+				start:  nanlessBegin,
+				stepMs: shw.GroupByMs(),
+				pos:    -1,
+				alias:  shw.Alias(),
+			}
+			uc.Alias(fmt.Sprintf("holtWintersConfidenceUpper(%v)", name))
+
+			for i := 0; i < len(shw.result); i++ {
+				uc.data[i] = shw.result[i] + shw.result[i]*dev[i]*devScale
+			}
+
+			if strings.Contains(show, "conf") {
+				result[name+".upper"] = uc
+			}
+
+			// lower band
+			lc := &sliceSeries{
+				data:   make([]float64, len(shw.result)),
+				start:  nanlessBegin,
+				stepMs: shw.GroupByMs(),
+				pos:    -1,
+				alias:  shw.Alias(),
+			}
+			lc.Alias(fmt.Sprintf("holtWintersConfidenceLower(%v)", name))
+
+			for i := 0; i < len(shw.result); i++ {
+				lc.data[i] = shw.result[i] - shw.result[i]*dev[i]*devScale
+			}
+			if strings.Contains(show, "conf") {
+				result[name+".lower"] = lc
+			}
+			if strings.Contains(show, "aberr") {
+
+				// aberrations
+				ab := &sliceSeries{
+					data:   make([]float64, len(shw.result)),
+					start:  nanlessBegin,
+					stepMs: shw.GroupByMs(),
+					pos:    -1,
+					alias:  shw.Alias(),
+				}
+				lc.Alias(fmt.Sprintf("holtWintersAberration(%v)", name))
+
+				for i := 0; i < len(shw.result); i++ {
+					if shw.result[i] < lc.data[i] {
+						ab.data[i] = shw.result[i] - lc.data[i]
+					} else if shw.result[i] > uc.data[i] {
+						ab.data[i] = shw.result[i] - uc.data[i]
+					}
+				}
+
+				result[name+".aberrant"] = ab
+			}
+		}
+
+	}
+	return result, nil
+}
+
+func dslHoltWintersConfidenceBands(args map[string]interface{}) (SeriesMap, error) {
+	args["seasonLen"] = "1d"
+	args["seasonLimit"] = float64(7.0)
+	args["alpha"] = float64(0)
+	args["beta"] = float64(0)
+	args["gamma"] = float64(0)
+	args["devScale"] = args["delta"]
+	args["show"] = "conf"
+	return dslHoltWintersForecast(args)
+}
+
+func dslHoltWintersAberration(args map[string]interface{}) (SeriesMap, error) {
+	args["seasonLen"] = "1d"
+	args["seasonLimit"] = float64(7.0)
+	args["alpha"] = float64(0)
+	args["beta"] = float64(0)
+	args["gamma"] = float64(0)
+	args["devScale"] = args["delta"]
+	args["show"] = "aberr"
+	return dslHoltWintersForecast(args)
 }
