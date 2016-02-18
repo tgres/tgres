@@ -266,24 +266,31 @@ func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 		rraStepMs      = dps.ds.StepMs * int64(dps.rra.StepsPerRow)
 	)
 
-	if dps.maxPoints != 0 {
+	if dps.groupByMs != 0 {
+		// Specific granularity was requested for alignment, we ignore maxPoints
+		finalGroupByMs = finalGroupByMs/dps.groupByMs*dps.groupByMs + dps.groupByMs
+	} else if dps.maxPoints != 0 {
+		// If maxPoints was specified, then calculate group by interval
 		finalGroupByMs = (dps.to.Unix() - dps.from.Unix()) * 1000 / dps.maxPoints
 		finalGroupByMs = finalGroupByMs/rraStepMs*rraStepMs + rraStepMs
 	} else {
+		// Otherwise, group by will equal the rrastep
 		finalGroupByMs = rraStepMs
-	}
-
-	if dps.groupByMs != 0 { // Specific granularity was requested for alignment
-		finalGroupByMs = finalGroupByMs/dps.groupByMs*dps.groupByMs + dps.groupByMs
 	}
 
 	if finalGroupByMs == 0 {
 		finalGroupByMs = 1000 // TODO Why would this happen (it did)?
 	}
 
+	// Ensure that the true group by interval is reflected in the series.
+	if finalGroupByMs != dps.groupByMs {
+		dps.groupByMs = finalGroupByMs
+	}
+
 	// TODO: support milliseconds?
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 
+	//log.Printf("sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
 	rows, err = sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
