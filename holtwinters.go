@@ -92,6 +92,11 @@ func hwTripleExponentialSmoothing(data []float64, slen int, trend float64, seaso
 		sse              float64
 	)
 
+	if (α <= 0 || α >= 1) || (β <= 0 || β >= 1) || (γ <= 0 || γ >= 1) {
+		// return a VERY large SSE to tell Nelder-Mead to stay between 0 and 1
+		return []float64{}, []float64{}, float64(^uint(0) >> 1)
+	}
+
 	for i := 0; i < len(data)+nPredictions; i++ {
 
 		if i == 0 {
@@ -145,7 +150,10 @@ func hwMinimizeSSE(data []float64, slen int, trend float64, seasonal []float64, 
 	}
 
 	// These are 4 initial α, β, γ triplets - TODO these are completely arbitrary?
-	s := [][]float64{{0.1, 0.1, 0.1}, {0.9, 0.9, 0.9}, {0.5, 0.5, 0.5}, {0.1, 0.9, 0.1}}
+	//s := [][]float64{{0.1, 0.1, 0.1}, {0.9, 0.9, 0.9}, {0.5, 0.5, 0.5}, {0.1, 0.9, 0.1}}
+	s := [][]float64{{0.1, 0.01, 0.9}, {0.9, 0.1, 0.1}, {0.5, 0.2, 0.5}, {0.1, 0.9, 0.1}}
+	//s := [][]float64{{0.1, 0.1, 0.1}, {0.9, 0.9, 0.9}, {0.1, 0.1, 0.9}, {0.9, 0.9, 0.1}}
+	//s := [][]float64{{0.1, 0.2, 0.3}, {0.9, 0.8, 0.7}, {0.5, 0.4, 0.3}, {0.1, 0.9, 0.01}}
 
 	var r []float64
 	r, k, e = nelderMeadOptimize(doit, s, nil)
