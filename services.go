@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"fmt"
 	pickle "github.com/hydrogen18/stalecucumber"
+	"github.com/tgres/tgres/rrd"
 	"log"
 	"net"
 	"os"
@@ -35,11 +36,11 @@ type trService interface {
 
 type serviceMap map[string]trService
 type trServiceManager struct {
-	t        *trTransceiver
+	t        *Transceiver
 	services serviceMap
 }
 
-func newServiceManager(t *trTransceiver) *trServiceManager {
+func newServiceManager(t *Transceiver) *trServiceManager {
 	return &trServiceManager{t: t,
 		services: serviceMap{
 			"gt":  &graphiteTextServiceManager{t: t},
@@ -100,7 +101,7 @@ func (r *trServiceManager) closeListeners() {
 // ---
 
 type wwwServer struct {
-	t        *trTransceiver
+	t        *Transceiver
 	listener *gracefulListener
 }
 
@@ -152,7 +153,7 @@ func (g *wwwServer) Start(file *os.File) error {
 // ---
 
 type graphitePickleServiceManager struct {
-	t        *trTransceiver
+	t        *Transceiver
 	listener *gracefulListener
 }
 
@@ -230,7 +231,7 @@ func (g *graphitePickleServiceManager) graphitePickleServer() error {
 	}
 }
 
-func handleGraphitePickleProtocol(t *trTransceiver, conn net.Conn, timeout int) {
+func handleGraphitePickleProtocol(t *Transceiver, conn net.Conn, timeout int) {
 
 	defer conn.Close() // decrements tcpWg
 
@@ -266,7 +267,7 @@ func handleGraphitePickleProtocol(t *trTransceiver, conn net.Conn, timeout int) 
 							}
 						}
 					}
-					t.queueDataPoint(&trDataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value})
+					t.queueDataPoint(&rrd.DataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value})
 				} else {
 					err = fmt.Errorf("dp wrong length: %d", len(dp))
 					break
@@ -290,7 +291,7 @@ func handleGraphitePickleProtocol(t *trTransceiver, conn net.Conn, timeout int) 
 // --
 
 type graphiteUdpTextServiceManager struct {
-	t    *trTransceiver
+	t    *Transceiver
 	conn net.Conn
 }
 
@@ -342,7 +343,7 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 // ---
 
 type graphiteTextServiceManager struct {
-	t        *trTransceiver
+	t        *Transceiver
 	listener *gracefulListener
 }
 
@@ -419,7 +420,7 @@ func (g *graphiteTextServiceManager) graphiteTextServer() error {
 }
 
 // Handles incoming requests for both TCP and UDP
-func handleGraphiteTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
+func handleGraphiteTextProtocol(t *Transceiver, conn net.Conn, timeout int) {
 
 	defer conn.Close() // decrements tcpWg
 
@@ -450,7 +451,7 @@ func handleGraphiteTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
 	}
 }
 
-func parseGraphitePacket(packetStr string) (*trDataPoint, error) {
+func parseGraphitePacket(packetStr string) (*rrd.DataPoint, error) {
 
 	var (
 		name   string
@@ -463,7 +464,7 @@ func parseGraphitePacket(packetStr string) (*trDataPoint, error) {
 	}
 
 	name = sanitizeName(name)
-	return &trDataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value}, nil
+	return &rrd.DataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value}, nil
 }
 
 var (
@@ -479,7 +480,7 @@ func sanitizeName(name string) string {
 }
 
 // TODO isn't this identical to handleGraphiteTextProtocol?
-func handleStatsdTextProtocol(t *trTransceiver, conn net.Conn, timeout int) {
+func handleStatsdTextProtocol(t *Transceiver, conn net.Conn, timeout int) {
 
 	defer conn.Close() // decrements tcpWg
 
@@ -548,7 +549,7 @@ func parseStatsdPacket(packet string) (*trStat, error) {
 // --
 
 type statsdUdpTextServiceManager struct {
-	t    *trTransceiver
+	t    *Transceiver
 	conn net.Conn
 }
 

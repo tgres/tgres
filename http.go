@@ -17,6 +17,7 @@ package tgres
 
 import (
 	"fmt"
+	"github.com/tgres/tgres/dsl"
 	"log"
 	"math"
 	"net"
@@ -26,7 +27,7 @@ import (
 	"time"
 )
 
-func httpServer(addr string, l net.Listener, t *trTransceiver) {
+func httpServer(addr string, l net.Listener, t *Transceiver) {
 
 	http.HandleFunc("/metrics/find", metricsFindHandler(t))
 	http.HandleFunc("/render", renderHandler(t))
@@ -39,18 +40,18 @@ func httpServer(addr string, l net.Listener, t *trTransceiver) {
 	server.Serve(l)
 }
 
-func metricsFindHandler(t *trTransceiver) http.HandlerFunc {
+func metricsFindHandler(t *Transceiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
-		result := t.dss.fsFind(r.FormValue("query"))
-		for n, node := range result {
+		nodes := t.dss.FsFind(r.FormValue("query"))
+		for n, node := range nodes {
 			parts := strings.Split(node.Name, ".")
-			if node.leaf {
+			if node.Leaf {
 				fmt.Fprintf(w, `{"leaf": 1, "context": {}, "text": "%s", "expandable": 0, "id": "%s", "allowChildren": 0}`, parts[len(parts)-1], node.Name)
 			} else {
 				fmt.Fprintf(w, `{"leaf": 0, "context": {}, "text": "%s", "expandable": 1, "id": "%s", "allowChildren": 1}`, parts[len(parts)-1], node.Name)
 			}
-			if n < len(result)-1 {
+			if n < len(nodes)-1 {
 				fmt.Fprintf(w, ",\n")
 			}
 		}
@@ -58,7 +59,7 @@ func metricsFindHandler(t *trTransceiver) http.HandlerFunc {
 	}
 }
 
-func renderHandler(t *trTransceiver) http.HandlerFunc {
+func renderHandler(t *Transceiver) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -142,7 +143,7 @@ func parseTime(s string) (*time.Time, error) {
 	}
 
 	if s[0] == '-' { // relative
-		if dur, err := betterParseDuration(s[1:len(s)]); err == nil {
+		if dur, err := dsl.BetterParseDuration(s[1:len(s)]); err == nil {
 			t := time.Now().Add(-dur)
 			return &t, nil
 		} else {
@@ -161,10 +162,10 @@ func parseTime(s string) (*time.Time, error) {
 	}
 }
 
-func processTarget(t *trTransceiver, target string, from, to, maxPoints int64) (SeriesMap, error) {
+func processTarget(t *Transceiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	dc := NewDslCtx(t, query, from, to, maxPoints)
+	dc := dsl.NewDslCtx(t.dss, dsl.DSGetter(t), query, from, to, maxPoints)
 	result, err := dc.ParseDsl()
 	return result, err
 }

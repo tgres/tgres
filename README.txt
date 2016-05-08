@@ -57,3 +57,19 @@ Graphite API was used only as a starting point, to be able to prove the
 concept and test against existing tools (mostly Grafana). Longer term
 there may be more interesting methods of exchanging data, e.g. gob or
 Redis protocol, etc.
+
+Some terminology:
+
+RRD - Round Robin Database. This is the "technology" that makes it
+      possible, it doesn't referer to any specific.
+
+DS -  Data Source. This is your temperature in the room or bytes per
+      second passing through, etc. A data source has a name. At a very
+      high level it is a "time series" (only calling it that would be
+      confusing with respect to RRA's).
+
+RRA - Round Robin Archive. An RRA is an actual series. A DS has at
+      least one RRA, usually more than one. For example if we store 60
+      points at 1 minute resolution, that's one RRA, and if we store
+      12 points at 1 hour resolution, that's another RRA. An RRA is a
+      fixed size array of floats.

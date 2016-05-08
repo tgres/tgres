@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package rrd
 
 import (
 	"fmt"
@@ -25,24 +25,38 @@ import (
 	"time"
 )
 
+// DSSpec is how we describe a DS to be created
+
+type DSSpec struct {
+	Step      time.Duration
+	Heartbeat time.Duration
+	RRAs      []*RRASpec
+}
+type RRASpec struct {
+	Function string
+	Step     time.Duration
+	Size     time.Duration
+	Xff      float64
+}
+
 // This represents incoming data, as is.
 
-type trDataPoint struct {
-	ds        *trDataSource
+type DataPoint struct {
+	DS        *DataSource
 	Name      string
 	TimeStamp time.Time
 	Value     float64
 }
 
-func (dp *trDataPoint) process() error {
-	return dp.ds.processDataPoint(dp)
+func (dp *DataPoint) Process() error {
+	return dp.DS.processDataPoint(dp)
 }
 
 // When a DP arrives in-between PDP boundary, there is state we need
 // to maintain. We cannot save it in an RRA until a subsequent DP
-// completes the PDP. This state is kept in trDataSource.
+// completes the PDP. This state is kept in DataSource.
 
-type trDataSource struct {
+type DataSource struct {
 	Id          int64
 	Name        string
 	StepMs      int64
@@ -55,10 +69,10 @@ type trDataSource struct {
 	LastFlushRT time.Time
 }
 
-type trDataSources struct {
+type DataSources struct {
 	sync.RWMutex
-	byName   map[string]*trDataSource
-	byId     map[int64]*trDataSource
+	byName   map[string]*DataSource
+	byId     map[int64]*DataSource
 	prefixes map[string]bool // for Graphite-like listings
 }
 
@@ -95,83 +109,19 @@ type Series interface {
 	Alias(...string) string
 }
 
-type sliceSeries struct {
-	data   []float64
-	start  time.Time
-	pos    int
-	stepMs int64
-	alias  string
-}
-
-func (s *sliceSeries) Next() bool {
-	if s.pos < len(s.data) {
-		s.pos++
-		return true
-	}
-	return false
-}
-
-func (s *sliceSeries) CurrentValue() float64 {
-	if s.pos < len(s.data) {
-		return s.data[s.pos]
-	}
-	return math.NaN()
-}
-
-func (s *sliceSeries) CurrentPosBeginsAfter() time.Time {
-	// this is correct, first one is negative
-	return s.start.Add(time.Duration(s.stepMs*int64(s.pos-1)) * time.Millisecond)
-}
-
-func (s *sliceSeries) CurrentPosEndsOn() time.Time {
-	return s.start.Add(time.Duration(s.stepMs*int64(s.pos)) * time.Millisecond)
-}
-
-func (s *sliceSeries) Close() error {
-	s.pos = -1
-	return nil
-}
-
-func (s *sliceSeries) StepMs() int64 {
-	return s.stepMs
-}
-
-func (s *sliceSeries) GroupByMs(ms ...int64) int64 {
-	return s.stepMs
-}
-
-func (s *sliceSeries) TimeRange(...time.Time) (time.Time, time.Time) {
-	return time.Time{}, time.Time{} // not applicable
-}
-
-func (s *sliceSeries) LastUpdate() time.Time {
-	return time.Time{}
-}
-
-func (s *sliceSeries) MaxPoints(...int64) int64 {
-	return 0 // not applicable
-}
-
-func (s *sliceSeries) Alias(a ...string) string {
-	if len(a) > 0 {
-		s.alias = a[0]
-	}
-	return s.alias
-}
-
-func (dss *trDataSources) getByName(name string) *trDataSource {
+func (dss *DataSources) GetByName(name string) *DataSource {
 	dss.RLock()
 	defer dss.RUnlock()
 	return dss.byName[name]
 }
 
-func (dss *trDataSources) getById(id int64) *trDataSource {
+func (dss *DataSources) GetById(id int64) *DataSource {
 	dss.RLock()
 	defer dss.RUnlock()
 	return dss.byId[id]
 }
 
-func (dss *trDataSources) insert(ds *trDataSource) {
+func (dss *DataSources) Insert(ds *DataSource) {
 	dss.Lock()
 	defer dss.Unlock()
 	dss.byName[ds.Name] = ds
@@ -189,7 +139,7 @@ func (dss *trDataSources) insert(ds *trDataSource) {
 
 type fsFindNode struct {
 	Name string
-	leaf bool
+	Leaf bool
 	dsId int64
 }
 
@@ -206,7 +156,7 @@ func (fns fsNodes) Swap(i, j int) {
 	fns[i], fns[j] = fns[j], fns[i]
 }
 
-func (dss *trDataSources) fsFind(pattern string) []*fsFindNode {
+func (dss *DataSources) FsFind(pattern string) []*fsFindNode {
 
 	// TODO This should happen in Postgres because at 1M+ series this
 	// wouldn't work that well... But then this API is ill designed
@@ -224,13 +174,13 @@ func (dss *trDataSources) fsFind(pattern string) []*fsFindNode {
 		// protected by the same dss lock, but not other members!
 
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &fsFindNode{Name: k, leaf: true, dsId: ds.Id}
+			set[k] = &fsFindNode{Name: k, Leaf: true, dsId: ds.Id}
 		}
 	}
 
 	for k, _ := range dss.prefixes {
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &fsFindNode{Name: k, leaf: false}
+			set[k] = &fsFindNode{Name: k, Leaf: false}
 		}
 	}
 
@@ -246,7 +196,17 @@ func (dss *trDataSources) fsFind(pattern string) []*fsFindNode {
 	return result
 }
 
-func (dss *trDataSources) reload() error {
+func (dss *DataSources) DsIdsFromIdent(ident string) map[string]int64 {
+	result := make(map[string]int64)
+	for _, node := range dss.FsFind(ident) {
+		if node.Leaf { // only leaf nodes are series names
+			result[node.Name] = node.dsId
+		}
+	}
+	return result
+}
+
+func (dss *DataSources) Reload() error {
 
 	by_name, by_id, prefixes, err := fetchDataSources()
 	if err != nil {
@@ -262,7 +222,7 @@ func (dss *trDataSources) reload() error {
 	return nil
 }
 
-func (ds *trDataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinArchive {
+func (ds *DataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinArchive {
 
 	var result []*trRoundRobinArchive
 
@@ -322,7 +282,7 @@ func (ds *trDataSource) bestRRA(start, end time.Time, points int64) *trRoundRobi
 	return nil
 }
 
-func (ds *trDataSource) pointCount() int {
+func (ds *DataSource) pointCount() int {
 	total := 0
 	for _, rra := range ds.RRAs {
 		total += len(rra.DPs)
@@ -330,12 +290,12 @@ func (ds *trDataSource) pointCount() int {
 	return total
 }
 
-func (ds *trDataSource) setValue(value float64) {
+func (ds *DataSource) setValue(value float64) {
 	ds.Value = value
 	ds.UnknownMs = 0
 }
 
-func (ds *trDataSource) addValue(value float64, durationMs int64, allowNaNtoValue bool) error {
+func (ds *DataSource) addValue(value float64, durationMs int64, allowNaNtoValue bool) error {
 	if durationMs > ds.StepMs {
 		return fmt.Errorf("ds.addValue(): duration (%v) cannot be greater than ds.StepMs (%v)", durationMs, ds.StepMs)
 	}
@@ -351,16 +311,16 @@ func (ds *trDataSource) addValue(value float64, durationMs int64, allowNaNtoValu
 	return nil
 }
 
-func (ds *trDataSource) finalizeValue() {
+func (ds *DataSource) finalizeValue() {
 	ds.Value = ds.Value / (float64(ds.StepMs-ds.UnknownMs) / float64(ds.StepMs))
 }
 
-func (ds *trDataSource) reset() {
+func (ds *DataSource) reset() {
 	ds.Value = math.NaN()
 	ds.UnknownMs = 0
 }
 
-func (ds *trDataSource) updateRange(begin, end int64, value float64) error {
+func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 	endPdpBegin := end / ds.StepMs * ds.StepMs
 	if end%ds.StepMs == 0 {
@@ -412,14 +372,14 @@ func (ds *trDataSource) updateRange(begin, end int64, value float64) error {
 	return nil
 }
 
-func (ds *trDataSource) processDataPoint(dp *trDataPoint) error {
+func (ds *DataSource) processDataPoint(dp *DataPoint) error {
 
 	// Do everything in milliseconds
 	dpTimeStamp := dp.TimeStamp.UnixNano() / 1000000
 	dsLastUpdate := ds.LastUpdate.UnixNano() / 1000000
 
 	if dpTimeStamp < dsLastUpdate {
-		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, dp.ds.LastUpdate)
+		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, dp.DS.LastUpdate)
 	}
 
 	if dsLastUpdate == 0 { // never-before updated
@@ -447,7 +407,7 @@ func (ds *trDataSource) processDataPoint(dp *trDataPoint) error {
 	return nil
 }
 
-func (ds *trDataSource) updateRRAs(periodBegin, periodEnd int64) error {
+func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 
 	for _, rra := range ds.RRAs {
 
@@ -535,27 +495,27 @@ func (ds *trDataSource) updateRRAs(periodBegin, periodEnd int64) error {
 	return nil
 }
 
-func (ds *trDataSource) clearRRAs() {
+func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.RRAs {
 		rra.DPs = make(map[int64]float64)
 		rra.start, rra.end = 0, 0
 	}
 }
 
-func (ds *trDataSource) shouldBeFlushed() bool {
+func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
 	pc := ds.pointCount()
-	if pc > config.MaxCachedPoints {
-		return ds.LastFlushRT.Add(config.MinCache.Duration).Before(time.Now())
+	if pc > maxCachedPoints {
+		return ds.LastFlushRT.Add(minCache).Before(time.Now())
 	} else if pc > 0 {
-		return ds.LastFlushRT.Add(config.MaxCache.Duration).Before(time.Now())
+		return ds.LastFlushRT.Add(maxCache).Before(time.Now())
 	}
 	return false
 }
 
-func (ds *trDataSource) mostlyCopy() *trDataSource {
+func (ds *DataSource) MostlyCopy() *DataSource {
 
 	// Only copy elements that change or needed for saving/rendering
-	new_ds := new(trDataSource)
+	new_ds := new(DataSource)
 	new_ds.Id = ds.Id
 	new_ds.StepMs = ds.StepMs
 	new_ds.HeartbeatMs = ds.HeartbeatMs
@@ -604,7 +564,7 @@ func (rra *trRoundRobinArchive) slotRow(slot int64) int64 {
 	}
 }
 
-func (rra *trRoundRobinArchive) getStartGivenEndMs(ds *trDataSource, timeMs int64) int64 {
+func (rra *trRoundRobinArchive) getStartGivenEndMs(ds *DataSource, timeMs int64) int64 {
 	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
 	rraStart := (timeMs - rraStepMs*int64(rra.Size)) / rraStepMs * rraStepMs
 	if timeMs%rraStepMs != 0 {
@@ -613,7 +573,7 @@ func (rra *trRoundRobinArchive) getStartGivenEndMs(ds *trDataSource, timeMs int6
 	return rraStart
 }
 
-func (rra *trRoundRobinArchive) slotTimeStamp(ds *trDataSource, slot int64) time.Time {
+func (rra *trRoundRobinArchive) slotTimeStamp(ds *DataSource, slot int64) time.Time {
 	// TODO this is kind of ugly too...
 	slot = slot % int64(rra.Size) // just in case
 	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
@@ -621,20 +581,4 @@ func (rra *trRoundRobinArchive) slotTimeStamp(ds *trDataSource, slot int64) time
 	latestSlotN := (latestMs / rraStepMs) % int64(rra.Size)
 	distance := (int64(rra.Size) + latestSlotN - slot) % int64(rra.Size)
 	return rra.Latest.Add(time.Duration(rraStepMs*distance) * time.Millisecond * -1)
-}
-
-func seriesFromIdent(t *trTransceiver, ident string, from, to time.Time, maxPoints int64) (map[string]Series, error) {
-	result := make(map[string]Series)
-	targets := t.dss.fsFind(ident)
-	for _, node := range targets {
-		if node.leaf { // only leaf nodes are series names
-			ds := t.requestDsCopy(node.dsId)
-			dps, err := seriesQuery(ds, from, to, maxPoints)
-			if err != nil {
-				return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
-			}
-			result[node.Name] = dps
-		}
-	}
-	return result, nil
 }

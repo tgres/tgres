@@ -25,8 +25,14 @@ db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 # Debian and some others:
 #db-connect-string = "host=/var/run/postgresql dbname=tgres sslmode=disable"
 
-[[foo]]
+[[ds]]
 regexp = "foo"
 step = "10s"
 heartbeat = "2h"
 rras = ["AVERAGE:10s:6h", "AVERAGE:1m:10d", "AVERAGE:10m:93d", "AVERAGE:1d:5y:1"]
+
+[[ds]]
+regexp = ".*"
+step = "60s"
+heartbeat = "2h"
+rras = ["AVERAGE:60s:6h", "AVERAGE:1m:10d", "AVERAGE:10m:93d", "AVERAGE:1d:5y:1"]

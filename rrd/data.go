@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package rrd
 
 import (
 	"bytes"
@@ -41,12 +41,22 @@ var dbPing = func() error {
 	return dbConn.Ping()
 }
 
-var initDbConnection = func(connect_string string) error {
+var InitDbConnection = func(connect_string string) error {
 	var err error
 	if dbConn, err = sqlOpen("postgres", connect_string); err != nil {
 		return err
 	}
 	if err = dbPing(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func InitDb() error {
+	if err := createTablesIfNotExist(); err != nil {
+		return err
+	}
+	if err := prepareSqlStatements(); err != nil {
 		return err
 	}
 	return nil
@@ -186,7 +196,7 @@ var createTablesIfNotExist = func() error {
 // This implements the Series interface
 
 type trDbSeries struct {
-	ds  *trDataSource
+	ds  *DataSource
 	rra *trRoundRobinArchive
 
 	// Current Value
@@ -415,9 +425,9 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 	}
 }
 
-func dataSourceFromRow(rows *sql.Rows) (*trDataSource, error) {
+func dataSourceFromRow(rows *sql.Rows) (*DataSource, error) {
 	var (
-		ds         trDataSource
+		ds         DataSource
 		last_ds    sql.NullFloat64
 		lastupdate pq.NullTime
 	)
@@ -458,7 +468,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*trRoundRobinArchive, error) {
 	return &rra, err
 }
 
-func fetchDataSources() (map[string]*trDataSource, map[int64]*trDataSource, map[string]bool, error) {
+func fetchDataSources() (map[string]*DataSource, map[int64]*DataSource, map[string]bool, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM ds`
 
@@ -469,8 +479,8 @@ func fetchDataSources() (map[string]*trDataSource, map[int64]*trDataSource, map[
 	}
 	defer rows.Close()
 
-	byName := make(map[string]*trDataSource)
-	byId := make(map[int64]*trDataSource)
+	byName := make(map[string]*DataSource)
+	byId := make(map[int64]*DataSource)
 	prefixes := make(map[string]bool)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
@@ -610,7 +620,7 @@ func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
 	return nil
 }
 
-func flushDataSource(ds *trDataSource) error {
+func FlushDataSource(ds *DataSource) error {
 
 	for _, rra := range ds.RRAs {
 		if len(rra.DPs) > 0 {
@@ -631,8 +641,8 @@ func flushDataSource(ds *trDataSource) error {
 	return nil
 }
 
-func createDataSource(name string, dsSpec *trDSSpec) (*trDataSource, error) {
-	rows, err := sql4.Query(name, dsSpec.Step.Duration.Nanoseconds()/1000000, dsSpec.Heartbeat.Duration.Nanoseconds()/1000000)
+func CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error) {
+	rows, err := sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("createDataSources(): error querying database: %v", err)
 		return nil, err
@@ -746,7 +756,7 @@ func seriesQuerySql(dsId, rraId int64, from, to *time.Time, interval int64) (*sq
 	return rows, nil
 }
 
-func seriesQuery(ds *trDataSource, from, to time.Time, maxPoints int64) (Series, error) {
+func SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, error) {
 
 	rra := ds.bestRRA(from, to, maxPoints)
 

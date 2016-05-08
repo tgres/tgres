@@ -18,6 +18,7 @@ package tgres
 import (
 	"flag"
 	"fmt"
+	"github.com/tgres/tgres/rrd"
 	"log"
 	"os"
 	"os/exec"
@@ -84,8 +85,7 @@ func Init() { // not to be confused with init()
 
 	savePid(config.PidPath)
 
-	createTablesIfNotExist()
-	prepareSqlStatements()
+	rrd.InitDb()
 
 	t := newTransceiver()
 	if err := t.start(gracefulProtos); err != nil {
@@ -130,7 +130,7 @@ func Finish() {
 	os.Remove(config.PidPath)
 }
 
-func gracefulRestart(t *trTransceiver, cfgPath string) {
+func gracefulRestart(t *Transceiver, cfgPath string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
@@ -161,7 +161,7 @@ func gracefulRestart(t *trTransceiver, cfgPath string) {
 	}
 }
 
-func gracefulExit(t *trTransceiver) {
+func gracefulExit(t *Transceiver) {
 
 	log.Printf("Gracefully exiting...")
 

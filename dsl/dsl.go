@@ -13,10 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package dsl
 
 import (
 	"fmt"
+	"github.com/tgres/tgres/rrd"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -25,15 +26,20 @@ import (
 	"time"
 )
 
+type DSGetter interface {
+	GetDS(ds_id int64) *rrd.DataSource
+}
+
 type DslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	t                   *trTransceiver
+	dss                 *rrd.DataSources
+	dsGetter            DSGetter
 }
 
-func NewDslCtx(t *trTransceiver, src string, from, to, maxPoints int64) *DslCtx {
-	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, t}
+func NewDslCtx(dss *rrd.DataSources, dsGetter DSGetter, src string, from, to, maxPoints int64) *DslCtx {
+	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, dss, dsGetter}
 }
 
 func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
@@ -63,10 +69,24 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 		return obj, nil
 	case string:
 		fromT, toT := time.Unix(dc.from, 0), time.Unix(dc.to, 0)
-		series, err := seriesFromIdent(dc.t, obj, fromT, toT, dc.maxPoints)
+		series, err := dc.seriesFromIdent(obj, fromT, toT)
 		return series, err
 	}
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
+}
+
+func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]rrd.Series, error) {
+	ids := dc.dss.DsIdsFromIdent(ident)
+	result := make(map[string]rrd.Series)
+	for name, id := range ids {
+		ds := dc.dsGetter.GetDS(id)
+		dps, err := rrd.SeriesQuery(ds, from, to, dc.maxPoints)
+		if err != nil {
+			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
+		}
+		result[name] = dps
+	}
+	return result, nil
 }
 
 type FuncCall struct {

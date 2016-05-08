@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/rrd"
 	"log"
 	"os"
 	"path/filepath"
@@ -45,79 +47,39 @@ type trConfig struct {
 	StatsdUdpListenSpec      string   `toml:"statsd-udp-listen-spec"`
 	HttpListenSpec           string   `toml:"http-listen-spec"`
 	Workers                  int
-	DSs                      []trDSSpec `toml:"ds"`
-	StatFlush                duration   `toml:"stat-flush-interval"`
-	StatsNamePrefix          string     `toml:"stats-name-prefix"`
+	DSs                      []DSSpec `toml:"ds"`
+	StatFlush                duration `toml:"stat-flush-interval"`
+	StatsNamePrefix          string   `toml:"stats-name-prefix"`
 }
 
-type duration struct {
-	time.Duration
-}
+type regex struct{ *regexp.Regexp }
 
-func (d *duration) UnmarshalText(text []byte) error {
-	var err error
-	d.Duration, err = time.ParseDuration(string(text))
-	return err
-}
-
-type regex struct {
-	*regexp.Regexp
-	Text string
-}
-
-func (r *regex) UnmarshalText(text []byte) error {
-	var err error
-	r.Text = string(text)
+func (r *regex) UnmarshalText(text []byte) (err error) {
 	r.Regexp, err = regexp.Compile(string(text))
 	return err
 }
 
-type trDSSpec struct {
-	Regexp    regex
-	Type      string
-	Step      duration
-	Heartbeat duration
-	RRAs      []trRRASpec
+type duration struct{ time.Duration }
+
+func (d *duration) UnmarshalText(text []byte) (err error) {
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }
 
-type trRRASpec struct {
+type DSSpec struct {
+	Regexp    regex
+	Step      duration
+	Heartbeat duration
+	RRAs      []RRASpec
+}
+type RRASpec struct {
 	Function string
 	Step     time.Duration
 	Size     time.Duration
 	Xff      float64
 }
 
-func betterParseDuration(s string) (time.Duration, error) {
-
-	if strings.HasSuffix(s, "min") {
-		s = s[0 : len(s)-2] // min -> m
-	} else if strings.HasSuffix(s, "hour") {
-		s = s[0 : len(s)-3] // hour -> h
-	} else if strings.HasSuffix(s, "mon") {
-		fd, err := strconv.ParseFloat(s[0:len(s)-3], 64)
-		if err != nil {
-			return 0, err
-		}
-		s = fmt.Sprintf("%vh", fd*30*24)
-	}
-	if d, err := time.ParseDuration(s); err != nil {
-		if strings.HasPrefix(err.Error(), "time: unknown unit ") {
-			d, _ := strconv.ParseInt(s[0:len(s)-1], 10, 64)
-			if strings.HasPrefix(err.Error(), "time: unknown unit d in") {
-				return time.Duration(d*24) * time.Hour, nil
-			} else if strings.HasPrefix(err.Error(), "time: unknown unit w in") {
-				return time.Duration(d*168) * time.Hour, nil
-			} else if strings.HasPrefix(err.Error(), "time: unknown unit y in") {
-				return time.Duration(d*8760) * time.Hour, nil
-			}
-		}
-		return d, err
-	} else {
-		return d, nil
-	}
-}
-
-func (r *trRRASpec) UnmarshalText(text []byte) error {
+func (r *RRASpec) UnmarshalText(text []byte) error {
 	r.Xff = 0.5
 	parts := strings.SplitN(string(text), ":", 4)
 	if len(parts) < 3 || len(parts) > 4 {
@@ -128,10 +90,10 @@ func (r *trRRASpec) UnmarshalText(text []byte) error {
 		return fmt.Errorf("Invalid function: %q", r.Function)
 	}
 	var err error
-	if r.Step, err = betterParseDuration(parts[1]); err != nil {
+	if r.Step, err = dsl.BetterParseDuration(parts[1]); err != nil {
 		return fmt.Errorf("Invalid Step: %q (%v)", parts[1], err)
 	}
-	if r.Size, err = betterParseDuration(parts[2]); err != nil {
+	if r.Size, err = dsl.BetterParseDuration(parts[2]); err != nil {
 		return fmt.Errorf("Invalid Size: %q (%v)", parts[2], err)
 	}
 	if (r.Size.Nanoseconds() % r.Step.Nanoseconds()) != 0 {
@@ -211,7 +173,7 @@ func (c *trConfig) processDbConnectString() error {
 	if c.DbConnectString == "" {
 		return fmt.Errorf("db-connect-string empty")
 	}
-	if err := initDbConnection(c.DbConnectString); err == nil {
+	if err := rrd.InitDbConnection(c.DbConnectString); err == nil {
 		log.Printf("Initialized DB connection.")
 	} else {
 		log.Printf("Error connecting to the DB: %v", err)
@@ -280,9 +242,9 @@ func (c *trConfig) processDSSpec() error {
 		for _, rra := range ds.RRAs {
 			if (rra.Step.Nanoseconds() % ds.Step.Duration.Nanoseconds()) != 0 {
 				newStep := time.Duration(rra.Step.Nanoseconds()/ds.Step.Duration.Nanoseconds()*ds.Step.Duration.Nanoseconds()) * time.Nanosecond
-				log.Printf("DS %q: RRA step (%v) is not a multiple of DS Step (%v), auto adjusting Step to %v.", ds.Regexp.Text, rra.Step, ds.Step.Duration, newStep)
+				log.Printf("DS %q: RRA step (%v) is not a multiple of DS Step (%v), auto adjusting Step to %v.", ds.Regexp.String(), rra.Step, ds.Step.Duration, newStep)
 				if newStep.Nanoseconds() == 0 {
-					return fmt.Errorf("DS %q: invalid Step (%v)", ds.Regexp.Text, newStep)
+					return fmt.Errorf("DS %q: invalid Step (%v)", ds.Regexp.String(), newStep)
 				}
 				rra.Step = newStep
 			}
@@ -292,13 +254,26 @@ func (c *trConfig) processDSSpec() error {
 	return nil
 }
 
-func (c *trConfig) findMatchingDsSpec(name string) *trDSSpec {
+func (c *trConfig) findMatchingDsSpec(name string) *rrd.DSSpec {
 	for _, dsSpec := range c.DSs {
 		if dsSpec.Regexp.Regexp.MatchString(name) {
-			return &dsSpec
+			return convertDSSpec(&dsSpec)
 		}
 	}
 	return nil
+}
+
+func convertDSSpec(dsSpec *DSSpec) *rrd.DSSpec {
+	rrdDSSpec := &rrd.DSSpec{
+		Step:      dsSpec.Step.Duration,
+		Heartbeat: dsSpec.Heartbeat.Duration,
+		RRAs:      make([]*rrd.RRASpec, len(dsSpec.RRAs)),
+	}
+	for i, r := range dsSpec.RRAs {
+		rr := rrd.RRASpec(r)
+		rrdDSSpec.RRAs[i] = &rr
+	}
+	return rrdDSSpec
 }
 
 type configer interface {
