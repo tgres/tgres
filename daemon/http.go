@@ -13,11 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package daemon
 
 import (
 	"fmt"
 	"github.com/tgres/tgres/dsl"
+	x "github.com/tgres/tgres/transceiver"
 	"log"
 	"math"
 	"net"
@@ -27,7 +28,7 @@ import (
 	"time"
 )
 
-func httpServer(addr string, l net.Listener, t *Transceiver) {
+func httpServer(addr string, l net.Listener, t *x.Transceiver) {
 
 	http.HandleFunc("/metrics/find", metricsFindHandler(t))
 	http.HandleFunc("/render", renderHandler(t))
@@ -40,10 +41,10 @@ func httpServer(addr string, l net.Listener, t *Transceiver) {
 	server.Serve(l)
 }
 
-func metricsFindHandler(t *Transceiver) http.HandlerFunc {
+func metricsFindHandler(t *x.Transceiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
-		nodes := t.dss.FsFind(r.FormValue("query"))
+		nodes := t.FsFind(r.FormValue("query"))
 		for n, node := range nodes {
 			parts := strings.Split(node.Name, ".")
 			if node.Leaf {
@@ -59,7 +60,7 @@ func metricsFindHandler(t *Transceiver) http.HandlerFunc {
 	}
 }
 
-func renderHandler(t *Transceiver) http.HandlerFunc {
+func renderHandler(t *x.Transceiver) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -162,10 +163,10 @@ func parseTime(s string) (*time.Time, error) {
 	}
 }
 
-func processTarget(t *Transceiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
+func processTarget(t *x.Transceiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	dc := dsl.NewDslCtx(t.dss, dsl.DSGetter(t), query, from, to, maxPoints)
+	dc := dsl.NewDslCtx(dsl.DSGetter(t), query, from, to, maxPoints)
 	result, err := dc.ParseDsl()
 	return result, err
 }

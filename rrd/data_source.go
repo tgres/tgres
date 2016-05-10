@@ -137,13 +137,13 @@ func (dss *DataSources) Insert(ds *DataSource) {
 
 }
 
-type fsFindNode struct {
+type FsFindNode struct {
 	Name string
 	Leaf bool
 	dsId int64
 }
 
-type fsNodes []*fsFindNode
+type fsNodes []*FsFindNode
 
 // sort.Interface
 func (fns fsNodes) Len() int {
@@ -156,7 +156,7 @@ func (fns fsNodes) Swap(i, j int) {
 	fns[i], fns[j] = fns[j], fns[i]
 }
 
-func (dss *DataSources) FsFind(pattern string) []*fsFindNode {
+func (dss *DataSources) FsFind(pattern string) []*FsFindNode {
 
 	// TODO This should happen in Postgres because at 1M+ series this
 	// wouldn't work that well... But then this API is ill designed
@@ -167,20 +167,20 @@ func (dss *DataSources) FsFind(pattern string) []*fsFindNode {
 
 	dots := strings.Count(pattern, ".")
 
-	set := make(map[string]*fsFindNode)
+	set := make(map[string]*FsFindNode)
 	for k, ds := range dss.byName {
 
 		// NB: It's safe to touch DS id, because it is assigned
 		// protected by the same dss lock, but not other members!
 
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &fsFindNode{Name: k, Leaf: true, dsId: ds.Id}
+			set[k] = &FsFindNode{Name: k, Leaf: true, dsId: ds.Id}
 		}
 	}
 
 	for k, _ := range dss.prefixes {
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &fsFindNode{Name: k, Leaf: false}
+			set[k] = &FsFindNode{Name: k, Leaf: false}
 		}
 	}
 

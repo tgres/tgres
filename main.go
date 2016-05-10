@@ -18,7 +18,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/tgres/tgres"
+	"github.com/tgres/tgres/daemon"
 )
 
 var (
@@ -34,7 +34,7 @@ func main() {
 		fmt.Printf("Build time: %s, git revision: %s\n", buildTime, gitRevision)
 	} else {
 		// NB: More flags defined in tgres package
-		tgres.Init()
-		tgres.Finish()
+		daemon.Init()
+		daemon.Finish()
 	}
 }

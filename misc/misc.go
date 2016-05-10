@@ -13,11 +13,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package misc
 
-type trStat struct {
-	name   string
-	value  float64
-	metric string
-	sample float64
+import (
+	"regexp"
+)
+
+var (
+	sanitizeRegexSpace       = regexp.MustCompile("\\s+")
+	sanitizeRegexSlash       = regexp.MustCompile("/")
+	sanitizeRegexNonAlphaNum = regexp.MustCompile("[^a-zA-Z_\\-0-9\\.]")
+)
+
+func SanitizeName(name string) string {
+	name = sanitizeRegexSpace.ReplaceAllString(name, "_")
+	name = sanitizeRegexSlash.ReplaceAllString(name, "-")
+	return sanitizeRegexNonAlphaNum.ReplaceAllString(name, "")
 }

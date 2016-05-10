@@ -27,19 +27,19 @@ import (
 )
 
 type DSGetter interface {
-	GetDS(ds_id int64) *rrd.DataSource
+	GetDSById(ds_id int64) *rrd.DataSource
+	DsIdsFromIdent(ident string) map[string]int64
 }
 
 type DslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	dss                 *rrd.DataSources
 	dsGetter            DSGetter
 }
 
-func NewDslCtx(dss *rrd.DataSources, dsGetter DSGetter, src string, from, to, maxPoints int64) *DslCtx {
-	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, dss, dsGetter}
+func NewDslCtx(dsGetter DSGetter, src string, from, to, maxPoints int64) *DslCtx {
+	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, dsGetter}
 }
 
 func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
@@ -76,10 +76,10 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 }
 
 func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]rrd.Series, error) {
-	ids := dc.dss.DsIdsFromIdent(ident)
+	ids := dc.dsGetter.DsIdsFromIdent(ident)
 	result := make(map[string]rrd.Series)
 	for name, id := range ids {
-		ds := dc.dsGetter.GetDS(id)
+		ds := dc.dsGetter.GetDSById(id)
 		dps, err := rrd.SeriesQuery(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)

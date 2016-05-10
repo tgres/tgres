@@ -13,12 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package daemon
 
 import (
 	"flag"
 	"fmt"
 	"github.com/tgres/tgres/rrd"
+	x "github.com/tgres/tgres/transceiver"
 	"log"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ import (
 )
 
 var (
+	serviceMgr       *ServiceManager
 	logFile          *os.File
 	cycleLogCh            = make(chan int)
 	quitting         bool = false
@@ -68,9 +70,8 @@ func Init() { // not to be confused with init()
 
 	cfgPath, gracefulProtos := parseFlags()
 
-	var err error
-	config, err = readConfig(cfgPath)
-	if err != nil {
+	// This creates the Cfg variable
+	if err := ReadConfig(cfgPath); err != nil {
 		log.Fatal("Exiting.")
 	}
 
@@ -79,19 +80,45 @@ func Init() { // not to be confused with init()
 		log.Fatal(err)
 	}
 
-	if err := processConfig(configer(config), wd); err != nil {
+	// TODO This should like inside config?
+	if err := processConfig(configer(Cfg), wd); err != nil { // This validates the config
 		log.Fatalf("Error in config file %s: %v", cfgPath, err)
 	}
 
-	savePid(config.PidPath)
+	savePid(Cfg.PidPath)
 
-	rrd.InitDb()
+	rrd.InitDb() // Initialize Database
 
-	t := newTransceiver()
-	if err := t.start(gracefulProtos); err != nil {
+	// Create the transceiver
+	t := x.NewTransceiver(Cfg.Workers, Cfg.MaxCache.Duration, Cfg.MinCache.Duration,
+		Cfg.MaxCachedPoints, Cfg.StatFlush.Duration, Cfg.StatsNamePrefix,
+		x.MatchingDsSpecFinder(Cfg))
+
+	// Start the transceiver,
+	if err := t.Start(); err != nil {
 		log.Printf("Could not start the transceiver: %v", err)
 		return
 	}
+
+	serviceMgr = newServiceManager(t)
+	if err := serviceMgr.run(gracefulProtos); err != nil {
+		log.Printf("Could not run the service manager: %v", err)
+		return
+	}
+
+	if gracefulProtos != "" {
+		parent := syscall.Getppid()
+		log.Printf("start(): Killing parent pid: %v", parent)
+		syscall.Kill(parent, syscall.SIGTERM)
+		log.Printf("start(): Waiting for the parent to signal that flush is complete...")
+		ch := make(chan os.Signal)
+		signal.Notify(ch, syscall.SIGUSR1)
+		s := <-ch
+		log.Printf("start(): Received %v, proceeding to load the data", s)
+	}
+
+	t.ReloadDss()     // *finally* load the data (because graceful restart)
+	go t.Dispatcher() // now start dispatcher
 
 	// TODO - there should be a -f(oreground) flag?
 	// Also see not below about saving the starting working directory
@@ -127,17 +154,17 @@ func Finish() {
 		logFile.Close()
 	}
 
-	os.Remove(config.PidPath)
+	os.Remove(Cfg.PidPath)
 }
 
-func gracefulRestart(t *Transceiver, cfgPath string) {
+func gracefulRestart(t *x.Transceiver, cfgPath string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
 		return
 	}
 
-	files, protos := t.serviceMgr.listenerFilesAndProtocols()
+	files, protos := serviceMgr.listenerFilesAndProtocols()
 
 	log.Printf("gracefulRestart(): Beginning graceful restart with sockets: %v and protos: %q", files, protos)
 
@@ -161,13 +188,18 @@ func gracefulRestart(t *Transceiver, cfgPath string) {
 	}
 }
 
-func gracefulExit(t *Transceiver) {
+func gracefulExit(t *x.Transceiver) {
 
 	log.Printf("Gracefully exiting...")
 
 	quitting = true
 
-	t.stop()
+	log.Printf("Waiting for all TCP connections to finish...")
+	serviceMgr.closeListeners()
+	log.Printf("TCP connections finished.")
+
+	// Stop the transceiver
+	t.Stop()
 
 	if gracefulChildPid != 0 {
 		// let the child know the data is flushed

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package daemon
 
 import (
 	"fmt"
@@ -32,11 +32,11 @@ var osRename = func(a, b string) error {
 }
 
 var renameLogFile = func() {
-	logDir, logFile := filepath.Split(config.LogPath)
+	logDir, logFile := filepath.Split(Cfg.LogPath)
 	filename := timeNow().Format(logFile + "-20060102_150405")
 	fullpath := filepath.Join(logDir, filename)
 	log.Printf("Starting new log file, current log archived as: '%s'", fullpath)
-	osRename(config.LogPath, fullpath)
+	osRename(Cfg.LogPath, fullpath)
 }
 
 var cycleLogFile = func() {
@@ -45,9 +45,9 @@ var cycleLogFile = func() {
 		renameLogFile()
 	}
 
-	file, err := os.OpenFile(config.LogPath, os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0666) // open with O_SYNC
+	file, err := os.OpenFile(Cfg.LogPath, os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0666) // open with O_SYNC
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: Unable to open log file '%s', %s\n", config.LogPath, err)
+		fmt.Fprintf(os.Stderr, "FATAL: Unable to open log file '%s', %s\n", Cfg.LogPath, err)
 		os.Exit(1)
 	}
 
@@ -76,7 +76,7 @@ var logFileCycler = func() {
 
 	go func() { // Periodic cycling
 		for {
-			time.Sleep(config.LogCycle.Duration)
+			time.Sleep(Cfg.LogCycle.Duration)
 			cycleLogCh <- 1
 			if quitting {
 				return
@@ -88,8 +88,8 @@ var logFileCycler = func() {
 // Write to both stderr and log
 func logFatalf(format string, v ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, v...)
-	if config.PidPath != "" && gracefulChildPid == 0 {
-		os.Remove(config.PidPath)
+	if Cfg.PidPath != "" && gracefulChildPid == 0 {
+		os.Remove(Cfg.PidPath)
 	}
 	log.Fatalf(format, v...)
 }

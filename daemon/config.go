@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package daemon
 
 import (
 	"errors"
@@ -30,9 +30,9 @@ import (
 	"time"
 )
 
-var config *trConfig
+var Cfg *Config
 
-type trConfig struct {
+type Config struct {
 	PidPath                  string   `toml:"pid-file"`
 	LogPath                  string   `toml:"log-file"`
 	LogCycle                 duration `toml:"log-cycle-interval"`
@@ -113,19 +113,19 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 	return nil
 }
 
-func readConfig(cfgPath string) (*trConfig, error) {
-	config = &trConfig{}
-	_, err := toml.DecodeFile(cfgPath, config)
+func ReadConfig(cfgPath string) error {
+	Cfg = &Config{}
+	_, err := toml.DecodeFile(cfgPath, Cfg)
 	if err != nil {
 		log.Printf("Unable to read config: %s.", err)
-		return nil, err
+		return err
 	} else {
 		log.Printf("Read config file: '%s'.", cfgPath)
 	}
-	return config, nil
+	return nil
 }
 
-func (c *trConfig) processConfigPidFile(wd string) error {
+func (c *Config) processConfigPidFile(wd string) error {
 	if c.PidPath == "" {
 		return fmt.Errorf("pid-file setting empty")
 	}
@@ -139,7 +139,7 @@ func (c *trConfig) processConfigPidFile(wd string) error {
 	return nil
 }
 
-func (c *trConfig) processConfigLogFile(wd string) error {
+func (c *Config) processConfigLogFile(wd string) error {
 	if c.LogPath == "" {
 		return fmt.Errorf("log-file setting empty")
 	}
@@ -155,7 +155,7 @@ func (c *trConfig) processConfigLogFile(wd string) error {
 	return nil
 }
 
-func (c *trConfig) processConfigLogCycleInterval() error {
+func (c *Config) processConfigLogCycleInterval() error {
 	if c.LogCycle.Duration == 0 {
 		return fmt.Errorf("log-cycle-interval setting empty")
 	}
@@ -169,7 +169,7 @@ func (c *trConfig) processConfigLogCycleInterval() error {
 	return nil
 }
 
-func (c *trConfig) processDbConnectString() error {
+func (c *Config) processDbConnectString() error {
 	if c.DbConnectString == "" {
 		return fmt.Errorf("db-connect-string empty")
 	}
@@ -182,7 +182,7 @@ func (c *trConfig) processDbConnectString() error {
 	return nil
 }
 
-func (c *trConfig) processMaxCachedPoints() error {
+func (c *Config) processMaxCachedPoints() error {
 	if c.MaxCachedPoints == 0 {
 		return fmt.Errorf("max-cached-points missing, must be integer")
 	}
@@ -190,7 +190,7 @@ func (c *trConfig) processMaxCachedPoints() error {
 	return nil
 }
 
-func (c *trConfig) processMaxCacheDuration() error {
+func (c *Config) processMaxCacheDuration() error {
 	if c.MaxCache.Duration == 0 {
 		return fmt.Errorf("max-cache-duration is missing")
 	} else {
@@ -199,7 +199,7 @@ func (c *trConfig) processMaxCacheDuration() error {
 	return nil
 }
 
-func (c *trConfig) processMinCacheDuration() error {
+func (c *Config) processMinCacheDuration() error {
 	if c.MinCache.Duration == 0 {
 		return fmt.Errorf("min-cache-duration is missing")
 	} else if c.MinCache.Duration > c.MaxCache.Duration/2 {
@@ -210,7 +210,7 @@ func (c *trConfig) processMinCacheDuration() error {
 	return nil
 }
 
-func (c *trConfig) processStatFlushInterval() error {
+func (c *Config) processStatFlushInterval() error {
 	if c.StatFlush.Duration == 0 {
 		return fmt.Errorf("stat-flush-interval is missing")
 	} else {
@@ -219,7 +219,7 @@ func (c *trConfig) processStatFlushInterval() error {
 	return nil
 }
 
-func (c *trConfig) processStatsNamePrefix() error {
+func (c *Config) processStatsNamePrefix() error {
 	if c.StatsNamePrefix == "" {
 		log.Printf("stats-name-prefix is empty, defaulting to 'stats'")
 		c.StatsNamePrefix = "stats"
@@ -228,7 +228,7 @@ func (c *trConfig) processStatsNamePrefix() error {
 	return nil
 }
 
-func (c *trConfig) processWorkers() error {
+func (c *Config) processWorkers() error {
 	if c.Workers == 0 {
 		return fmt.Errorf("workers missing, must be an integer")
 	}
@@ -236,7 +236,7 @@ func (c *trConfig) processWorkers() error {
 	return nil
 }
 
-func (c *trConfig) processDSSpec() error {
+func (c *Config) processDSSpec() error {
 	// TODO validate function, regular expression, all that
 	for _, ds := range c.DSs {
 		for _, rra := range ds.RRAs {
@@ -254,7 +254,7 @@ func (c *trConfig) processDSSpec() error {
 	return nil
 }
 
-func (c *trConfig) findMatchingDsSpec(name string) *rrd.DSSpec {
+func (c *Config) FindMatchingDsSpec(name string) *rrd.DSSpec {
 	for _, dsSpec := range c.DSs {
 		if dsSpec.Regexp.Regexp.MatchString(name) {
 			return convertDSSpec(&dsSpec)

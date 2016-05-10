@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package graceful
 
 import (
 	"net"
@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	tcpWg sync.WaitGroup
+	TcpWg sync.WaitGroup
 )
 
 type gracefulConn struct {
@@ -33,19 +33,19 @@ type gracefulConn struct {
 func (w gracefulConn) Close() error {
 	err := w.Conn.Close()
 	if err == nil {
-		tcpWg.Done()
+		TcpWg.Done()
 	}
 	return err
 }
 
-type gracefulListener struct {
+type Listener struct {
 	net.Listener
 	stop    chan error
 	stopped bool
 }
 
-func newGracefulListener(l net.Listener) (gl *gracefulListener) {
-	gl = &gracefulListener{Listener: l, stop: make(chan error)}
+func NewListener(l net.Listener) (gl *Listener) {
+	gl = &Listener{Listener: l, stop: make(chan error)}
 	go func() {
 		_ = <-gl.stop
 		gl.stopped = true
@@ -54,7 +54,7 @@ func newGracefulListener(l net.Listener) (gl *gracefulListener) {
 	return
 }
 
-func (gl *gracefulListener) Close() error {
+func (gl *Listener) Close() error {
 	if gl.stopped {
 		return syscall.EINVAL
 	}
@@ -62,11 +62,7 @@ func (gl *gracefulListener) Close() error {
 	return <-gl.stop
 }
 
-func (gl *gracefulListener) Accept() (c net.Conn, err error) {
-	if quitting {
-		return nil, syscall.EINVAL
-	}
-
+func (gl *Listener) Accept() (c net.Conn, err error) {
 	c, err = gl.Listener.Accept()
 	if err != nil {
 		return
@@ -74,11 +70,11 @@ func (gl *gracefulListener) Accept() (c net.Conn, err error) {
 
 	c = gracefulConn{Conn: c}
 
-	tcpWg.Add(1)
+	TcpWg.Add(1)
 	return
 }
 
-func (gl *gracefulListener) File() *os.File {
+func (gl *Listener) File() *os.File {
 	tl := gl.Listener.(*net.TCPListener)
 	fl, _ := tl.File()
 	return fl

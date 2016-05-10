@@ -13,33 +13,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tgres
+package transceiver
 
 import (
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/statsd"
 	"log"
 	"math"
 	"math/rand"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 )
 
+type MatchingDsSpecFinder interface {
+	FindMatchingDsSpec(name string) *rrd.DSSpec
+}
+
 type Transceiver struct {
-	serviceMgr   *trServiceManager
-	dss          *rrd.DataSources
-	dpCh         chan *rrd.DataPoint    // incoming data point
-	workerChs    []chan *rrd.DataPoint  // incoming data point with ds
-	flusherChs   []chan *rrd.DataSource // ds to flush
-	dsCopyChs    []chan *dsCopyRequest  // request a copy of a DS (used by HTTP)
-	stCh         chan *trStat           // incoming statd stats
-	workerWg     sync.WaitGroup
-	flusherWg    sync.WaitGroup
-	statWg       sync.WaitGroup
-	dispatcherWg sync.WaitGroup
-	startWg      sync.WaitGroup
+	nWorkers                           int
+	maxCacheDuration, minCacheDuration time.Duration
+	maxCachedPoints                    int
+	statFlushDuration                  time.Duration
+	statsNamePrefix                    string
+	dsSpecs                            MatchingDsSpecFinder
+	dss                                *rrd.DataSources
+	dpCh                               chan *rrd.DataPoint    // incoming data point
+	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
+	flusherChs                         []chan *rrd.DataSource // ds to flush
+	dsCopyChs                          []chan *dsCopyRequest  // request a copy of a DS (used by HTTP)
+	stCh                               chan *statsd.Stat      // incoming statd stats
+	workerWg                           sync.WaitGroup
+	flusherWg                          sync.WaitGroup
+	statWg                             sync.WaitGroup
+	dispatcherWg                       sync.WaitGroup
+	startWg                            sync.WaitGroup
 }
 
 type dsCopyRequest struct {
@@ -47,57 +54,42 @@ type dsCopyRequest struct {
 	resp chan *rrd.DataSource
 }
 
-func newTransceiver() *Transceiver {
+func NewTransceiver(nWorkers int, maxCacheDuration, minCacheDuration time.Duration,
+	maxCachedPoints int, statFlushDuration time.Duration, statsNamePrefix string,
+	dsSpecs MatchingDsSpecFinder) *Transceiver {
+
 	dss := &rrd.DataSources{}
-	return &Transceiver{dss: dss,
-		dpCh: make(chan *rrd.DataPoint, 1048576), // so we can survive a graceful restart
+	return &Transceiver{
+		nWorkers:          nWorkers,
+		maxCacheDuration:  maxCacheDuration,
+		minCacheDuration:  minCacheDuration,
+		maxCachedPoints:   maxCachedPoints,
+		statFlushDuration: statFlushDuration,
+		statsNamePrefix:   statsNamePrefix,
+		dsSpecs:           dsSpecs,
+		dss:               dss,
+		dpCh:              make(chan *rrd.DataPoint, 1048576), // so we can survive a graceful restart
 	}
 }
 
-func (t *Transceiver) start(gracefulProtos string) error {
+func (t *Transceiver) Start() error {
 	t.startWorkers()
 	t.startFlushers()
 	t.startStatWorker()
-	t.serviceMgr = newServiceManager(t)
-
-	if err := t.serviceMgr.run(gracefulProtos); err != nil {
-		return err
-	}
 
 	// Wait for workers/flushers to start correctly
 	t.startWg.Wait()
-	log.Printf("All workers running, good to go!")
-
-	if gracefulProtos != "" {
-		parent := syscall.Getppid()
-		log.Printf("start(): Killing parent pid: %v", parent)
-		syscall.Kill(parent, syscall.SIGTERM)
-		log.Printf("start(): Waiting for the parent to signal that flush is complete...")
-		ch := make(chan os.Signal)
-		signal.Notify(ch, syscall.SIGUSR1)
-		s := <-ch
-		log.Printf("start(): Received %v, proceeding to load the data", s)
-	}
-
-	t.dss.Reload() // *finally* load the data (because graceful restart)
-
-	go t.dispatcher() // now start dispatcher
+	log.Printf("Transceiver: All workers running, good to go!")
 
 	return nil
 }
 
-func (t *Transceiver) stop() {
-
-	t.serviceMgr.closeListeners()
-	log.Printf("Waiting for all TCP connections to finish...")
-	tcpWg.Wait()
-	log.Printf("TCP connections finished.")
+func (t *Transceiver) Stop() {
 
 	log.Printf("Closing dispatcher channel...")
 	close(t.dpCh)
 	t.dispatcherWg.Wait()
 	log.Printf("Dispatcher finished.")
-
 }
 
 func (t *Transceiver) stopWorkers() {
@@ -149,7 +141,11 @@ func (t *Transceiver) stopStatWorker() {
 	log.Printf("stopStatWorker(): stat worker finished.")
 }
 
-func (t *Transceiver) dispatcher() {
+func (t *Transceiver) ReloadDss() {
+	t.dss.Reload()
+}
+
+func (t *Transceiver) Dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
 
@@ -166,7 +162,7 @@ func (t *Transceiver) dispatcher() {
 
 		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
 			// DS does not exist, can we create it?
-			if dsSpec := config.findMatchingDsSpec(dp.Name); dsSpec != nil {
+			if dsSpec := t.dsSpecs.FindMatchingDsSpec(dp.Name); dsSpec != nil {
 				if ds, err := rrd.CreateDataSource(dp.Name, dsSpec); err == nil {
 					t.dss.Insert(ds)
 					dp.DS = ds
@@ -178,31 +174,36 @@ func (t *Transceiver) dispatcher() {
 		}
 
 		if dp.DS != nil {
-			t.workerChs[dp.DS.Id%int64(config.Workers)] <- dp
+			t.workerChs[dp.DS.Id%int64(t.nWorkers)] <- dp
 		}
 	}
 }
 
 // TODO: what is the point of this one-line method?
-func (t *Transceiver) queueDataPoint(dp *rrd.DataPoint) {
+func (t *Transceiver) QueueDataPoint(dp *rrd.DataPoint) {
 	t.dpCh <- dp
 }
 
 // TODO: what is the point of this one-line method?
-func (t *Transceiver) queueStat(st *trStat) {
+func (t *Transceiver) QueueStat(st *statsd.Stat) {
 	t.stCh <- st
 }
 
 func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
 	req := &dsCopyRequest{id, make(chan *rrd.DataSource)}
-	t.dsCopyChs[id%int64(config.Workers)] <- req
+	t.dsCopyChs[id%int64(t.nWorkers)] <- req
 	return <-req.resp
 }
 
 // Satisfy DSGetter interface in tgres/dsl
-func (t *Transceiver) GetDS(id int64) *rrd.DataSource {
+func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
 	return t.requestDsCopy(id)
 }
+func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
+	return t.dss.DsIdsFromIdent(ident)
+}
+
+// End DSGetter interface
 
 func (t *Transceiver) worker(id int64) {
 
@@ -219,8 +220,8 @@ func (t *Transceiver) worker(id int64) {
 	go func() {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
-			i := int(config.MaxCache.Duration.Nanoseconds()-config.MinCache.Duration.Nanoseconds()) / 1000
-			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + config.MinCache.Duration)
+			i := int(t.maxCacheDuration.Nanoseconds()-t.minCacheDuration.Nanoseconds()) / 1000
+			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + t.minCacheDuration)
 			periodicFlushCheck <- 1
 		}
 	}()
@@ -263,13 +264,13 @@ func (t *Transceiver) worker(id int64) {
 				if ds == nil {
 					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
 					continue
-				} else if flushEverything || ds.ShouldBeFlushed(config.MaxCachedPoints,
-					config.MinCache.Duration, config.MaxCache.Duration) {
+				} else if flushEverything || ds.ShouldBeFlushed(t.maxCachedPoints,
+					t.minCacheDuration, t.maxCacheDuration) {
 					t.flushDs(ds)
 					delete(recent, ds.Id)
 				}
 			}
-		} else if ds.ShouldBeFlushed(config.MaxCachedPoints, config.MinCache.Duration, config.MaxCache.Duration) {
+		} else if ds.ShouldBeFlushed(t.maxCachedPoints, t.minCacheDuration, t.maxCacheDuration) {
 			// flush just this one ds
 			t.flushDs(ds)
 			delete(recent, ds.Id)
@@ -282,19 +283,19 @@ func (t *Transceiver) worker(id int64) {
 }
 
 func (t *Transceiver) flushDs(ds *rrd.DataSource) {
-	t.flusherChs[ds.Id%int64(config.Workers)] <- ds.MostlyCopy()
+	t.flusherChs[ds.Id%int64(t.nWorkers)] <- ds.MostlyCopy()
 	ds.LastFlushRT = time.Now()
 	ds.ClearRRAs()
 }
 
 func (t *Transceiver) startWorkers() {
 
-	t.workerChs = make([]chan *rrd.DataPoint, config.Workers)
-	t.dsCopyChs = make([]chan *dsCopyRequest, config.Workers)
+	t.workerChs = make([]chan *rrd.DataPoint, t.nWorkers)
+	t.dsCopyChs = make([]chan *dsCopyRequest, t.nWorkers)
 
-	log.Printf("Starting %d workers...", config.Workers)
-	t.startWg.Add(config.Workers)
-	for i := 0; i < config.Workers; i++ {
+	log.Printf("Starting %d workers...", t.nWorkers)
+	t.startWg.Add(t.nWorkers)
+	for i := 0; i < t.nWorkers; i++ {
 		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
 		t.dsCopyChs[i] = make(chan *dsCopyRequest, 1024)
 
@@ -326,18 +327,18 @@ func (t *Transceiver) flusher(id int64) {
 
 func (t *Transceiver) startFlushers() {
 
-	t.flusherChs = make([]chan *rrd.DataSource, config.Workers)
+	t.flusherChs = make([]chan *rrd.DataSource, t.nWorkers)
 
-	log.Printf("Starting %d flushers...", config.Workers)
-	t.startWg.Add(config.Workers)
-	for i := 0; i < config.Workers; i++ {
+	log.Printf("Starting %d flushers...", t.nWorkers)
+	t.startWg.Add(t.nWorkers)
+	for i := 0; i < t.nWorkers; i++ {
 		t.flusherChs[i] = make(chan *rrd.DataSource)
 		go t.flusher(int64(i))
 	}
 }
 
 func (t *Transceiver) startStatWorker() {
-	t.stCh = make(chan *trStat, 1024)
+	t.stCh = make(chan *statsd.Stat, 1024)
 	log.Printf("Starting statWorker...")
 	t.startWg.Add(1)
 	go t.statWorker()
@@ -356,7 +357,7 @@ func (t *Transceiver) statWorker() {
 			// multiple of durationif the system clock is
 			// adjusted. This thing will mostly remain aligned.
 			clock := time.Now()
-			time.Sleep(clock.Truncate(config.StatFlush.Duration).Add(config.StatFlush.Duration).Sub(clock))
+			time.Sleep(clock.Truncate(t.statFlushDuration).Add(t.statFlushDuration).Sub(clock))
 			if len(flushCh) == 0 {
 				flushCh <- 1
 			} else {
@@ -372,19 +373,19 @@ func (t *Transceiver) statWorker() {
 	gauges := make(map[string]float64)
 	timers := make(map[string][]float64)
 
-	prefix := config.StatsNamePrefix
+	prefix := t.statsNamePrefix
 
 	var flushStats = func() {
 		for name, count := range counts {
-			perSec := float64(count) / config.StatFlush.Duration.Seconds()
-			t.queueDataPoint(&rrd.DataPoint{Name: prefix + "." + name, TimeStamp: time.Now(), Value: perSec})
+			perSec := float64(count) / t.statFlushDuration.Seconds()
+			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + "." + name, TimeStamp: time.Now(), Value: perSec})
 		}
 		for name, gauge := range gauges {
-			t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".gauges." + name, TimeStamp: time.Now(), Value: gauge})
+			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".gauges." + name, TimeStamp: time.Now(), Value: gauge})
 		}
 		for name, times := range timers {
 			// count
-			t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".count", TimeStamp: time.Now(), Value: float64(len(times))})
+			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".count", TimeStamp: time.Now(), Value: float64(len(times))})
 
 			// lower, upper, sum, mean
 			if len(times) > 0 {
@@ -398,10 +399,10 @@ func (t *Transceiver) statWorker() {
 					upper = math.Max(upper, v)
 					sum += v
 				}
-				t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".lower", TimeStamp: time.Now(), Value: lower})
-				t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".upper", TimeStamp: time.Now(), Value: upper})
-				t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".sum", TimeStamp: time.Now(), Value: sum})
-				t.queueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".mean", TimeStamp: time.Now(), Value: sum / float64(len(times))})
+				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".lower", TimeStamp: time.Now(), Value: lower})
+				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".upper", TimeStamp: time.Now(), Value: upper})
+				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".sum", TimeStamp: time.Now(), Value: sum})
+				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".mean", TimeStamp: time.Now(), Value: sum / float64(len(times))})
 			}
 
 			// TODO - these will require sorting:
@@ -437,21 +438,25 @@ func (t *Transceiver) statWorker() {
 				flushStats() // Final flush
 				return
 			}
-			if st.metric == "c" {
-				if _, ok := counts[st.name]; !ok {
-					counts[st.name] = 0
+			if st.Metric == "c" {
+				if _, ok := counts[st.Name]; !ok {
+					counts[st.Name] = 0
 				}
-				counts[st.name] += int64(st.value)
-			} else if st.metric == "g" {
-				gauges[st.name] = st.value
-			} else if st.metric == "ms" {
-				if _, ok := timers[st.name]; !ok {
-					timers[st.name] = make([]float64, 4)
+				counts[st.Name] += int64(st.Value)
+			} else if st.Metric == "g" {
+				gauges[st.Name] = st.Value
+			} else if st.Metric == "ms" {
+				if _, ok := timers[st.Name]; !ok {
+					timers[st.Name] = make([]float64, 4)
 				}
-				timers[st.name] = append(timers[st.name], st.value)
+				timers[st.Name] = append(timers[st.Name], st.Value)
 			} else {
-				log.Printf("statWorker(): invalid metric type: %q, ignoring.", st.metric)
+				log.Printf("statWorker(): invalid metric type: %q, ignoring.", st.Metric)
 			}
 		}
 	}
+}
+
+func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
+	return t.dss.FsFind(pattern)
 }
