@@ -17,6 +17,7 @@ package dsl
 
 import (
 	"fmt"
+	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
@@ -1400,7 +1401,7 @@ func parseTimeShift(s string) (time.Duration, error) {
 	if s[0] == '-' || s[0] == '+' {
 		sansSign = s[1:len(s)]
 	}
-	if dur, err := BetterParseDuration(sansSign); err == nil {
+	if dur, err := misc.BetterParseDuration(sansSign); err == nil {
 		if s[0] == '-' {
 			return dur * -1, nil
 		} else {
@@ -2268,7 +2269,7 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 		var err error
 		var slen time.Duration
 
-		slen, err = BetterParseDuration(seasonLen)
+		slen, err = misc.BetterParseDuration(seasonLen)
 		if err != nil {
 			return nil, err
 		}

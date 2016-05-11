@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/rrd"
 	"log"
 	"os"
@@ -90,10 +90,10 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 		return fmt.Errorf("Invalid function: %q", r.Function)
 	}
 	var err error
-	if r.Step, err = dsl.BetterParseDuration(parts[1]); err != nil {
+	if r.Step, err = misc.BetterParseDuration(parts[1]); err != nil {
 		return fmt.Errorf("Invalid Step: %q (%v)", parts[1], err)
 	}
-	if r.Size, err = dsl.BetterParseDuration(parts[2]); err != nil {
+	if r.Size, err = misc.BetterParseDuration(parts[2]); err != nil {
 		return fmt.Errorf("Invalid Size: %q (%v)", parts[2], err)
 	}
 	if (r.Size.Nanoseconds() % r.Step.Nanoseconds()) != 0 {

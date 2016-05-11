@@ -18,6 +18,7 @@ package daemon
 import (
 	"fmt"
 	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/misc"
 	x "github.com/tgres/tgres/transceiver"
 	"log"
 	"math"
@@ -144,7 +145,7 @@ func parseTime(s string) (*time.Time, error) {
 	}
 
 	if s[0] == '-' { // relative
-		if dur, err := dsl.BetterParseDuration(s[1:len(s)]); err == nil {
+		if dur, err := misc.BetterParseDuration(s[1:len(s)]); err == nil {
 			t := time.Now().Add(-dur)
 			return &t, nil
 		} else {
