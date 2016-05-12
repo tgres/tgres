@@ -18,7 +18,7 @@ package daemon
 import (
 	"flag"
 	"fmt"
-	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 	x "github.com/tgres/tgres/transceiver"
 	"log"
 	"os"
@@ -87,58 +87,63 @@ func Init() { // not to be confused with init()
 
 	savePid(Cfg.PidPath)
 
-	rrd.InitDb() // Initialize Database
+	// Initialize Database
+	if db, err := serde.InitDb(Cfg.DbConnectString); err != nil {
+		log.Fatalf("Error connecting to the DB: %v", err)
+	} else {
+		log.Printf("Initialized DB connection.")
 
-	// Create the transceiver
-	t := x.NewTransceiver(Cfg.Workers, Cfg.MaxCache.Duration, Cfg.MinCache.Duration,
-		Cfg.MaxCachedPoints, Cfg.StatFlush.Duration, Cfg.StatsNamePrefix,
-		x.MatchingDsSpecFinder(Cfg))
+		// Create the transceiver
+		t := x.NewTransceiver(db, Cfg.Workers, Cfg.MaxCache.Duration, Cfg.MinCache.Duration,
+			Cfg.MaxCachedPoints, Cfg.StatFlush.Duration, Cfg.StatsNamePrefix,
+			x.MatchingDsSpecFinder(Cfg))
 
-	// Start the transceiver,
-	if err := t.Start(); err != nil {
-		log.Printf("Could not start the transceiver: %v", err)
-		return
-	}
+		// Start the transceiver,
+		if err := t.Start(); err != nil {
+			log.Printf("Could not start the transceiver: %v", err)
+			return
+		}
 
-	serviceMgr = newServiceManager(t)
-	if err := serviceMgr.run(gracefulProtos); err != nil {
-		log.Printf("Could not run the service manager: %v", err)
-		return
-	}
+		serviceMgr = newServiceManager(t)
+		if err := serviceMgr.run(gracefulProtos); err != nil {
+			log.Printf("Could not run the service manager: %v", err)
+			return
+		}
 
-	if gracefulProtos != "" {
-		parent := syscall.Getppid()
-		log.Printf("start(): Killing parent pid: %v", parent)
-		syscall.Kill(parent, syscall.SIGTERM)
-		log.Printf("start(): Waiting for the parent to signal that flush is complete...")
-		ch := make(chan os.Signal)
-		signal.Notify(ch, syscall.SIGUSR1)
-		s := <-ch
-		log.Printf("start(): Received %v, proceeding to load the data", s)
-	}
+		if gracefulProtos != "" {
+			parent := syscall.Getppid()
+			log.Printf("start(): Killing parent pid: %v", parent)
+			syscall.Kill(parent, syscall.SIGTERM)
+			log.Printf("start(): Waiting for the parent to signal that flush is complete...")
+			ch := make(chan os.Signal)
+			signal.Notify(ch, syscall.SIGUSR1)
+			s := <-ch
+			log.Printf("start(): Received %v, proceeding to load the data", s)
+		}
 
-	t.ReloadDss()     // *finally* load the data (because graceful restart)
-	go t.Dispatcher() // now start dispatcher
+		t.ReloadDss()     // *finally* load the data (because graceful restart)
+		go t.Dispatcher() // now start dispatcher
 
-	// TODO - there should be a -f(oreground) flag?
-	// Also see not below about saving the starting working directory
-	//std2DevNull()
-	//os.Chdir("/")
+		// TODO - there should be a -f(oreground) flag?
+		// Also see not below about saving the starting working directory
+		//std2DevNull()
+		//os.Chdir("/")
 
-	// TODOthis too could be in the transceiver for consistency?
-	for {
-		// Wait for a SIGINT or SIGTERM.
-		ch := make(chan os.Signal)
-		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		s := <-ch
-		log.Printf("Got signal: %v", s)
-		if s == syscall.SIGHUP {
-			if gracefulChildPid == 0 {
-				gracefulRestart(t, cfgPath)
+		// TODOthis too could be in the transceiver for consistency?
+		for {
+			// Wait for a SIGINT or SIGTERM.
+			ch := make(chan os.Signal)
+			signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+			s := <-ch
+			log.Printf("Got signal: %v", s)
+			if s == syscall.SIGHUP {
+				if gracefulChildPid == 0 {
+					gracefulRestart(t, cfgPath)
+				}
+			} else {
+				gracefulExit(t)
+				break
 			}
-		} else {
-			gracefulExit(t)
-			break
 		}
 	}
 }

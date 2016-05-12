@@ -2302,7 +2302,7 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 			Series:    s,
 			seasonLen: slen}
 
-		// NB: This causes GroupByMs be calculated by trDbSeries
+		// NB: This causes GroupByMs be calculated by dbSeries
 		var nanlessBegin time.Time
 		if shw.data, nanlessBegin, err = shw.nanlessData(); err != nil {
 			return nil, err

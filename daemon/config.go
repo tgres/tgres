@@ -173,12 +173,6 @@ func (c *Config) processDbConnectString() error {
 	if c.DbConnectString == "" {
 		return fmt.Errorf("db-connect-string empty")
 	}
-	if err := rrd.InitDbConnection(c.DbConnectString); err == nil {
-		log.Printf("Initialized DB connection.")
-	} else {
-		log.Printf("Error connecting to the DB: %v", err)
-		return err
-	}
 	return nil
 }
 

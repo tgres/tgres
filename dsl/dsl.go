@@ -29,6 +29,7 @@ import (
 type DSGetter interface {
 	GetDSById(ds_id int64) *rrd.DataSource
 	DsIdsFromIdent(ident string) map[string]int64
+	SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error)
 }
 
 type DslCtx struct {
@@ -80,7 +81,7 @@ func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]
 	result := make(map[string]rrd.Series)
 	for name, id := range ids {
 		ds := dc.dsGetter.GetDSById(id)
-		dps, err := rrd.SeriesQuery(ds, from, to, dc.maxPoints)
+		dps, err := dc.dsGetter.SeriesQuery(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}

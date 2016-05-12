@@ -30,6 +30,7 @@ type MatchingDsSpecFinder interface {
 }
 
 type Transceiver struct {
+	serde                              rrd.SerDe
 	nWorkers                           int
 	maxCacheDuration, minCacheDuration time.Duration
 	maxCachedPoints                    int
@@ -54,12 +55,13 @@ type dsCopyRequest struct {
 	resp chan *rrd.DataSource
 }
 
-func NewTransceiver(nWorkers int, maxCacheDuration, minCacheDuration time.Duration,
+func NewTransceiver(serde rrd.SerDe, nWorkers int, maxCacheDuration, minCacheDuration time.Duration,
 	maxCachedPoints int, statFlushDuration time.Duration, statsNamePrefix string,
 	dsSpecs MatchingDsSpecFinder) *Transceiver {
 
 	dss := &rrd.DataSources{}
 	return &Transceiver{
+		serde:             serde,
 		nWorkers:          nWorkers,
 		maxCacheDuration:  maxCacheDuration,
 		minCacheDuration:  minCacheDuration,
@@ -142,7 +144,7 @@ func (t *Transceiver) stopStatWorker() {
 }
 
 func (t *Transceiver) ReloadDss() {
-	t.dss.Reload()
+	t.dss.Reload(t.serde)
 }
 
 func (t *Transceiver) Dispatcher() {
@@ -163,7 +165,7 @@ func (t *Transceiver) Dispatcher() {
 		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
 			// DS does not exist, can we create it?
 			if dsSpec := t.dsSpecs.FindMatchingDsSpec(dp.Name); dsSpec != nil {
-				if ds, err := rrd.CreateDataSource(dp.Name, dsSpec); err == nil {
+				if ds, err := t.serde.CreateDataSource(dp.Name, dsSpec); err == nil {
 					t.dss.Insert(ds)
 					dp.DS = ds
 				} else {
@@ -201,6 +203,9 @@ func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
 }
 func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
 	return t.dss.DsIdsFromIdent(ident)
+}
+func (t *Transceiver) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
+	return t.serde.SeriesQuery(ds, from, to, maxPoints)
 }
 
 // End DSGetter interface
@@ -314,7 +319,7 @@ func (t *Transceiver) flusher(id int64) {
 	for {
 		ds, ok := <-t.flusherChs[id]
 		if ok {
-			if err := rrd.FlushDataSource(ds); err != nil {
+			if err := t.serde.FlushDataSource(ds); err != nil {
 				log.Printf("flusher(%d): error flushing data source %v: %v", id, ds, err)
 			}
 		} else {

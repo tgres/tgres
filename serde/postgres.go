@@ -13,13 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rrd
+package serde
 
 import (
 	"bytes"
 	"database/sql"
 	"fmt"
 	"github.com/lib/pq"
+	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
 	"path/filepath"
@@ -28,69 +29,65 @@ import (
 	"time"
 )
 
-var (
-	dbConn                             *sql.DB
-	sql1, sql2, sql3, sql4, sql5, sql6 *sql.Stmt
-)
+type pgSerDe struct {
+	dbConn                                   *sql.DB
+	sql1, sql2, sql3, sql4, sql5, sql6, sql7 *sql.Stmt
+}
 
-var sqlOpen = func(a, b string) (*sql.DB, error) {
+func sqlOpen(a, b string) (*sql.DB, error) {
 	return sql.Open(a, b)
 }
 
-var dbPing = func() error {
-	return dbConn.Ping()
+func InitDb(connect_string string) (rrd.SerDe, error) {
+	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
+		return nil, err
+	} else {
+		p := &pgSerDe{dbConn: dbConn}
+		if err := p.dbConn.Ping(); err != nil {
+			return nil, err
+		}
+		if err := p.createTablesIfNotExist(); err != nil {
+			return nil, err
+		}
+		if err := p.prepareSqlStatements(); err != nil {
+			return nil, err
+		}
+		return rrd.SerDe(p), nil
+	}
 }
 
-var InitDbConnection = func(connect_string string) error {
+func (p *pgSerDe) prepareSqlStatements() error {
 	var err error
-	if dbConn, err = sqlOpen("postgres", connect_string); err != nil {
+	if p.sql1, err = p.dbConn.Prepare("UPDATE ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5"); err != nil {
 		return err
 	}
-	if err = dbPing(); err != nil {
+	if p.sql2, err = p.dbConn.Prepare("UPDATE rra SET value = $1, unknown_ms = $2, latest = $3 WHERE id = $4"); err != nil {
 		return err
 	}
-	return nil
-}
-
-func InitDb() error {
-	if err := createTablesIfNotExist(); err != nil {
-		return err
-	}
-	if err := prepareSqlStatements(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func prepareSqlStatements() error {
-	var err error
-	if sql1, err = dbConn.Prepare("UPDATE ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5"); err != nil {
-		return err
-	}
-	if sql2, err = dbConn.Prepare("UPDATE rra SET value = $1, unknown_ms = $2, latest = $3 WHERE id = $4"); err != nil {
-		return err
-	}
-	if sql3, err = dbConn.Prepare("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg " +
+	if p.sql3, err = p.dbConn.Prepare("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg " +
 		"LEFT OUTER JOIN (SELECT t, r FROM tv WHERE ds_id = $4 AND rra_id = $5 " +
 		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt"); err != nil {
 		return err
 	}
-	if sql4, err = dbConn.Prepare("INSERT INTO ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) " +
+	if p.sql4, err = p.dbConn.Prepare("INSERT INTO ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) " +
 		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms"); err != nil {
 		return err
 	}
-	if sql5, err = dbConn.Prepare("INSERT INTO rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) " +
+	if p.sql5, err = p.dbConn.Prepare("INSERT INTO rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) " +
 		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest"); err != nil {
 		return err
 	}
-	if sql6, err = dbConn.Prepare("INSERT INTO ts (rra_id, n) VALUES ($1, $2)"); err != nil {
+	if p.sql6, err = p.dbConn.Prepare("INSERT INTO ts (rra_id, n) VALUES ($1, $2)"); err != nil {
+		return err
+	}
+	if p.sql7, err = p.dbConn.Prepare("UPDATE ds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5"); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-var createTablesIfNotExist = func() error {
+func (p *pgSerDe) createTablesIfNotExist() error {
 	create_sql := `
        CREATE TABLE IF NOT EXISTS ds (
        id SERIAL NOT NULL PRIMARY KEY,
@@ -119,7 +116,7 @@ var createTablesIfNotExist = func() error {
        n INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
     `
-	if rows, err := dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(create_sql); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
 		return err
 	} else {
@@ -157,7 +154,7 @@ var createTablesIfNotExist = func() error {
        INNER JOIN ts ON ts.rra_id = rra.id) foo;
     `
 
-	if rows, err := dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(create_sql); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE VIEW failed: %v", err)
 			return err
@@ -170,7 +167,7 @@ var createTablesIfNotExist = func() error {
        CREATE UNIQUE INDEX idx_ds_name ON ds (name);
     `
 	// There is no IF NOT EXISTS for CREATE INDEX until 9.5
-	if rows, err := dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(create_sql); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
 			return err
@@ -182,7 +179,7 @@ var createTablesIfNotExist = func() error {
 	create_sql = `
        CREATE UNIQUE INDEX idx_rra_rra_id_n ON ts (rra_id, n);
     `
-	if rows, err := dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(create_sql); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
 			return err
@@ -195,9 +192,9 @@ var createTablesIfNotExist = func() error {
 
 // This implements the Series interface
 
-type trDbSeries struct {
-	ds  *DataSource
-	rra *trRoundRobinArchive
+type dbSeries struct {
+	ds  *rrd.DataSource
+	rra *rrd.RoundRobinArchive
 
 	// Current Value
 	value    float64
@@ -209,6 +206,7 @@ type trDbSeries struct {
 	to   time.Time
 
 	// Db stuff
+	db   *pgSerDe
 	rows *sql.Rows
 
 	// These are not the same:
@@ -221,11 +219,11 @@ type trDbSeries struct {
 	alias string
 }
 
-func (dps *trDbSeries) StepMs() int64 {
+func (dps *dbSeries) StepMs() int64 {
 	return dps.ds.StepMs * int64(dps.rra.StepsPerRow)
 }
 
-func (dps *trDbSeries) GroupByMs(ms ...int64) int64 {
+func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
 	if len(ms) > 0 {
 		defer func() { dps.groupByMs = ms[0] }()
 	}
@@ -235,7 +233,7 @@ func (dps *trDbSeries) GroupByMs(ms ...int64) int64 {
 	return dps.groupByMs
 }
 
-func (dps *trDbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
+func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	if len(t) == 1 {
 		defer func() { dps.from = t[0] }()
 	} else if len(t) == 2 {
@@ -244,27 +242,27 @@ func (dps *trDbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return dps.from, dps.to
 }
 
-func (dps *trDbSeries) LastUpdate() time.Time {
+func (dps *dbSeries) LastUpdate() time.Time {
 	return dps.ds.LastUpdate
 }
 
-func (dps *trDbSeries) MaxPoints(n ...int64) int64 {
+func (dps *dbSeries) MaxPoints(n ...int64) int64 {
 	if len(n) > 0 { // setter
 		defer func() { dps.maxPoints = n[0] }()
 	}
 	return dps.maxPoints // getter
 }
 
-func (dps *trDbSeries) Align() {}
+func (dps *dbSeries) Align() {}
 
-func (dps *trDbSeries) Alias(s ...string) string {
+func (dps *dbSeries) Alias(s ...string) string {
 	if len(s) > 0 {
 		dps.alias = s[0]
 	}
 	return dps.alias
 }
 
-func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
+func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		rows *sql.Rows
@@ -301,7 +299,7 @@ func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 
 	//log.Printf("sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
-	rows, err = sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
+	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
 		log.Printf("seriesQuery(): error %v", err)
@@ -311,21 +309,21 @@ func (dps *trDbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	return rows, nil
 }
 
-func (dps *trDbSeries) Next() bool {
+func (dps *dbSeries) Next() bool {
 
 	if dps.rows == nil { // First Next()
 		rows, err := dps.seriesQuerySqlUsingViewAndSeries()
 		if err == nil {
 			dps.rows = rows
 		} else {
-			log.Printf("trDbSeries.Next(): database error: %v", err)
+			log.Printf("dbSeries.Next(): database error: %v", err)
 			return false
 		}
 	}
 
 	if dps.rows.Next() {
 		if ts, value, err := timeValueFromRow(dps.rows); err != nil {
-			log.Printf("trDbSeries.Next(): database error: %v", err)
+			log.Printf("dbSeries.Next(): database error: %v", err)
 			return false
 		} else {
 			dps.posBegin = dps.latest
@@ -353,7 +351,7 @@ func (dps *trDbSeries) Next() bool {
 				earliest := dps.rra.Latest.Add(time.Millisecond)
 				earliestSlotN := int64(-1)
 				for n, _ := range dps.rra.DPs {
-					ts := dps.rra.slotTimeStamp(dps.ds, n)
+					ts := dps.rra.SlotTimeStamp(dps.ds, n)
 					if ts.Before(earliest) && ts.After(dps.latest) {
 						earliest, earliestSlotN = ts, n
 					}
@@ -391,19 +389,19 @@ func (dps *trDbSeries) Next() bool {
 	return false
 }
 
-func (dps *trDbSeries) CurrentValue() float64 {
+func (dps *dbSeries) CurrentValue() float64 {
 	return dps.value
 }
 
-func (dps *trDbSeries) CurrentPosBeginsAfter() time.Time {
+func (dps *dbSeries) CurrentPosBeginsAfter() time.Time {
 	return dps.posBegin
 }
 
-func (dps *trDbSeries) CurrentPosEndsOn() time.Time {
+func (dps *dbSeries) CurrentPosEndsOn() time.Time {
 	return dps.posEnd
 }
 
-func (dps *trDbSeries) Close() error {
+func (dps *dbSeries) Close() error {
 	result := dps.rows.Close()
 	dps.rows = nil // next Next() will re-open
 	return result
@@ -425,9 +423,9 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 	}
 }
 
-func dataSourceFromRow(rows *sql.Rows) (*DataSource, error) {
+func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		ds         DataSource
+		ds         rrd.DataSource
 		last_ds    sql.NullFloat64
 		lastupdate pq.NullTime
 	)
@@ -449,10 +447,10 @@ func dataSourceFromRow(rows *sql.Rows) (*DataSource, error) {
 	return &ds, err
 }
 
-func roundRobinArchiveFromRow(rows *sql.Rows) (*trRoundRobinArchive, error) {
+func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	var (
 		latest pq.NullTime
-		rra    trRoundRobinArchive
+		rra    rrd.RoundRobinArchive
 	)
 	err := rows.Scan(&rra.Id, &rra.DsId, &rra.Cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &rra.UnknownMs, &latest)
 	if err != nil {
@@ -468,23 +466,23 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*trRoundRobinArchive, error) {
 	return &rra, err
 }
 
-func fetchDataSources() (map[string]*DataSource, map[int64]*DataSource, map[string]bool, error) {
+func (p *pgSerDe) FetchDataSources() (map[string]*rrd.DataSource, map[int64]*rrd.DataSource, map[string]bool, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM ds`
 
-	rows, err := dbConn.Query(sql)
+	rows, err := p.dbConn.Query(sql)
 	if err != nil {
 		log.Printf("fetchDataSources(): error querying database: %v", err)
 		return nil, nil, nil, err
 	}
 	defer rows.Close()
 
-	byName := make(map[string]*DataSource)
-	byId := make(map[int64]*DataSource)
+	byName := make(map[string]*rrd.DataSource)
+	byId := make(map[int64]*rrd.DataSource)
 	prefixes := make(map[string]bool)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := fetchRoundRobinArchives(ds.Id)
+		rras, err := p.fetchRoundRobinArchives(ds.Id)
 		if err != nil {
 			log.Printf("fetchDataSources(): error fetching RRAs: %v", err)
 			return nil, nil, nil, err
@@ -508,18 +506,18 @@ func fetchDataSources() (map[string]*DataSource, map[int64]*DataSource, map[stri
 	return byName, byId, prefixes, nil
 }
 
-func fetchRoundRobinArchives(ds_id int64) ([]*trRoundRobinArchive, error) {
+func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive, error) {
 
 	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest FROM rra WHERE ds_id = $1`
 
-	rows, err := dbConn.Query(sql, ds_id)
+	rows, err := p.dbConn.Query(sql, ds_id)
 	if err != nil {
 		log.Printf("fetchRoundRobinArchives(): error querying database: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
 
-	var rras []*trRoundRobinArchive
+	var rras []*rrd.RoundRobinArchive
 	for rows.Next() {
 		if rra, err := roundRobinArchiveFromRow(rows); err == nil {
 			rras = append(rras, rra)
@@ -545,34 +543,34 @@ func dpsAsString(dps map[int64]float64, start, end int64) string {
 	return b.String()
 }
 
-func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
+func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 
 	var n int64
 	rraSize := int64(rra.Size)
 	if int32(len(rra.DPs)) == rra.Size { // The whole thing
-		for n = 0; n < rra.slotRow(rraSize); n++ {
+		for n = 0; n < rra.SlotRow(rraSize); n++ {
 			end := rra.Width - 1
 			if n == rraSize/int64(rra.Width) {
 				end = (rraSize - 1) % rra.Width
 			}
 			dps := dpsAsString(rra.DPs, n*int64(rra.Width), n*int64(rra.Width)+rra.Width-1)
-			if rows, err := sql1.Query(1, end+1, dps, rra.Id, n); err == nil {
+			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id, n); err == nil {
 				rows.Close()
 			} else {
 				return err
 			}
 		}
-	} else if rra.start <= rra.end { // Single range
-		for n = rra.start / int64(rra.Width); n < rra.slotRow(rra.end); n++ {
+	} else if rra.Start <= rra.End { // Single range
+		for n = rra.Start / int64(rra.Width); n < rra.SlotRow(rra.End); n++ {
 			start, end := int64(0), rra.Width-1
-			if n == rra.start/rra.Width {
-				start = rra.start % rra.Width
+			if n == rra.Start/rra.Width {
+				start = rra.Start % rra.Width
 			}
-			if n == rra.end/rra.Width {
-				end = rra.end % rra.Width
+			if n == rra.End/rra.Width {
+				end = rra.End % rra.Width
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
 				rows.Close()
 			} else {
 				return err
@@ -580,13 +578,13 @@ func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
 		}
 	} else { // Double range (wrap-around, end < start)
 		// range 1: 0 -> end
-		for n = 0; n < rra.slotRow(rra.end); n++ {
+		for n = 0; n < rra.SlotRow(rra.End); n++ {
 			start, end := int64(0), rra.Width-1
-			if n == rra.end/rra.Width {
-				end = rra.end % rra.Width
+			if n == rra.End/rra.Width {
+				end = rra.End % rra.Width
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
 				rows.Close()
 			} else {
 				return err
@@ -594,16 +592,16 @@ func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
 		}
 
 		// range 2: start -> Size
-		for n = rra.start / rra.Width; n < rra.slotRow(rraSize); n++ {
+		for n = rra.Start / rra.Width; n < rra.SlotRow(rraSize); n++ {
 			start, end := int64(0), rra.Width-1
-			if n == rra.start/rra.Width {
-				start = rra.start % rra.Width
+			if n == rra.Start/rra.Width {
+				start = rra.Start % rra.Width
 			}
 			if n == rraSize/rra.Width {
 				end = (rraSize - 1) % rra.Width
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
 				rows.Close()
 			} else {
 				return err
@@ -611,7 +609,7 @@ func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := sql2.Query(rra.Value, rra.UnknownMs, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value, rra.UnknownMs, rra.Latest, rra.Id); err == nil {
 		rows.Close()
 	} else {
 		return err
@@ -620,19 +618,18 @@ func flushRoundRobinArchive(rra *trRoundRobinArchive) error {
 	return nil
 }
 
-func FlushDataSource(ds *DataSource) error {
+func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 
 	for _, rra := range ds.RRAs {
 		if len(rra.DPs) > 0 {
-			if err := flushRoundRobinArchive(rra); err != nil {
+			if err := p.FlushRoundRobinArchive(rra); err != nil {
 				log.Printf("flushDataSource(): error flushing RRA, probable data loss: %v", err)
 				return err
 			}
 		}
 	}
 
-	const sql = "UPDATE ds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5"
-	if rows, err := dbConn.Query(sql, ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
 		log.Printf("flushDataSource(): database error: %v", err)
 	} else {
 		rows.Close()
@@ -641,8 +638,8 @@ func FlushDataSource(ds *DataSource) error {
 	return nil
 }
 
-func CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error) {
-	rows, err := sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
+func (p *pgSerDe) CreateDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error) {
+	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("createDataSources(): error querying database: %v", err)
 		return nil, err
@@ -660,7 +657,7 @@ func CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error) {
 		steps := rraSpec.Step.Nanoseconds() / (ds.StepMs * 1000000)
 		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
 
-		rraRows, err := sql5.Query(ds.Id, rraSpec.Function, steps, size, rraSpec.Xff)
+		rraRows, err := p.sql5.Query(ds.Id, rraSpec.Function, steps, size, rraSpec.Xff)
 		if err != nil {
 			log.Printf("createDataSources(): error creating RRAs: %v", err)
 			return nil, err
@@ -674,7 +671,7 @@ func CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error) {
 		ds.RRAs = append(ds.RRAs, rra)
 
 		for n := int64(0); n <= (int64(rra.Size)/rra.Width + int64(rra.Size)%rra.Width/rra.Width); n++ {
-			r, err := sql6.Query(rra.Id, n)
+			r, err := p.sql6.Query(rra.Id, n)
 			if err != nil {
 				log.Printf("createDataSources(): error creating TSs: %v", err)
 				return nil, err
@@ -715,53 +712,12 @@ func CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error) {
 // (100 + 50 - 45) % 100 => 5
 //
 
-func seriesQuerySql(dsId, rraId int64, from, to *time.Time, interval int64) (*sql.Rows, error) {
+func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
 
-	// TODO Document this, then delete this method.
-
-	var (
-		// Hopefully this will make it a little more decipherable
-		lastSlotUnixTime       = "extract(epoch from rra.latest)::bigint*1000"
-		slotDurationMs         = "(ds.step_ms * rra.steps_per_row)"
-		lastSlotInSlots        = lastSlotUnixTime + "/" + slotDurationMs
-		currentSlotN           = "(generate_subscripts(dp,1) + n * width)"
-		lastSlotN              = "mod(" + lastSlotInSlots + ", size) + 1"
-		distanceInSlots        = "mod(rra.size + " + lastSlotN + " - " + currentSlotN + ", rra.size)"
-		slotDurationAsInterval = "interval '1 millisecond' * ds.step_ms * rra.steps_per_row"
-		selectSql              = "SELECT latest - " + slotDurationAsInterval + " * " + distanceInSlots + " AS t, " +
-			"UNNEST(dp) AS v " +
-			"FROM ds, rra, ts WHERE rra.ds_id = ds.id AND ts.rra_id = rra.id AND ds.id = $1 AND rra.id = $2 "
-		filterAndGroupSql = "SELECT MAX(t) mt, AVG(v) av FROM (" + selectSql + ") tv"
-	)
-
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if from == nil && to == nil {
-		rows, err = dbConn.Query(filterAndGroupSql, dsId, rraId)
-	} else if from != nil && to == nil {
-		rows, err = dbConn.Query(filterAndGroupSql+" WHERE t >= $3 GROUP BY trunc((extract(epoch from t)-1)::bigint/$4) ORDER BY mt", dsId, rraId, *from, interval)
-	} else if to != nil && from == nil {
-		rows, err = dbConn.Query(filterAndGroupSql+" WHERE t <= $3 GROUP BY trunc((extract(epoch from t)-1)::bigint/$4) ORDER BY mt", dsId, rraId, *to, interval)
-	} else {
-		rows, err = dbConn.Query(filterAndGroupSql+" WHERE t >= $3 AND t <= $4 GROUP BY trunc((extract(epoch from t)-1)::bigint/$5) ORDER BY mt", dsId, rraId, *from, *to, interval)
-	}
-
-	if err != nil {
-		log.Printf("seriesQuery(): error %v, sql: %v", err, filterAndGroupSql)
-		return nil, err
-	}
-
-	return rows, nil
-}
-
-func SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, error) {
-
-	rra := ds.bestRRA(from, to, maxPoints)
+	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := time.Unix(rra.getStartGivenEndMs(ds, rra.Latest.Unix()*1000)/1000, 0)
+	rraEarliest := time.Unix(rra.GetStartGivenEndMs(ds, rra.Latest.Unix()*1000)/1000, 0)
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
@@ -770,6 +726,6 @@ func SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, e
 		to = rra.Latest
 	}
 
-	dps := &trDbSeries{ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
-	return Series(dps), nil
+	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
+	return rrd.Series(dps), nil
 }

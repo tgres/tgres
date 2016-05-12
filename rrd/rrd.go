@@ -65,7 +65,7 @@ type DataSource struct {
 	LastDs      float64
 	Value       float64
 	UnknownMs   int64
-	RRAs        []*trRoundRobinArchive
+	RRAs        []*RoundRobinArchive
 	LastFlushRT time.Time
 }
 
@@ -76,7 +76,7 @@ type DataSources struct {
 	prefixes map[string]bool // for Graphite-like listings
 }
 
-type trRoundRobinArchive struct {
+type RoundRobinArchive struct {
 	Id          int64
 	DsId        int64
 	Cf          string
@@ -88,9 +88,24 @@ type trRoundRobinArchive struct {
 	Latest      time.Time
 	DPs         map[int64]float64
 	Width       int64
-	start       int64
-	end         int64
+	Start       int64
+	End         int64
 }
+
+// This thing knows how to load/save series in some storage
+
+type SerDe interface {
+	// Create a DS, and return it
+	CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error)
+	// Fetch a list of data sources from the storage
+	FetchDataSources() (map[string]*DataSource, map[int64]*DataSource, map[string]bool, error)
+	// Flush a DS
+	FlushDataSource(ds *DataSource) error
+	// Query
+	SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, error)
+}
+
+// This is a Series
 
 type Series interface {
 	Next() bool
@@ -206,9 +221,9 @@ func (dss *DataSources) DsIdsFromIdent(ident string) map[string]int64 {
 	return result
 }
 
-func (dss *DataSources) Reload() error {
+func (dss *DataSources) Reload(serde SerDe) error {
 
-	by_name, by_id, prefixes, err := fetchDataSources()
+	by_name, by_id, prefixes, err := serde.FetchDataSources()
 	if err != nil {
 		return err
 	}
@@ -222,9 +237,9 @@ func (dss *DataSources) Reload() error {
 	return nil
 }
 
-func (ds *DataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinArchive {
+func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
 
-	var result []*trRoundRobinArchive
+	var result []*RoundRobinArchive
 
 	for _, rra := range ds.RRAs {
 		// is start within this RRA's range?
@@ -236,7 +251,7 @@ func (ds *DataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinA
 
 	if len(result) == 0 {
 		// if we found nothing above, simply select the longest RRA
-		var longest *trRoundRobinArchive
+		var longest *RoundRobinArchive
 		for _, rra := range ds.RRAs {
 			if longest == nil || longest.Size*longest.StepsPerRow < rra.Size*rra.StepsPerRow {
 				longest = rra
@@ -248,7 +263,7 @@ func (ds *DataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinA
 	if len(result) > 1 && points > 0 {
 		// select the one with the closest matching resolution
 		expectedStepMs := (end.UnixNano()/1000000 - start.UnixNano()/1000000) / points
-		var best *trRoundRobinArchive
+		var best *RoundRobinArchive
 		for _, rra := range result {
 			if best == nil {
 				best = rra
@@ -267,7 +282,7 @@ func (ds *DataSource) bestRRA(start, end time.Time, points int64) *trRoundRobinA
 		return result[0]
 	} else {
 		// select maximum resolution (i.e. smallest step)?
-		var best *trRoundRobinArchive
+		var best *RoundRobinArchive
 		for _, rra := range result {
 			if best == nil {
 				best = rra
@@ -413,7 +428,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 
 		rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
 
-		currentBegin := rra.getStartGivenEndMs(ds, periodBegin)
+		currentBegin := rra.GetStartGivenEndMs(ds, periodBegin)
 		if periodBegin > currentBegin {
 			currentBegin = periodBegin
 		}
@@ -478,9 +493,9 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 				rra.DPs[slotN] = rra.Value
 
 				if len(rra.DPs) == 1 {
-					rra.start = slotN
+					rra.Start = slotN
 				}
-				rra.end = slotN
+				rra.End = slotN
 
 				// reset
 				rra.Value = 0
@@ -498,7 +513,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.RRAs {
 		rra.DPs = make(map[int64]float64)
-		rra.start, rra.end = 0, 0
+		rra.Start, rra.End = 0, 0
 	}
 }
 
@@ -523,7 +538,7 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	new_ds.LastDs = ds.LastDs
 	new_ds.Value = ds.Value
 	new_ds.UnknownMs = ds.UnknownMs
-	new_ds.RRAs = make([]*trRoundRobinArchive, len(ds.RRAs))
+	new_ds.RRAs = make([]*RoundRobinArchive, len(ds.RRAs))
 
 	for n, rra := range ds.RRAs {
 		new_ds.RRAs[n] = rra.mostlyCopy()
@@ -532,10 +547,10 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	return new_ds
 }
 
-func (rra *trRoundRobinArchive) mostlyCopy() *trRoundRobinArchive {
+func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 
 	// Only copy elements that change or needed for saving/rendering
-	new_rra := new(trRoundRobinArchive)
+	new_rra := new(RoundRobinArchive)
 	new_rra.Id = rra.Id
 	new_rra.DsId = rra.DsId
 	new_rra.StepsPerRow = rra.StepsPerRow
@@ -543,8 +558,8 @@ func (rra *trRoundRobinArchive) mostlyCopy() *trRoundRobinArchive {
 	new_rra.Value = rra.Value
 	new_rra.UnknownMs = rra.UnknownMs
 	new_rra.Latest = rra.Latest
-	new_rra.start = rra.start
-	new_rra.end = rra.end
+	new_rra.Start = rra.Start
+	new_rra.End = rra.End
 	new_rra.Size = rra.Size
 	new_rra.Width = rra.Width
 	new_rra.DPs = make(map[int64]float64)
@@ -556,7 +571,7 @@ func (rra *trRoundRobinArchive) mostlyCopy() *trRoundRobinArchive {
 	return new_rra
 }
 
-func (rra *trRoundRobinArchive) slotRow(slot int64) int64 {
+func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 	if slot%rra.Width == 0 {
 		return slot / rra.Width
 	} else {
@@ -564,7 +579,7 @@ func (rra *trRoundRobinArchive) slotRow(slot int64) int64 {
 	}
 }
 
-func (rra *trRoundRobinArchive) getStartGivenEndMs(ds *DataSource, timeMs int64) int64 {
+func (rra *RoundRobinArchive) GetStartGivenEndMs(ds *DataSource, timeMs int64) int64 {
 	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
 	rraStart := (timeMs - rraStepMs*int64(rra.Size)) / rraStepMs * rraStepMs
 	if timeMs%rraStepMs != 0 {
@@ -573,7 +588,7 @@ func (rra *trRoundRobinArchive) getStartGivenEndMs(ds *DataSource, timeMs int64)
 	return rraStart
 }
 
-func (rra *trRoundRobinArchive) slotTimeStamp(ds *DataSource, slot int64) time.Time {
+func (rra *RoundRobinArchive) SlotTimeStamp(ds *DataSource, slot int64) time.Time {
 	// TODO this is kind of ugly too...
 	slot = slot % int64(rra.Size) // just in case
 	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
