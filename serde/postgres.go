@@ -32,17 +32,18 @@ import (
 type pgSerDe struct {
 	dbConn                                   *sql.DB
 	sql1, sql2, sql3, sql4, sql5, sql6, sql7 *sql.Stmt
+	prefix                                   string
 }
 
 func sqlOpen(a, b string) (*sql.DB, error) {
 	return sql.Open(a, b)
 }
 
-func InitDb(connect_string string) (rrd.SerDe, error) {
+func InitDb(connect_string, prefix string) (rrd.SerDe, error) {
 	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
 		return nil, err
 	} else {
-		p := &pgSerDe{dbConn: dbConn}
+		p := &pgSerDe{dbConn: dbConn, prefix: prefix}
 		if err := p.dbConn.Ping(); err != nil {
 			return nil, err
 		}
@@ -58,29 +59,30 @@ func InitDb(connect_string string) (rrd.SerDe, error) {
 
 func (p *pgSerDe) prepareSqlStatements() error {
 	var err error
-	if p.sql1, err = p.dbConn.Prepare("UPDATE ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5"); err != nil {
+	if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sts ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql2, err = p.dbConn.Prepare("UPDATE rra SET value = $1, unknown_ms = $2, latest = $3 WHERE id = $4"); err != nil {
+	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, unknown_ms = $2, latest = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql3, err = p.dbConn.Prepare("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg " +
-		"LEFT OUTER JOIN (SELECT t, r FROM tv WHERE ds_id = $4 AND rra_id = $5 " +
-		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt"); err != nil {
+	if p.sql3, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
+		"LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = $4 AND rra_id = $5 "+
+		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt",
+		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql4, err = p.dbConn.Prepare("INSERT INTO ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) " +
-		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms"); err != nil {
+	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
+		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql5, err = p.dbConn.Prepare("INSERT INTO rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) " +
-		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest"); err != nil {
+	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
+		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql6, err = p.dbConn.Prepare("INSERT INTO ts (rra_id, n) VALUES ($1, $2)"); err != nil {
+	if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2)", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql7, err = p.dbConn.Prepare("UPDATE ds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5"); err != nil {
+	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5", p.prefix)); err != nil {
 		return err
 	}
 
@@ -89,7 +91,7 @@ func (p *pgSerDe) prepareSqlStatements() error {
 
 func (p *pgSerDe) createTablesIfNotExist() error {
 	create_sql := `
-       CREATE TABLE IF NOT EXISTS ds (
+       CREATE TABLE IF NOT EXISTS %[1]sds (
        id SERIAL NOT NULL PRIMARY KEY,
        name TEXT NOT NULL,
        step_ms BIGINT NOT NULL,
@@ -99,7 +101,7 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        unknown_ms BIGINT NOT NULL DEFAULT 0);
 
-       CREATE TABLE IF NOT EXISTS rra (
+       CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
        ds_id INT NOT NULL,
        cf TEXT NOT NULL,
@@ -111,28 +113,28 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        unknown_ms BIGINT NOT NULL DEFAULT 0,
        latest TIMESTAMPTZ DEFAULT NULL);
 
-       CREATE TABLE IF NOT EXISTS ts (
+       CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_id INT NOT NULL,
        n INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
     `
-	if rows, err := p.dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
 		return err
 	} else {
 		rows.Close()
 	}
 	create_sql = `
-       CREATE VIEW tv AS
+       CREATE VIEW %[1]stv AS
        SELECT ds.id ds_id, rra.id rra_id, latest - interval '1 millisecond' * ds.step_ms * rra.steps_per_row *
             mod(rra.size + mod(extract(epoch from rra.latest)::bigint*1000/(ds.step_ms * rra.steps_per_row), size) + 1
            - (generate_subscripts(dp,1) + n * width), rra.size) AS t,
           UNNEST(dp) AS r
-       FROM ds
-       INNER JOIN rra ON rra.ds_id = ds.id
-       INNER JOIN ts ON ts.rra_id = rra.id;
+       FROM %[1]sds ds
+       INNER JOIN %[1]srra rra ON rra.ds_id = ds.id
+       INNER JOIN %[1]sts ts ON ts.rra_id = rra.id;
 
-       CREATE VIEW tvd AS
+       CREATE VIEW %[1]stvd AS
        SELECT ds_id, rra_id, tstzrange(lag(t, 1) OVER (PARTITION BY ds_id, rra_id ORDER BY t), t, '(]') tr, r, step, row, row_n, abs_n, last_n, last_t, slot_distance FROM (
          SELECT ds.id ds_id, rra.id rra_id, latest - interval '1 millisecond' * ds.step_ms * rra.steps_per_row *
             mod(rra.size + mod(extract(epoch from rra.latest)::bigint*1000/(ds.step_ms * rra.steps_per_row), size) + 1
@@ -149,12 +151,11 @@ func (p *pgSerDe) createTablesIfNotExist() error {
           extract(epoch from rra.latest)::bigint*1000 AS last_t,
             mod(rra.size + mod(extract(epoch from rra.latest)::bigint*1000/(ds.step_ms * rra.steps_per_row), size) + 1
            - (generate_subscripts(dp,1) + n * width), rra.size) AS slot_distance
-       FROM ds
-       INNER JOIN rra ON rra.ds_id = ds.id
-       INNER JOIN ts ON ts.rra_id = rra.id) foo;
+       FROM %[1]sds ds
+       INNER JOIN %[1]srra rra ON rra.ds_id = ds.id
+       INNER JOIN %[1]sts ts ON ts.rra_id = rra.id) foo;
     `
-
-	if rows, err := p.dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE VIEW failed: %v", err)
 			return err
@@ -164,10 +165,10 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 	}
 
 	create_sql = `
-       CREATE UNIQUE INDEX idx_ds_name ON ds (name);
+       CREATE UNIQUE INDEX idx_ds_name ON %[1]sds (name);
     `
 	// There is no IF NOT EXISTS for CREATE INDEX until 9.5
-	if rows, err := p.dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
 			return err
@@ -177,9 +178,9 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 	}
 
 	create_sql = `
-       CREATE UNIQUE INDEX idx_rra_rra_id_n ON ts (rra_id, n);
+       CREATE UNIQUE INDEX idx_rra_rra_id_n ON %[1]sts (rra_id, n);
     `
-	if rows, err := p.dbConn.Query(create_sql); err != nil {
+	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
 			return err
@@ -468,9 +469,9 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 
 func (p *pgSerDe) FetchDataSources() (map[string]*rrd.DataSource, map[int64]*rrd.DataSource, map[string]bool, error) {
 
-	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM ds`
+	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds ds`
 
-	rows, err := p.dbConn.Query(sql)
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
 		log.Printf("fetchDataSources(): error querying database: %v", err)
 		return nil, nil, nil, err
@@ -508,9 +509,9 @@ func (p *pgSerDe) FetchDataSources() (map[string]*rrd.DataSource, map[int64]*rrd
 
 func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive, error) {
 
-	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest FROM rra WHERE ds_id = $1`
+	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
 
-	rows, err := p.dbConn.Query(sql, ds_id)
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), ds_id)
 	if err != nil {
 		log.Printf("fetchRoundRobinArchives(): error querying database: %v", err)
 		return nil, err

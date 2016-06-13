@@ -80,7 +80,6 @@ func Init() { // not to be confused with init()
 		log.Fatal(err)
 	}
 
-	// TODO This should like inside config?
 	if err := processConfig(configer(Cfg), wd); err != nil { // This validates the config
 		log.Fatalf("Error in config file %s: %v", cfgPath, err)
 	}
@@ -88,70 +87,72 @@ func Init() { // not to be confused with init()
 	savePid(Cfg.PidPath)
 
 	// Initialize Database
-	if db, err := serde.InitDb(Cfg.DbConnectString); err != nil {
+	db, err := serde.InitDb(Cfg.DbConnectString, "")
+	if err != nil {
 		log.Fatalf("Error connecting to the DB: %v", err)
-	} else {
-		log.Printf("Initialized DB connection.")
+		return
+	}
 
-		// Create the transceiver
-		t := x.New(db)
-		t.NWorkers = Cfg.Workers
-		t.MaxCacheDuration = Cfg.MaxCache.Duration
-		t.MinCacheDuration = Cfg.MinCache.Duration
-		t.MaxCachedPoints = Cfg.MaxCachedPoints
-		t.StatFlushDuration = Cfg.StatFlush.Duration
-		t.StatsNamePrefix = Cfg.StatsNamePrefix
-		t.DSSpecs = x.MatchingDSSpecFinder(Cfg)
+	log.Printf("Initialized DB connection.")
 
-		// Create and run the Service Manager
-		serviceMgr = newServiceManager(t)
-		if err := serviceMgr.run(gracefulProtos); err != nil {
-			log.Printf("Could not run the service manager: %v", err)
-			return
-		}
+	// Create the transceiver
+	t := x.New(db)
+	t.NWorkers = Cfg.Workers
+	t.MaxCacheDuration = Cfg.MaxCache.Duration
+	t.MinCacheDuration = Cfg.MinCache.Duration
+	t.MaxCachedPoints = Cfg.MaxCachedPoints
+	t.StatFlushDuration = Cfg.StatFlush.Duration
+	t.StatsNamePrefix = Cfg.StatsNamePrefix
+	t.DSSpecs = x.MatchingDSSpecFinder(Cfg)
 
-		if gracefulProtos != "" {
-			// Do the graceful dance - tell the parent to die, then
-			// wait for it to signal us back that the data has been
-			// flushed correctly, at which point it is OK for us to
-			// start the transceiver.
+	// Create and run the Service Manager
+	serviceMgr = newServiceManager(t)
+	if err := serviceMgr.run(gracefulProtos); err != nil {
+		log.Printf("Could not run the service manager: %v", err)
+		return
+	}
 
-			parent := syscall.Getppid()
-			log.Printf("start(): Killing parent pid: %v", parent)
-			syscall.Kill(parent, syscall.SIGTERM)
-			log.Printf("start(): Waiting for the parent to signal that flush is complete...")
-			ch := make(chan os.Signal)
-			signal.Notify(ch, syscall.SIGUSR1)
-			s := <-ch
-			log.Printf("start(): Received %v, proceeding to load the data", s)
-		}
+	if gracefulProtos != "" {
+		// Do the graceful dance - tell the parent to die, then
+		// wait for it to signal us back that the data has been
+		// flushed correctly, at which point it is OK for us to
+		// start the transceiver.
 
-		// *finally* start the transceiver (because graceful restart, parent must save first)
-		if err := t.Start(); err != nil {
-			log.Printf("Could not start the transceiver: %v", err)
-			return
-		}
+		parent := syscall.Getppid()
+		log.Printf("start(): Killing parent pid: %v", parent)
+		syscall.Kill(parent, syscall.SIGTERM)
+		log.Printf("start(): Waiting for the parent to signal that flush is complete...")
+		ch := make(chan os.Signal)
+		signal.Notify(ch, syscall.SIGUSR1)
+		s := <-ch
+		log.Printf("start(): Received %v, proceeding to load the data", s)
+	}
 
-		// TODO - there should be a -f(oreground) flag?
-		// Also see not below about saving the starting working directory
-		//std2DevNull()
-		//os.Chdir("/")
+	// *finally* start the transceiver (because graceful restart, parent must save first)
+	if err := t.Start(); err != nil {
+		log.Printf("Could not start the transceiver: %v", err)
+		return
+	}
 
-		// TODOthis too could be in the transceiver for consistency?
-		for {
-			// Wait for a SIGINT or SIGTERM.
-			ch := make(chan os.Signal)
-			signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-			s := <-ch
-			log.Printf("Got signal: %v", s)
-			if s == syscall.SIGHUP {
-				if gracefulChildPid == 0 {
-					gracefulRestart(t, cfgPath)
-				}
-			} else {
-				gracefulExit(t)
-				break
+	// TODO - there should be a -f(oreground) flag?
+	// Also see not below about saving the starting working directory
+	//std2DevNull()
+	//os.Chdir("/")
+
+	// TODOthis too could be in the transceiver for consistency?
+	for {
+		// Wait for a SIGINT or SIGTERM.
+		ch := make(chan os.Signal)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		s := <-ch
+		log.Printf("Got signal: %v", s)
+		if s == syscall.SIGHUP {
+			if gracefulChildPid == 0 {
+				gracefulRestart(t, cfgPath)
 			}
+		} else {
+			gracefulExit(t)
+			break
 		}
 	}
 }
