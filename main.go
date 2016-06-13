@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,25 +16,10 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"github.com/tgres/tgres/daemon"
 )
 
-var (
-	buildTime   = "UNKNOWN"
-	gitRevision = "UNKNOWN"
-)
-
 func main() {
-
-	printVersion := flag.Bool("v", false, "Print version")
-	flag.Parse()
-	if *printVersion {
-		fmt.Printf("Build time: %s, git revision: %s\n", buildTime, gitRevision)
-	} else {
-		// NB: More flags defined in tgres package
-		daemon.Init()
-		daemon.Finish()
-	}
+	daemon.Init()
+	daemon.Finish()
 }

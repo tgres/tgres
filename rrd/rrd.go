@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package rrd does the thing ZZZ.
 package rrd
 
 import (
@@ -25,7 +26,8 @@ import (
 	"time"
 )
 
-// DSSpec is how we describe a DS to be created
+// DSSpec describes a DataSource. DSSpec is a schema that is used to
+// create the DataSource.
 
 type DSSpec struct {
 	Step      time.Duration

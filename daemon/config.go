@@ -248,7 +248,7 @@ func (c *Config) processDSSpec() error {
 	return nil
 }
 
-func (c *Config) FindMatchingDsSpec(name string) *rrd.DSSpec {
+func (c *Config) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	for _, dsSpec := range c.DSs {
 		if dsSpec.Regexp.Regexp.MatchString(name) {
 			return convertDSSpec(&dsSpec)

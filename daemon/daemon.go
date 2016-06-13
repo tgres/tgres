@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -94,16 +94,16 @@ func Init() { // not to be confused with init()
 		log.Printf("Initialized DB connection.")
 
 		// Create the transceiver
-		t := x.NewTransceiver(db, Cfg.Workers, Cfg.MaxCache.Duration, Cfg.MinCache.Duration,
-			Cfg.MaxCachedPoints, Cfg.StatFlush.Duration, Cfg.StatsNamePrefix,
-			x.MatchingDsSpecFinder(Cfg))
+		t := x.New(db)
+		t.NWorkers = Cfg.Workers
+		t.MaxCacheDuration = Cfg.MaxCache.Duration
+		t.MinCacheDuration = Cfg.MinCache.Duration
+		t.MaxCachedPoints = Cfg.MaxCachedPoints
+		t.StatFlushDuration = Cfg.StatFlush.Duration
+		t.StatsNamePrefix = Cfg.StatsNamePrefix
+		t.DSSpecs = x.MatchingDSSpecFinder(Cfg)
 
-		// Start the transceiver,
-		if err := t.Start(); err != nil {
-			log.Printf("Could not start the transceiver: %v", err)
-			return
-		}
-
+		// Create and run the Service Manager
 		serviceMgr = newServiceManager(t)
 		if err := serviceMgr.run(gracefulProtos); err != nil {
 			log.Printf("Could not run the service manager: %v", err)
@@ -111,6 +111,11 @@ func Init() { // not to be confused with init()
 		}
 
 		if gracefulProtos != "" {
+			// Do the graceful dance - tell the parent to die, then
+			// wait for it to signal us back that the data has been
+			// flushed correctly, at which point it is OK for us to
+			// start the transceiver.
+
 			parent := syscall.Getppid()
 			log.Printf("start(): Killing parent pid: %v", parent)
 			syscall.Kill(parent, syscall.SIGTERM)
@@ -121,8 +126,11 @@ func Init() { // not to be confused with init()
 			log.Printf("start(): Received %v, proceeding to load the data", s)
 		}
 
-		t.ReloadDss()     // *finally* load the data (because graceful restart)
-		go t.Dispatcher() // now start dispatcher
+		// *finally* start the transceiver (because graceful restart, parent must save first)
+		if err := t.Start(); err != nil {
+			log.Printf("Could not start the transceiver: %v", err)
+			return
+		}
 
 		// TODO - there should be a -f(oreground) flag?
 		// Also see not below about saving the starting working directory

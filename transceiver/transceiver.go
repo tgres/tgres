@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,18 +25,18 @@ import (
 	"time"
 )
 
-type MatchingDsSpecFinder interface {
-	FindMatchingDsSpec(name string) *rrd.DSSpec
+type MatchingDSSpecFinder interface {
+	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
 
 type Transceiver struct {
 	serde                              rrd.SerDe
-	nWorkers                           int
-	maxCacheDuration, minCacheDuration time.Duration
-	maxCachedPoints                    int
-	statFlushDuration                  time.Duration
-	statsNamePrefix                    string
-	dsSpecs                            MatchingDsSpecFinder
+	NWorkers                           int
+	MaxCacheDuration, MinCacheDuration time.Duration
+	MaxCachedPoints                    int
+	StatFlushDuration                  time.Duration
+	StatsNamePrefix                    string
+	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
 	dpCh                               chan *rrd.DataPoint    // incoming data point
 	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
@@ -55,33 +55,67 @@ type dsCopyRequest struct {
 	resp chan *rrd.DataSource
 }
 
-func NewTransceiver(serde rrd.SerDe, nWorkers int, maxCacheDuration, minCacheDuration time.Duration,
-	maxCachedPoints int, statFlushDuration time.Duration, statsNamePrefix string,
-	dsSpecs MatchingDsSpecFinder) *Transceiver {
+type dftDSFinder struct{}
 
-	dss := &rrd.DataSources{}
+func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
+	return &rrd.DSSpec{
+		Step:      10 * time.Second,
+		Heartbeat: 2 * time.Hour,
+		RRAs: []*rrd.RRASpec{
+			&rrd.RRASpec{Function: "AVERAGE",
+				Step: 10 * time.Second,
+				Size: 6 * time.Hour,
+				Xff:  0.5,
+			},
+			&rrd.RRASpec{Function: "AVERAGE",
+				Step: 1 * time.Minute,
+				Size: 24 * time.Hour,
+				Xff:  0.5,
+			},
+			&rrd.RRASpec{Function: "AVERAGE",
+				Step: 10 * time.Minute,
+				Size: 93 * 24 * time.Hour,
+				Xff:  0.5,
+			},
+			&rrd.RRASpec{Function: "AVERAGE",
+				Step: 24 * time.Hour,
+				Size: 1825 * 24 * time.Hour,
+				Xff:  1,
+			},
+		},
+	}
+}
+
+func New(serde rrd.SerDe) *Transceiver {
 	return &Transceiver{
 		serde:             serde,
-		nWorkers:          nWorkers,
-		maxCacheDuration:  maxCacheDuration,
-		minCacheDuration:  minCacheDuration,
-		maxCachedPoints:   maxCachedPoints,
-		statFlushDuration: statFlushDuration,
-		statsNamePrefix:   statsNamePrefix,
-		dsSpecs:           dsSpecs,
-		dss:               dss,
-		dpCh:              make(chan *rrd.DataPoint, 1048576), // so we can survive a graceful restart
+		NWorkers:          4,
+		MaxCacheDuration:  5 * time.Second,
+		MinCacheDuration:  1 * time.Second,
+		MaxCachedPoints:   256,
+		StatFlushDuration: 10 * time.Second,
+		StatsNamePrefix:   "stats",
+		DSSpecs:           &dftDSFinder{},
+		dss:               &rrd.DataSources{},
+		dpCh:              make(chan *rrd.DataPoint, 65536), // so we can survive a graceful restart
+		stCh:              make(chan *statsd.Stat, 65536),   // ditto
 	}
 }
 
 func (t *Transceiver) Start() error {
+	log.Printf("Transceiver: Loading data from serde.")
+	t.dss.Reload(t.serde)
+
 	t.startWorkers()
 	t.startFlushers()
 	t.startStatWorker()
 
 	// Wait for workers/flushers to start correctly
 	t.startWg.Wait()
-	log.Printf("Transceiver: All workers running, good to go!")
+	log.Printf("Transceiver: All workers running, starting dispatcher.")
+
+	go t.dispatcher()
+	log.Printf("Transceiver: Ready.")
 
 	return nil
 }
@@ -143,11 +177,7 @@ func (t *Transceiver) stopStatWorker() {
 	log.Printf("stopStatWorker(): stat worker finished.")
 }
 
-func (t *Transceiver) ReloadDss() {
-	t.dss.Reload(t.serde)
-}
-
-func (t *Transceiver) Dispatcher() {
+func (t *Transceiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
 
@@ -164,7 +194,7 @@ func (t *Transceiver) Dispatcher() {
 
 		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
 			// DS does not exist, can we create it?
-			if dsSpec := t.dsSpecs.FindMatchingDsSpec(dp.Name); dsSpec != nil {
+			if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
 				if ds, err := t.serde.CreateDataSource(dp.Name, dsSpec); err == nil {
 					t.dss.Insert(ds)
 					dp.DS = ds
@@ -176,24 +206,22 @@ func (t *Transceiver) Dispatcher() {
 		}
 
 		if dp.DS != nil {
-			t.workerChs[dp.DS.Id%int64(t.nWorkers)] <- dp
+			t.workerChs[dp.DS.Id%int64(t.NWorkers)] <- dp
 		}
 	}
 }
 
-// TODO: what is the point of this one-line method?
 func (t *Transceiver) QueueDataPoint(dp *rrd.DataPoint) {
 	t.dpCh <- dp
 }
 
-// TODO: what is the point of this one-line method?
 func (t *Transceiver) QueueStat(st *statsd.Stat) {
 	t.stCh <- st
 }
 
 func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
 	req := &dsCopyRequest{id, make(chan *rrd.DataSource)}
-	t.dsCopyChs[id%int64(t.nWorkers)] <- req
+	t.dsCopyChs[id%int64(t.NWorkers)] <- req
 	return <-req.resp
 }
 
@@ -225,8 +253,8 @@ func (t *Transceiver) worker(id int64) {
 	go func() {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
-			i := int(t.maxCacheDuration.Nanoseconds()-t.minCacheDuration.Nanoseconds()) / 1000
-			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + t.minCacheDuration)
+			i := int(t.MaxCacheDuration.Nanoseconds()-t.MinCacheDuration.Nanoseconds()) / 1000
+			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + t.MinCacheDuration)
 			periodicFlushCheck <- 1
 		}
 	}()
@@ -269,13 +297,13 @@ func (t *Transceiver) worker(id int64) {
 				if ds == nil {
 					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
 					continue
-				} else if flushEverything || ds.ShouldBeFlushed(t.maxCachedPoints,
-					t.minCacheDuration, t.maxCacheDuration) {
+				} else if flushEverything || ds.ShouldBeFlushed(t.MaxCachedPoints,
+					t.MinCacheDuration, t.MaxCacheDuration) {
 					t.flushDs(ds)
 					delete(recent, ds.Id)
 				}
 			}
-		} else if ds.ShouldBeFlushed(t.maxCachedPoints, t.minCacheDuration, t.maxCacheDuration) {
+		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
 			// flush just this one ds
 			t.flushDs(ds)
 			delete(recent, ds.Id)
@@ -288,19 +316,19 @@ func (t *Transceiver) worker(id int64) {
 }
 
 func (t *Transceiver) flushDs(ds *rrd.DataSource) {
-	t.flusherChs[ds.Id%int64(t.nWorkers)] <- ds.MostlyCopy()
+	t.flusherChs[ds.Id%int64(t.NWorkers)] <- ds.MostlyCopy()
 	ds.LastFlushRT = time.Now()
 	ds.ClearRRAs()
 }
 
 func (t *Transceiver) startWorkers() {
 
-	t.workerChs = make([]chan *rrd.DataPoint, t.nWorkers)
-	t.dsCopyChs = make([]chan *dsCopyRequest, t.nWorkers)
+	t.workerChs = make([]chan *rrd.DataPoint, t.NWorkers)
+	t.dsCopyChs = make([]chan *dsCopyRequest, t.NWorkers)
 
-	log.Printf("Starting %d workers...", t.nWorkers)
-	t.startWg.Add(t.nWorkers)
-	for i := 0; i < t.nWorkers; i++ {
+	log.Printf("Starting %d workers...", t.NWorkers)
+	t.startWg.Add(t.NWorkers)
+	for i := 0; i < t.NWorkers; i++ {
 		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
 		t.dsCopyChs[i] = make(chan *dsCopyRequest, 1024)
 
@@ -332,18 +360,17 @@ func (t *Transceiver) flusher(id int64) {
 
 func (t *Transceiver) startFlushers() {
 
-	t.flusherChs = make([]chan *rrd.DataSource, t.nWorkers)
+	t.flusherChs = make([]chan *rrd.DataSource, t.NWorkers)
 
-	log.Printf("Starting %d flushers...", t.nWorkers)
-	t.startWg.Add(t.nWorkers)
-	for i := 0; i < t.nWorkers; i++ {
+	log.Printf("Starting %d flushers...", t.NWorkers)
+	t.startWg.Add(t.NWorkers)
+	for i := 0; i < t.NWorkers; i++ {
 		t.flusherChs[i] = make(chan *rrd.DataSource)
 		go t.flusher(int64(i))
 	}
 }
 
 func (t *Transceiver) startStatWorker() {
-	t.stCh = make(chan *statsd.Stat, 1024)
 	log.Printf("Starting statWorker...")
 	t.startWg.Add(1)
 	go t.statWorker()
@@ -362,7 +389,7 @@ func (t *Transceiver) statWorker() {
 			// multiple of durationif the system clock is
 			// adjusted. This thing will mostly remain aligned.
 			clock := time.Now()
-			time.Sleep(clock.Truncate(t.statFlushDuration).Add(t.statFlushDuration).Sub(clock))
+			time.Sleep(clock.Truncate(t.StatFlushDuration).Add(t.StatFlushDuration).Sub(clock))
 			if len(flushCh) == 0 {
 				flushCh <- 1
 			} else {
@@ -378,11 +405,11 @@ func (t *Transceiver) statWorker() {
 	gauges := make(map[string]float64)
 	timers := make(map[string][]float64)
 
-	prefix := t.statsNamePrefix
+	prefix := t.StatsNamePrefix
 
 	var flushStats = func() {
 		for name, count := range counts {
-			perSec := float64(count) / t.statFlushDuration.Seconds()
+			perSec := float64(count) / t.StatFlushDuration.Seconds()
 			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + "." + name, TimeStamp: time.Now(), Value: perSec})
 		}
 		for name, gauge := range gauges {
