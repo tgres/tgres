@@ -211,8 +211,8 @@ func (t *Transceiver) dispatcher() {
 	}
 }
 
-func (t *Transceiver) QueueDataPoint(dp *rrd.DataPoint) {
-	t.dpCh <- dp
+func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
+	t.dpCh <- &rrd.DataPoint{Name: name, TimeStamp: ts, Value: v}
 }
 
 func (t *Transceiver) QueueStat(st *statsd.Stat) {
@@ -410,14 +410,14 @@ func (t *Transceiver) statWorker() {
 	var flushStats = func() {
 		for name, count := range counts {
 			perSec := float64(count) / t.StatFlushDuration.Seconds()
-			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + "." + name, TimeStamp: time.Now(), Value: perSec})
+			t.QueueDataPoint(prefix+"."+name, time.Now(), perSec)
 		}
 		for name, gauge := range gauges {
-			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".gauges." + name, TimeStamp: time.Now(), Value: gauge})
+			t.QueueDataPoint(prefix+".gauges."+name, time.Now(), gauge)
 		}
 		for name, times := range timers {
 			// count
-			t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".count", TimeStamp: time.Now(), Value: float64(len(times))})
+			t.QueueDataPoint(prefix+".timers."+name+".count", time.Now(), float64(len(times)))
 
 			// lower, upper, sum, mean
 			if len(times) > 0 {
@@ -431,10 +431,10 @@ func (t *Transceiver) statWorker() {
 					upper = math.Max(upper, v)
 					sum += v
 				}
-				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".lower", TimeStamp: time.Now(), Value: lower})
-				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".upper", TimeStamp: time.Now(), Value: upper})
-				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".sum", TimeStamp: time.Now(), Value: sum})
-				t.QueueDataPoint(&rrd.DataPoint{Name: prefix + ".timers." + name + ".mean", TimeStamp: time.Now(), Value: sum / float64(len(times))})
+				t.QueueDataPoint(prefix+".timers."+name+".lower", time.Now(), lower)
+				t.QueueDataPoint(prefix+".timers."+name+".upper", time.Now(), upper)
+				t.QueueDataPoint(prefix+".timers."+name+".sum", time.Now(), sum)
+				t.QueueDataPoint(prefix+".timers."+name+".mean", time.Now(), sum/float64(len(times)))
 			}
 
 			// TODO - these will require sorting:

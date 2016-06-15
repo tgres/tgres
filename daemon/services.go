@@ -21,7 +21,6 @@ import (
 	pickle "github.com/hydrogen18/stalecucumber"
 	"github.com/tgres/tgres/graceful"
 	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/statsd"
 	"github.com/tgres/tgres/transceiver"
 	"log"
@@ -271,7 +270,7 @@ func handleGraphitePickleProtocol(t *transceiver.Transceiver, conn net.Conn, tim
 							}
 						}
 					}
-					t.QueueDataPoint(&rrd.DataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value})
+					t.QueueDataPoint(name, time.Unix(tstamp, 0), value)
 				} else {
 					err = fmt.Errorf("dp wrong length: %d", len(dp))
 					break
@@ -439,10 +438,10 @@ func handleGraphiteTextProtocol(t *transceiver.Transceiver, conn net.Conn, timeo
 	for connbuf.Scan() {
 		packetStr := connbuf.Text()
 
-		if dp, err := parseGraphitePacket(packetStr); err != nil {
+		if name, ts, v, err := parseGraphitePacket(packetStr); err != nil {
 			log.Printf("handleGraphiteTextProtocol(): bad backet: %v")
 		} else {
-			t.QueueDataPoint(dp)
+			t.QueueDataPoint(name, ts, v)
 		}
 
 		if timeout != 0 {
@@ -455,7 +454,7 @@ func handleGraphiteTextProtocol(t *transceiver.Transceiver, conn net.Conn, timeo
 	}
 }
 
-func parseGraphitePacket(packetStr string) (*rrd.DataPoint, error) {
+func parseGraphitePacket(packetStr string) (string, time.Time, float64, error) {
 
 	var (
 		name   string
@@ -464,11 +463,10 @@ func parseGraphitePacket(packetStr string) (*rrd.DataPoint, error) {
 	)
 
 	if n, err := fmt.Sscanf(packetStr, "%s %f %d", &name, &value, &tstamp); n != 3 || err != nil {
-		return nil, fmt.Errorf("error %v scanning input: %q", err, packetStr)
+		return "", time.Time{}, 0, fmt.Errorf("error %v scanning input: %q", err, packetStr)
 	}
 
-	name = misc.SanitizeName(name)
-	return &rrd.DataPoint{Name: name, TimeStamp: time.Unix(tstamp, 0), Value: value}, nil
+	return misc.SanitizeName(name), time.Unix(tstamp, 0), value, nil
 }
 
 // TODO isn't this identical to handleGraphiteTextProtocol?
