@@ -33,16 +33,19 @@ type Cluster struct {
 }
 
 func (c *Cluster) Create() error {
-	return c.CreateBind(os.Getenv("MLBIND"), 0)
+	return c.CreateAdvert("", 0)
 }
 
-func (c *Cluster) CreateBind(addr string, port int) (err error) {
+func (c *Cluster) CreateAdvert(addr string, port int) (err error) {
 	cfg := memberlist.DefaultLANConfig()
+	if os.Getenv("MLBIND") != "" {
+		cfg.BindAddr = os.Getenv("MLBIND")
+	}
 	if port != 0 {
 		cfg.BindPort, cfg.AdvertisePort = port, port
 	}
 	if addr != "" {
-		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
+		cfg.AdvertiseAddr = addr
 		cfg.Name = fmt.Sprintf("%s:%d", addr, port)
 	}
 	cfg.LogOutput = &logger{}
