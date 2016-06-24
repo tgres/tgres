@@ -38,13 +38,13 @@ func (c *Cluster) Create() error {
 
 func (c *Cluster) CreateBind(addr string, port int) (err error) {
 	cfg := memberlist.DefaultLANConfig()
-	if addr != "" {
-		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
-	}
 	if port != 0 {
 		cfg.BindPort, cfg.AdvertisePort = port, port
 	}
-	cfg.Name = fmt.Sprintf("%s:%d", addr, port)
+	if addr != "" {
+		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
+		cfg.Name = fmt.Sprintf("%s:%d", addr, port)
+	}
 	cfg.LogOutput = &logger{}
 	c.d = &delegate{make([]chan *Msg, 0)}
 	cfg.Delegate = c.d
