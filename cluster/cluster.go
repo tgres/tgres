@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/hashicorp/memberlist"
 	"log"
+	"os"
 	"sort"
 	"strings"
 )
@@ -32,13 +33,17 @@ type Cluster struct {
 }
 
 func (c *Cluster) Create() error {
-	return c.CreateBind("", 0)
+	return c.CreateBind(os.Getenv("MLBIND"), 0)
 }
 
 func (c *Cluster) CreateBind(addr string, port int) (err error) {
 	cfg := memberlist.DefaultLANConfig()
-	cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
-	cfg.BindPort, cfg.AdvertisePort = port, port
+	if addr != "" {
+		cfg.BindAddr, cfg.AdvertiseAddr = addr, addr
+	}
+	if port != 0 {
+		cfg.BindPort, cfg.AdvertisePort = port, port
+	}
 	cfg.Name = fmt.Sprintf("%s:%d", addr, port)
 	cfg.LogOutput = &logger{}
 	c.d = &delegate{make([]chan *Msg, 0)}
