@@ -25,6 +25,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Cluster struct {
@@ -50,7 +51,7 @@ func (c *Cluster) CreateAdvert(addr string, port int) (err error) {
 		cfg.Name = fmt.Sprintf("%s:%d", addr, port)
 	}
 	cfg.LogOutput = &logger{}
-	c.d = &delegate{make([]chan *Msg, 0), make([]chan bool, 0)}
+	c.d = &delegate{make([]chan *Msg, 0), make([]chan bool, 0), []byte{}}
 	cfg.Delegate = c.d
 	cfg.Events = c.d
 	c.Memberlist, err = memberlist.Create(cfg)
@@ -118,6 +119,14 @@ func (c *Cluster) NotifyClusterChanges() chan bool {
 	return ch
 }
 
+func (c *Cluster) SetMetaData(b []byte) (err error) {
+	c.d.meta = b
+	if err = c.UpdateNode(100 * time.Millisecond); err != nil {
+		log.Printf("Cluster.SetMetaData(): UpdateNode() failed: %v", err)
+	}
+	return err
+}
+
 type Msg struct {
 	Id       int
 	Dst, Src *memberlist.Node
@@ -168,10 +177,11 @@ func (l *logger) Write(b []byte) (int, error) {
 type delegate struct {
 	rcvChs    []chan *Msg
 	chgNotify []chan bool
+	meta      []byte
 }
 
 func (d *delegate) NodeMeta(limit int) []byte {
-	return []byte{}
+	return d.meta
 }
 
 func (d *delegate) NotifyMsg(b []byte) {
