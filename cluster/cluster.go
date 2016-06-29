@@ -40,6 +40,7 @@ func (c *Cluster) CreateAdvert(addr string, port int) (err error) {
 	cfg := memberlist.DefaultLANConfig()
 	if os.Getenv("MLBIND") != "" {
 		cfg.BindAddr = os.Getenv("MLBIND")
+		cfg.Name = cfg.BindAddr
 	}
 	if port != 0 {
 		cfg.BindPort, cfg.AdvertisePort = port, port
@@ -49,8 +50,9 @@ func (c *Cluster) CreateAdvert(addr string, port int) (err error) {
 		cfg.Name = fmt.Sprintf("%s:%d", addr, port)
 	}
 	cfg.LogOutput = &logger{}
-	c.d = &delegate{make([]chan *Msg, 0)}
+	c.d = &delegate{make([]chan *Msg, 0), make([]chan bool, 0)}
 	cfg.Delegate = c.d
+	cfg.Events = c.d
 	c.Memberlist, err = memberlist.Create(cfg)
 	return err
 }
@@ -101,11 +103,19 @@ func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
 			msg := <-snd
 			msg.Src = c.LocalNode()
 			msg.Id = id
-			c.SendToTCP(msg.Dst, msg.bytes())
+			if msg.Dst != nil {
+				c.SendToTCP(msg.Dst, msg.bytes())
+			}
 		}
 	}(id)
 
 	return snd, rcv
+}
+
+func (c *Cluster) NotifyClusterChanges() chan bool {
+	ch := make(chan bool, 1)
+	c.d.chgNotify = append(c.d.chgNotify, ch)
+	return ch
 }
 
 type Msg struct {
@@ -156,7 +166,8 @@ func (l *logger) Write(b []byte) (int, error) {
 
 // memberlist.Delegate interface
 type delegate struct {
-	rcvChs []chan *Msg
+	rcvChs    []chan *Msg
+	chgNotify []chan bool
 }
 
 func (d *delegate) NodeMeta(limit int) []byte {
@@ -186,3 +197,19 @@ func (d *delegate) LocalState(join bool) []byte {
 }
 
 func (d *delegate) MergeRemoteState(buf []byte, join bool) {}
+
+func (d *delegate) NotifyJoin(n *memberlist.Node) {
+	d.notifyAll()
+}
+func (d *delegate) NotifyLeave(n *memberlist.Node) {
+	d.notifyAll()
+}
+func (d *delegate) NotifyUpdate(n *memberlist.Node) {}
+
+func (d *delegate) notifyAll() {
+	for _, ch := range d.chgNotify {
+		if len(ch) < cap(ch) {
+			ch <- true
+		}
+	}
+}
