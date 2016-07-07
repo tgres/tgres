@@ -18,44 +18,127 @@ package cluster
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/binary"
 	"encoding/gob"
 	"fmt"
 	"github.com/hashicorp/memberlist"
 	"log"
-	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
+var startTime time.Time
+
+func init() {
+	startTime = time.Now()
+}
+
+const updateNodeTO = 30 * time.Second
+
+type ddEntry struct {
+	dd   DistDatum
+	node *Node
+}
+
 type Cluster struct {
 	*memberlist.Memberlist
-	d *delegate
+	sync.RWMutex
+	rcvChs     []chan *Msg
+	chgNotify  []chan bool
+	meta       []byte
+	bcastq     *memberlist.TransmitLimitedQueue
+	dds        map[int64]*ddEntry
+	bsnd, brcv chan *Msg // dds messages
 }
 
-func (c *Cluster) Create() error {
-	return c.CreateAdvert("", 0)
+func NewCluster() (*Cluster, error) {
+	return NewClusterBind("", 0, "", 0, "")
 }
 
-func (c *Cluster) CreateAdvert(addr string, port int) (err error) {
+func NewClusterBind(baddr string, bport int, aaddr string, aport int, name string) (*Cluster, error) {
+	c := &Cluster{
+		rcvChs:    make([]chan *Msg, 0),
+		chgNotify: make([]chan bool, 0),
+		dds:       make(map[int64]*ddEntry)}
+	c.bcastq = &memberlist.TransmitLimitedQueue{NumNodes: func() int { return c.NumMembers() }}
 	cfg := memberlist.DefaultLANConfig()
-	if os.Getenv("MLBIND") != "" {
-		cfg.BindAddr = os.Getenv("MLBIND")
-		cfg.Name = cfg.BindAddr
+	if baddr != "" {
+		cfg.BindAddr = baddr
 	}
-	if port != 0 {
-		cfg.BindPort, cfg.AdvertisePort = port, port
+	if bport != 0 {
+		cfg.BindPort = bport
 	}
-	if addr != "" {
-		cfg.AdvertiseAddr = addr
-		cfg.Name = fmt.Sprintf("%s:%d", addr, port)
+	if aaddr != "" {
+		cfg.AdvertiseAddr = aaddr
+	}
+	if aport != 0 {
+		cfg.AdvertisePort = aport
+	}
+	if name != "" {
+		cfg.Name = name
 	}
 	cfg.LogOutput = &logger{}
-	c.d = &delegate{make([]chan *Msg, 0), make([]chan bool, 0), []byte{}}
-	cfg.Delegate = c.d
-	cfg.Events = c.d
-	c.Memberlist, err = memberlist.Create(cfg)
-	return err
+	cfg.Delegate, cfg.Events = c, c
+	var err error
+	if c.Memberlist, err = memberlist.Create(cfg); err != nil {
+		return nil, err
+	}
+	md := &nodeMeta{sortBy: startTime.UnixNano()}
+	c.saveMeta(md)
+	if err = c.UpdateNode(updateNodeTO); err != nil {
+		log.Printf("NewClusterBind(): UpdateNode() failed: %v", err)
+		return nil, err
+	}
+
+	c.bsnd, c.brcv = c.RegisterMsgType(true)
+
+	return c, nil
+}
+
+// readyNodes will never return an empty list, it's an error
+func (c *Cluster) readyNodes() ([]*Node, error) {
+	nodes, err := c.SortedNodes()
+	if err != nil {
+		return nil, err
+	}
+	readyNodes := make([]*Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Ready() {
+			readyNodes = append(readyNodes, node)
+		}
+	}
+	return readyNodes, nil
+}
+
+func selectNode(nodes []*Node, id int64) *Node {
+	if len(nodes) == 0 {
+		return nil
+	}
+	return nodes[int(id)%len(nodes)]
+}
+
+func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
+	dds, err := f()
+	if err != nil {
+		return err
+	}
+
+	readyNodes, err := c.readyNodes()
+	if err != nil {
+		return err
+	}
+
+	ddes := make(map[int64]*ddEntry)
+	for _, dd := range dds {
+		ddes[dd.Id()] = &ddEntry{dd: dd, node: selectNode(readyNodes, dd.Id())}
+	}
+
+	c.Lock()
+	c.dds = ddes
+	c.Unlock()
+	return nil
 }
 
 func (c *Cluster) Join(existing []string) error {
@@ -66,15 +149,37 @@ func (c *Cluster) Join(existing []string) error {
 	return nil
 }
 
-func (c *Cluster) SortedNodes() []*memberlist.Node {
-	// Return in order of addr:port
-	sn := sortableNodes{c.Members()}
+func (c *Cluster) LocalNode() *Node {
+	return &Node{Node: c.Memberlist.LocalNode()}
+}
+
+func (c *Cluster) Members() []*Node {
+	nn := c.Memberlist.Members()
+	result := make([]*Node, len(nn))
+	for i, n := range nn {
+		result[i] = &Node{Node: n}
+	}
+	return result
+}
+
+// SortedNodes returns nodes ordered by process start time
+func (c *Cluster) SortedNodes() ([]*Node, error) {
+	ms := c.Members()
+	sn := sortableNodes{ms, make([]string, len(ms))}
+	for i, _ := range sn.nl {
+		md, err := sn.nl[i].extractMeta()
+		if err != nil {
+			return nil, err
+		}
+		sn.sortBy[i] = fmt.Sprintf("%d:%s", md.sortBy, sn.nl[i].Name) // mix in Name for uniqueness
+	}
 	sort.Sort(sn)
-	return sn.nl
+	return sn.nl, nil
 }
 
 type sortableNodes struct {
-	nl []*memberlist.Node
+	nl     []*Node
+	sortBy []string
 }
 
 func (sn sortableNodes) Len() int {
@@ -82,30 +187,44 @@ func (sn sortableNodes) Len() int {
 }
 
 func (sn sortableNodes) Less(i, j int) bool {
-	istr := fmt.Sprintf("%s:%s", sn.nl[i].Addr, sn.nl[i].Port)
-	jstr := fmt.Sprintf("%s:%s", sn.nl[j].Addr, sn.nl[i].Port)
-	return istr < jstr
+	return sn.sortBy[i] < sn.sortBy[j]
 }
 
 func (sn sortableNodes) Swap(i, j int) {
 	sn.nl[i], sn.nl[j] = sn.nl[j], sn.nl[i]
 }
 
-func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
+type broadcast struct {
+	msg []byte
+}
+
+func (b *broadcast) Invalidates(bc memberlist.Broadcast) bool {
+	return false
+}
+
+func (b *broadcast) Message() []byte {
+	return b.msg
+}
+
+func (b *broadcast) Finished() {
+}
+
+func (c *Cluster) RegisterMsgType(bcast bool) (snd, rcv chan *Msg) {
 
 	snd, rcv = make(chan *Msg, 16), make(chan *Msg, 16)
 
-	d := c.d
-	d.rcvChs = append(d.rcvChs, rcv)
-	id := len(d.rcvChs) - 1
+	c.rcvChs = append(c.rcvChs, rcv)
+	id := len(c.rcvChs) - 1
 
 	go func(id int) {
 		for {
 			msg := <-snd
 			msg.Src = c.LocalNode()
 			msg.Id = id
-			if msg.Dst != nil {
-				c.SendToTCP(msg.Dst, msg.bytes())
+			if bcast && c.NumMembers() > 1 {
+				c.bcastq.QueueBroadcast(&broadcast{msg.bytes()})
+			} else if msg.Dst != nil {
+				c.SendToTCP(msg.Dst.Node, msg.bytes())
 			}
 		}
 	}(id)
@@ -115,25 +234,163 @@ func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
 
 func (c *Cluster) NotifyClusterChanges() chan bool {
 	ch := make(chan bool, 1)
-	c.d.chgNotify = append(c.d.chgNotify, ch)
+	c.chgNotify = append(c.chgNotify, ch)
 	return ch
 }
 
-func (c *Cluster) SetMetaData(b []byte) (err error) {
-	c.d.meta = b
-	if err = c.UpdateNode(100 * time.Millisecond); err != nil {
+type nodeMeta struct {
+	ready  bool
+	sortBy int64
+	user   []byte
+}
+
+const minMdLen = 1 + binary.MaxVarintLen64
+
+func (c *Cluster) extractMeta() (*nodeMeta, error) {
+	return c.LocalNode().extractMeta()
+}
+
+func (c *Cluster) saveMeta(md *nodeMeta) {
+	meta := make([]byte, minMdLen)
+	if md.ready {
+		meta[0] = 1
+	} else {
+		meta[0] = 0
+	}
+	binary.PutVarint(meta[1:], md.sortBy)
+	meta = append(meta, md.user...)
+	c.meta = meta
+}
+
+func (n *Node) Meta() ([]byte, error) {
+	var md *nodeMeta
+	var err error
+	if md, err = n.extractMeta(); err != nil {
+		return nil, err
+	}
+	return md.user, nil
+}
+
+func (n *Node) Name() string {
+	// nil-resistant Name getter
+	if n == nil {
+		return "<nil>"
+	}
+	return n.Node.Name
+}
+
+func (c *Cluster) SetMetaData(b []byte) error {
+	// To set it, we must first get it.
+	md, err := c.LocalNode().extractMeta()
+	if err != nil {
+		return err
+	}
+	md.user = b
+	c.saveMeta(md)
+	if err = c.UpdateNode(updateNodeTO); err != nil {
 		log.Printf("Cluster.SetMetaData(): UpdateNode() failed: %v", err)
 	}
 	return err
 }
 
+// BEGIN memberlist.Delegate interface
+
+func (c *Cluster) NodeMeta(limit int) []byte {
+	return c.meta
+}
+
+func (c *Cluster) NotifyMsg(b []byte) {
+
+	m := &Msg{}
+	if err := gob.NewDecoder(flate.NewReader(bytes.NewBuffer(b))).Decode(m); err != nil {
+		log.Printf("NotifyMsg(): error decoding: %#v", err)
+	}
+
+	if m.Id < len(c.rcvChs) {
+		c.rcvChs[m.Id] <- m
+	} else {
+		log.Printf("NotifyMsg(): unknown msg Id: %d, dropping message", m.Id)
+	}
+}
+
+func (c *Cluster) GetBroadcasts(overhead, limit int) [][]byte {
+	return c.bcastq.GetBroadcasts(overhead, limit)
+}
+
+func (c *Cluster) LocalState(join bool) []byte            { return []byte{} }
+func (c *Cluster) MergeRemoteState(buf []byte, join bool) {}
+
+func (c *Cluster) NotifyJoin(n *memberlist.Node) {
+	c.notifyAll()
+}
+func (c *Cluster) NotifyLeave(n *memberlist.Node) {
+	c.notifyAll()
+}
+func (c *Cluster) NotifyUpdate(n *memberlist.Node) {
+	c.notifyAll()
+}
+
+// END memberlist.Delegate interface
+
+func (c *Cluster) notifyAll() {
+	defer func() { recover() }() // in case ch is now closed
+	for _, ch := range c.chgNotify {
+		if len(ch) < cap(ch) {
+			ch <- true
+		}
+	}
+}
+
+type Node struct {
+	*memberlist.Node
+}
+
+func (n *Node) extractMeta() (*nodeMeta, error) {
+	md := &nodeMeta{}
+	if len(n.Node.Meta) < minMdLen {
+		return nil, fmt.Errorf("Not enough bytes to extract metadata")
+	}
+	// ready
+	md.ready = n.Node.Meta[0] == 1
+	// sortBy
+	var err error
+	if md.sortBy, err = binary.ReadVarint(bytes.NewReader(n.Node.Meta[1:])); err != nil {
+		return nil, fmt.Errorf("extractMeta(): sortBy: %v", err)
+	}
+	// user
+	md.user = n.Node.Meta[minMdLen:]
+	return md, nil
+}
+
+func (c *Cluster) Ready(status bool) error {
+	md, err := c.extractMeta()
+	if err != nil {
+		return err
+	}
+	md.ready = status
+	c.saveMeta(md)
+	if err = c.UpdateNode(updateNodeTO); err != nil {
+		log.Printf("Ready(): UpdateNode() failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (n *Node) Ready() bool {
+	md, err := n.extractMeta()
+	if err != nil {
+		return false
+	}
+	return md.ready
+}
+
 type Msg struct {
 	Id       int
-	Dst, Src *memberlist.Node
+	Dst, Src *Node
 	Body     []byte
 }
 
-func NewMsg(dest *memberlist.Node, payload gob.GobEncoder) (*Msg, error) {
+func NewMsgGob(dest *Node, payload gob.GobEncoder) (*Msg, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(payload); err != nil {
@@ -173,53 +430,114 @@ func (l *logger) Write(b []byte) (int, error) {
 	return len(s), nil
 }
 
-// memberlist.Delegate interface
-type delegate struct {
-	rcvChs    []chan *Msg
-	chgNotify []chan bool
-	meta      []byte
+type DistDatum interface {
+
+	// Id should return an integer that uniquely identifies
+	// this thing.
+	Id() int64
+
+	Relinquish() error
 }
 
-func (d *delegate) NodeMeta(limit int) []byte {
-	return d.meta
+func (c *Cluster) NodeForDistDatum(dd DistDatum) *Node {
+	c.RLock()
+	defer c.RUnlock()
+	if dde, ok := c.dds[dd.Id()]; ok {
+		return dde.node
+	}
+	return nil
 }
 
-func (d *delegate) NotifyMsg(b []byte) {
+func (c *Cluster) Transition(timeout time.Duration) error {
+	var wg sync.WaitGroup
 
-	m := &Msg{}
-	if err := gob.NewDecoder(flate.NewReader(bytes.NewBuffer(b))).Decode(m); err != nil {
-		log.Printf("NotifyMsg(): error decoding: %#v", err)
+	c.Lock()
+	defer c.Unlock()
+	log.Printf("Transition(): Starting...")
+
+	readyNodes, err := c.readyNodes()
+	if err != nil {
+		return err
 	}
 
-	if m.Id < len(d.rcvChs) {
-		d.rcvChs[m.Id] <- m
-	} else {
-		log.Printf("NotifyMsg(): unknown msg Id: %d, dropping message", m.Id)
+	waitIds := make(map[int64]bool)
+
+	for id, dde := range c.dds {
+		wg.Add(1)
+		go func(id int64, dde *ddEntry) {
+			defer wg.Done()
+			newNode := selectNode(readyNodes, id)
+			if newNode == nil || dde.node.Name() != newNode.Name() {
+				ln := c.LocalNode()
+				if ln.Name() == dde.node.Name() { // we are the ex-node
+					if newNode != nil {
+						log.Printf("Transition(): Id %d is moving away to node %s", id, newNode.Name())
+					}
+					if err = c.dds[id].dd.Relinquish(); err != nil {
+						log.Printf("Transition(): Warning: Relinquish() failed for id %d", id)
+					} else {
+						// Notify of Relinquish completion
+						body := make([]byte, binary.MaxVarintLen64)
+						binary.PutVarint(body, dde.dd.Id())
+						m := &Msg{Body: []byte(body)}
+						log.Printf("Transition(): Broadcasting relinquish of id %d", id)
+						c.bsnd <- m
+					}
+				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
+					log.Printf("Transition(): Id %d is moving to this node from node %s", id, dde.node.Name())
+					// Add to the list of ids to wait on, but only if there existed nodes
+					if dde.node.Name() != "<nil>" {
+						waitIds[id] = true
+					}
+				}
+			}
+			dde.node = newNode // Assign the correct node in the end
+		}(id, dde)
 	}
-}
 
-func (d *delegate) GetBroadcasts(overhead, limit int) [][]byte {
-	return [][]byte{}
-}
+	// Wait for this phase to finish
+	wg.Wait()
 
-func (d *delegate) LocalState(join bool) []byte {
-	return []byte{}
-}
+	// Now wait on the reqinquishes
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 
-func (d *delegate) MergeRemoteState(buf []byte, join bool) {}
+		log.Printf("Transition(): Waiting on %d relinquish broadcasts... (timeout %v)", len(waitIds), timeout)
 
-func (d *delegate) NotifyJoin(n *memberlist.Node) {
-	d.notifyAll()
-}
-func (d *delegate) NotifyLeave(n *memberlist.Node) {
-	d.notifyAll()
-}
-func (d *delegate) NotifyUpdate(n *memberlist.Node) {}
+		tmout := make(chan bool, 1)
+		go func() {
+			time.Sleep(timeout)
+			tmout <- true
+		}()
 
-func (d *delegate) notifyAll() {
-	for _, ch := range d.chgNotify {
-		if len(ch) < cap(ch) {
-			ch <- true
+		for {
+			if len(waitIds) == 0 {
+				return
+			}
+
+			var m *Msg
+			select {
+			case m = <-c.brcv:
+			case <-tmout:
+				log.Printf("Transition(): WARNING: Relinquish wait timeout! Continuing. Some data is likely lost.")
+				return
+			}
+
+			if id, err := binary.ReadVarint(bytes.NewReader(m.Body)); err == nil {
+				log.Printf("Transition(): Got relinquish broadcast for id %d.", id)
+				delete(waitIds, id)
+			} else {
+				log.Printf("Transition(): WARNING: Error decoding broadcast: %v", err)
+			}
+			if len(waitIds) > 0 {
+				log.Printf("Transition(): Still waiting on %d relinquish broadcasts...", len(waitIds))
+			}
 		}
-	}
+
+	}()
+
+	wg.Wait()
+	log.Printf("Transition(): Complete!")
+	return nil
 }
