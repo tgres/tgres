@@ -42,6 +42,8 @@ type ddEntry struct {
 	node *Node
 }
 
+// Cluster is based on Memberlist and adds some functionality on top
+// of it such as the notion of a node being "ready".
 type Cluster struct {
 	*memberlist.Memberlist
 	sync.RWMutex
@@ -53,10 +55,17 @@ type Cluster struct {
 	bsnd, brcv chan *Msg // dds messages
 }
 
+// NewCluster creates a new Cluster with reasonable defaults.
 func NewCluster() (*Cluster, error) {
 	return NewClusterBind("", 0, "", 0, "")
 }
 
+// NewClusterBind creates a new Cluster while allowing for
+// specification of the address/port to bind to, the address/port to
+// advertize to the other nodes (use zero values for default) as well
+// as the hostname. (This is useful if your app is running in a Docker
+// container where it is impossible to figure out the outside IP
+// addresses and the hostname can be the same).
 func NewClusterBind(baddr string, bport int, aaddr string, aport int, name string) (*Cluster, error) {
 	c := &Cluster{
 		rcvChs:    make([]chan *Msg, 0),
@@ -97,7 +106,8 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 	return c, nil
 }
 
-// readyNodes will never return an empty list, it's an error
+// readyNodes get a list of nodes and returns only the ones that are
+// ready.
 func (c *Cluster) readyNodes() ([]*Node, error) {
 	nodes, err := c.SortedNodes()
 	if err != nil {
@@ -112,6 +122,8 @@ func (c *Cluster) readyNodes() ([]*Node, error) {
 	return readyNodes, nil
 }
 
+// selectNode uses a simple module to assign a node given an integer
+// id.
 func selectNode(nodes []*Node, id int64) *Node {
 	if len(nodes) == 0 {
 		return nil
@@ -119,6 +131,12 @@ func selectNode(nodes []*Node, id int64) *Node {
 	return nodes[int(id)%len(nodes)]
 }
 
+// LoadDistData will trigger a load of DistDatum's. Its argument is a
+// function which performs the actual load and returns the list, while
+// also providing the data to the application in whatever way is
+// needed by the user-side. This action has to be triggered from the
+// user-side. You should LoadDistData prior to marking your node as
+// ready.
 func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	dds, err := f()
 	if err != nil {
@@ -141,18 +159,21 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	return nil
 }
 
+// Join joins a cluster given at least one node address/port. NB: You
+// can always join yourself if this is a cluster of one node.
 func (c *Cluster) Join(existing []string) error {
-	// NB: You can always join yourself
 	if n, err := c.Memberlist.Join(existing); n <= 0 {
 		return err
 	}
 	return nil
 }
 
+// LocalNode returns a pointer to the local node.
 func (c *Cluster) LocalNode() *Node {
 	return &Node{Node: c.Memberlist.LocalNode()}
 }
 
+// Members lists cluster members (ready or not).
 func (c *Cluster) Members() []*Node {
 	nn := c.Memberlist.Members()
 	result := make([]*Node, len(nn))
@@ -198,6 +219,8 @@ type broadcast struct {
 	msg []byte
 }
 
+// Implement the memberlist.Broadcast interface
+
 func (b *broadcast) Invalidates(bc memberlist.Broadcast) bool {
 	return false
 }
@@ -209,6 +232,14 @@ func (b *broadcast) Message() []byte {
 func (b *broadcast) Finished() {
 }
 
+// RegisterMsgType makes sending messages across nodes simpler. It
+// returns two channels, one to send the other to receive a *Msg
+// structure. The nodes of the cluster must call RegisterMsgType in
+// exact same order because that is what determines the internal
+// message id and the channel to which it will be passed. If the bcast
+// argument is true, the messages will be broadcast to all other
+// nodes, otherwise the message is sent to the destination specified
+// in Msg.Dst. Messages are compressed using flate.
 func (c *Cluster) RegisterMsgType(bcast bool) (snd, rcv chan *Msg) {
 
 	snd, rcv = make(chan *Msg, 16), make(chan *Msg, 16)
@@ -232,12 +263,16 @@ func (c *Cluster) RegisterMsgType(bcast bool) (snd, rcv chan *Msg) {
 	return snd, rcv
 }
 
+// NotifyClusterChanges returns a bool channel which will be sent true
+// any time a cluster change happens (nodes join or leave, or node
+// metadata changes).
 func (c *Cluster) NotifyClusterChanges() chan bool {
 	ch := make(chan bool, 1)
 	c.chgNotify = append(c.chgNotify, ch)
 	return ch
 }
 
+// This is what we store in Node metadata
 type nodeMeta struct {
 	ready  bool
 	sortBy int64
@@ -262,6 +297,9 @@ func (c *Cluster) saveMeta(md *nodeMeta) {
 	c.meta = meta
 }
 
+// Meta() will return the user part of the node metadata. (Cluster
+// uses the beginning bytes to store its internal stuff such as the
+// ready status of a node, trailed by user part).
 func (n *Node) Meta() ([]byte, error) {
 	var md *nodeMeta
 	var err error
@@ -271,6 +309,7 @@ func (n *Node) Meta() ([]byte, error) {
 	return md.user, nil
 }
 
+// Name returns the node name or "<nil>" if the pointer is nil.
 func (n *Node) Name() string {
 	// nil-resistant Name getter
 	if n == nil {
@@ -279,6 +318,8 @@ func (n *Node) Name() string {
 	return n.Node.Name
 }
 
+// Sets the metadata and broadcasts an UpdateNode message to the
+// cluster.
 func (c *Cluster) SetMetaData(b []byte) error {
 	// To set it, we must first get it.
 	md, err := c.LocalNode().extractMeta()
@@ -362,6 +403,8 @@ func (n *Node) extractMeta() (*nodeMeta, error) {
 	return md, nil
 }
 
+// Ready sets the Node status in the metadata and broadcasts a change
+// notification to the cluster.
 func (c *Cluster) Ready(status bool) error {
 	md, err := c.extractMeta()
 	if err != nil {
@@ -376,6 +419,7 @@ func (c *Cluster) Ready(status bool) error {
 	return nil
 }
 
+// Ready returns the status of a node.
 func (n *Node) Ready() bool {
 	md, err := n.extractMeta()
 	if err != nil {
@@ -384,12 +428,16 @@ func (n *Node) Ready() bool {
 	return md.ready
 }
 
+// Msg is the structure that should be passed to channels returned by
+// c.RegisterMsgType().
 type Msg struct {
 	Id       int
 	Dst, Src *Node
 	Body     []byte
 }
 
+// NewMsgGob creates a Msg from a payload which implements
+// gob.GobEncoder.
 func NewMsgGob(dest *Node, payload gob.GobEncoder) (*Msg, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -399,6 +447,7 @@ func NewMsgGob(dest *Node, payload gob.GobEncoder) (*Msg, error) {
 	return &Msg{Dst: dest, Body: buf.Bytes()}, nil
 }
 
+// represent out message as bytes
 func (m *Msg) bytes() []byte {
 	var buf bytes.Buffer
 	z, _ := flate.NewWriter(&buf, -1)
@@ -411,6 +460,7 @@ func (m *Msg) bytes() []byte {
 	return buf.Bytes()
 }
 
+// implement gob.GobDecoder interface.
 func (m *Msg) Decode(dst interface{}) error {
 	if err := gob.NewDecoder(bytes.NewBuffer(m.Body)).Decode(dst); err != nil {
 		log.Printf("Msg.Decode() decoding error: %v", err)
@@ -430,15 +480,22 @@ func (l *logger) Write(b []byte) (int, error) {
 	return len(s), nil
 }
 
+// DistDatum is an interface for a piece of data distributed across
+// the cluster. More preciesely, each DistDatum belongs to a node, and
+// nodes are responsible for forwarding requests to the responsible
+// node.
 type DistDatum interface {
-
-	// Id should return an integer that uniquely identifies
-	// this thing.
+	// Id returns an integer that uniquely identifies this datum.
 	Id() int64
-
+	// Reqlinquish is a chance to persist the data before the datum
+	// can be assigned to another node. On a cluater change that
+	// requires a reassignment, the receiving node will wait for the
+	// Relinquish operation to complete (up to a configurable
+	// timeout).
 	Relinquish() error
 }
 
+// NodeForDistDatum return the node responsible for this DistDatum.
 func (c *Cluster) NodeForDistDatum(dd DistDatum) *Node {
 	c.RLock()
 	defer c.RUnlock()
@@ -448,6 +505,14 @@ func (c *Cluster) NodeForDistDatum(dd DistDatum) *Node {
 	return nil
 }
 
+// Transition() provides the transition on cluster
+// changes. Transitions should be triggered by user-land after
+// receiving a cluster change event from a channel returned by
+// NotifyClusterChanges(). The transition will call Relinquish() on
+// all DistDatums that are transferring to other nodes and wait for
+// confirmation of Relinquish() from other nodes for DistDatums
+// transferring to this node. Generally a node should be buffering all
+// the data it receives during a transition.
 func (c *Cluster) Transition(timeout time.Duration) error {
 	var wg sync.WaitGroup
 
