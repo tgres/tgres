@@ -72,7 +72,8 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 		chgNotify: make([]chan bool, 0),
 		dds:       make(map[int64]*ddEntry)}
 	c.bcastq = &memberlist.TransmitLimitedQueue{NumNodes: func() int { return c.NumMembers() }}
-	cfg := memberlist.DefaultLocalConfig()
+	cfg := memberlist.DefaultLANConfig()
+	cfg.PushPullInterval = 15 * time.Second
 	if baddr != "" {
 		cfg.BindAddr = baddr
 	}
@@ -186,13 +187,13 @@ func (c *Cluster) Members() []*Node {
 // SortedNodes returns nodes ordered by process start time
 func (c *Cluster) SortedNodes() ([]*Node, error) {
 	ms := c.Members()
-	sn := sortableNodes{ms, make([]int64, len(ms))}
+	sn := sortableNodes{ms, make([]string, len(ms))}
 	for i, _ := range sn.nl {
 		md, err := sn.nl[i].extractMeta()
 		if err != nil {
 			return nil, err
 		}
-		sn.sortBy[i] = md.sortBy
+		sn.sortBy[i] = fmt.Sprintf("%d:%s", md.sortBy, sn.nl[i].Name()) // mix in Name for uniqueness
 	}
 	sort.Sort(sn)
 	return sn.nl, nil
@@ -200,7 +201,7 @@ func (c *Cluster) SortedNodes() ([]*Node, error) {
 
 type sortableNodes struct {
 	nl     []*Node
-	sortBy []int64
+	sortBy []string
 }
 
 func (sn sortableNodes) Len() int {
@@ -213,6 +214,7 @@ func (sn sortableNodes) Less(i, j int) bool {
 
 func (sn sortableNodes) Swap(i, j int) {
 	sn.nl[i], sn.nl[j] = sn.nl[j], sn.nl[i]
+	sn.sortBy[i], sn.sortBy[j] = sn.sortBy[j], sn.sortBy[i]
 }
 
 type broadcast struct {
