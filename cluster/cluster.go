@@ -568,7 +568,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 	go func() {
 		defer wg.Done()
 
-		log.Printf("Transition(): Waiting on %d relinquish broadcasts... (timeout %v)", len(waitIds), timeout)
+		log.Printf("Transition(): Waiting on %d relinquish broadcasts... (timeout %v) %v", len(waitIds), timeout, waitIds)
 
 		tmout := make(chan bool, 1)
 		go func() {
@@ -596,7 +596,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 				log.Printf("Transition(): WARNING: Error decoding broadcast: %v", err)
 			}
 			if len(waitIds) > 0 {
-				log.Printf("Transition(): Still waiting on %d relinquish broadcasts...", len(waitIds))
+				log.Printf("Transition(): Still waiting on %d relinquish broadcasts: %v", len(waitIds), waitIds)
 			}
 		}
 
