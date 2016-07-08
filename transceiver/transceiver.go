@@ -40,7 +40,7 @@ type Transceiver struct {
 	dss                                *rrd.DataSources
 	dpCh                               chan *rrd.DataPoint    // incoming data point
 	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
-	flusherChs                         []chan *rrd.DataSource // ds to flush
+	flusherChs                         []chan *dsFlushRequest // ds to flush
 	dsCopyChs                          []chan *dsCopyRequest  // request a copy of a DS (used by HTTP)
 	stCh                               chan *statsd.Stat      // incoming statd stats
 	workerWg                           sync.WaitGroup
@@ -48,6 +48,11 @@ type Transceiver struct {
 	statWg                             sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
+}
+
+type dsFlushRequest struct {
+	ds   *rrd.DataSource
+	resp chan bool
 }
 
 type dsCopyRequest struct {
@@ -299,13 +304,13 @@ func (t *Transceiver) worker(id int64) {
 					continue
 				} else if flushEverything || ds.ShouldBeFlushed(t.MaxCachedPoints,
 					t.MinCacheDuration, t.MaxCacheDuration) {
-					t.flushDs(ds)
+					t.flushDs(ds, false)
 					delete(recent, ds.Id)
 				}
 			}
 		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
 			// flush just this one ds
-			t.flushDs(ds)
+			t.flushDs(ds, false)
 			delete(recent, ds.Id)
 		}
 
@@ -315,8 +320,15 @@ func (t *Transceiver) worker(id int64) {
 	}
 }
 
-func (t *Transceiver) flushDs(ds *rrd.DataSource) {
-	t.flusherChs[ds.Id%int64(t.NWorkers)] <- ds.MostlyCopy()
+func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
+	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
+	if block {
+		fr.resp = make(chan bool, 1)
+	}
+	t.flusherChs[ds.Id%int64(t.NWorkers)] <- fr
+	if block {
+		<-fr.resp
+	}
 	ds.LastFlushRT = time.Now()
 	ds.ClearRRAs()
 }
@@ -345,10 +357,15 @@ func (t *Transceiver) flusher(id int64) {
 	t.startWg.Done()
 
 	for {
-		ds, ok := <-t.flusherChs[id]
+		fr, ok := <-t.flusherChs[id]
 		if ok {
-			if err := t.serde.FlushDataSource(ds); err != nil {
-				log.Printf("flusher(%d): error flushing data source %v: %v", id, ds, err)
+			if err := t.serde.FlushDataSource(fr.ds); err != nil {
+				log.Printf("flusher(%d): error flushing data source %v: %v", id, fr.ds, err)
+				if fr.resp != nil {
+					fr.resp <- false
+				}
+			} else if fr.resp != nil {
+				fr.resp <- true
 			}
 		} else {
 			log.Printf("flusher(%d): channel closed, exiting", id)
@@ -360,12 +377,12 @@ func (t *Transceiver) flusher(id int64) {
 
 func (t *Transceiver) startFlushers() {
 
-	t.flusherChs = make([]chan *rrd.DataSource, t.NWorkers)
+	t.flusherChs = make([]chan *dsFlushRequest, t.NWorkers)
 
 	log.Printf("Starting %d flushers...", t.NWorkers)
 	t.startWg.Add(t.NWorkers)
 	for i := 0; i < t.NWorkers; i++ {
-		t.flusherChs[i] = make(chan *rrd.DataSource)
+		t.flusherChs[i] = make(chan *dsFlushRequest)
 		go t.flusher(int64(i))
 	}
 }
