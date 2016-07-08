@@ -47,12 +47,12 @@ type ddEntry struct {
 type Cluster struct {
 	*memberlist.Memberlist
 	sync.RWMutex
-	rcvChs     []chan *Msg
-	chgNotify  []chan bool
-	meta       []byte
-	bcastq     *memberlist.TransmitLimitedQueue
-	dds        map[int64]*ddEntry
-	bsnd, brcv chan *Msg // dds messages
+	rcvChs    []chan *Msg
+	chgNotify []chan bool
+	meta      []byte
+	bcastq    *memberlist.TransmitLimitedQueue
+	dds       map[int64]*ddEntry
+	snd, rcv  chan *Msg // dds messages
 }
 
 // NewCluster creates a new Cluster with reasonable defaults.
@@ -102,7 +102,7 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 		return nil, err
 	}
 
-	c.bsnd, c.brcv = c.RegisterMsgType(true)
+	c.snd, c.rcv = c.RegisterMsgType(false)
 
 	return c, nil
 }
@@ -543,12 +543,12 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					if err = c.dds[id].dd.Relinquish(); err != nil {
 						log.Printf("Transition(): Warning: Relinquish() failed for id %d", id)
 					} else {
-						// Notify of Relinquish completion
+						// Notify the new node expecting this dd of Relinquish completion
 						body := make([]byte, binary.MaxVarintLen64)
 						binary.PutVarint(body, dde.dd.Id())
-						m := &Msg{Body: []byte(body)}
-						log.Printf("Transition(): Broadcasting relinquish of id %d", id)
-						c.bsnd <- m
+						m := &Msg{Dst: newNode, Body: []byte(body)}
+						log.Printf("Transition(): Sending relinquish of id %d to node %s", id, newNode.Name())
+						c.snd <- m
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
 					log.Printf("Transition(): Id %d is moving to this node from node %s", id, dde.node.Name())
@@ -570,7 +570,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 	go func() {
 		defer wg.Done()
 
-		log.Printf("Transition(): Waiting on %d relinquish broadcasts... (timeout %v) %v", len(waitIds), timeout, waitIds)
+		log.Printf("Transition(): Waiting on %d relinquish messages... (timeout %v) %v", len(waitIds), timeout, waitIds)
 
 		tmout := make(chan bool, 1)
 		go func() {
@@ -585,20 +585,20 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 
 			var m *Msg
 			select {
-			case m = <-c.brcv:
+			case m = <-c.rcv:
 			case <-tmout:
 				log.Printf("Transition(): WARNING: Relinquish wait timeout! Continuing. Some data is likely lost.")
 				return
 			}
 
 			if id, err := binary.ReadVarint(bytes.NewReader(m.Body)); err == nil {
-				log.Printf("Transition(): Got relinquish broadcast for id %d.", id)
+				log.Printf("Transition(): Got relinquish message for id %d from %s.", id, m.Src.Name())
 				delete(waitIds, id)
 			} else {
-				log.Printf("Transition(): WARNING: Error decoding broadcast: %v", err)
+				log.Printf("Transition(): WARNING: Error decoding message from %s: %v", m.Src.Name(), err)
 			}
 			if len(waitIds) > 0 {
-				log.Printf("Transition(): Still waiting on %d relinquish broadcasts: %v", len(waitIds), waitIds)
+				log.Printf("Transition(): Still waiting on %d relinquish messages: %v", len(waitIds), waitIds)
 			}
 		}
 
