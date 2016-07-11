@@ -16,6 +16,7 @@
 package transceiver
 
 import (
+	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/statsd"
 	"log"
@@ -30,6 +31,7 @@ type MatchingDSSpecFinder interface {
 }
 
 type Transceiver struct {
+	cluster                            *cluster.Cluster
 	serde                              rrd.SerDe
 	NWorkers                           int
 	MaxCacheDuration, MinCacheDuration time.Duration
@@ -91,8 +93,9 @@ func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	}
 }
 
-func New(serde rrd.SerDe) *Transceiver {
+func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 	return &Transceiver{
+		cluster:           clstr,
 		serde:             serde,
 		NWorkers:          4,
 		MaxCacheDuration:  5 * time.Second,
@@ -200,7 +203,7 @@ func (t *Transceiver) dispatcher() {
 		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
 			// DS does not exist, can we create it?
 			if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
-				if ds, err := t.serde.CreateDataSource(dp.Name, dsSpec); err == nil {
+				if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
 					t.dss.Insert(ds)
 					dp.DS = ds
 				} else {
@@ -508,4 +511,21 @@ func (t *Transceiver) statWorker() {
 
 func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
 	return t.dss.FsFind(pattern)
+}
+
+// Implement cluster.DistDatum
+
+type distDatum struct {
+	t  *Transceiver
+	ds *rrd.DataSource
+}
+
+func (d *distDatum) Reqlinquish() error {
+	d.t.flushDs(d.ds, true)
+	d.t.dss.Delete(d.ds)
+	return nil
+}
+
+func (d *distDatum) Id() int64 {
+	return d.ds.Id
 }

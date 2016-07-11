@@ -53,6 +53,7 @@ type Cluster struct {
 	bcastq    *memberlist.TransmitLimitedQueue
 	dds       map[int64]*ddEntry
 	snd, rcv  chan *Msg // dds messages
+	lastId    int64
 }
 
 // NewCluster creates a new Cluster with reasonable defaults.
@@ -149,13 +150,15 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 		return err
 	}
 
-	ddes := make(map[int64]*ddEntry)
-	for _, dd := range dds {
-		ddes[dd.Id()] = &ddEntry{dd: dd, node: selectNode(readyNodes, dd.Id())}
-	}
-
 	c.Lock()
-	c.dds = ddes
+	for _, dd := range dds {
+		if dd.Id() == 0 {
+			c.lastId++
+			c.dds[c.lastId] = &ddEntry{dd: dd, node: selectNode(readyNodes, dd.Id(c.lastId))}
+		} else {
+			// There is nothing to do - we already have this id and its node.
+		}
+	}
 	c.Unlock()
 	return nil
 }
@@ -487,8 +490,10 @@ func (l *logger) Write(b []byte) (int, error) {
 // nodes are responsible for forwarding requests to the responsible
 // node.
 type DistDatum interface {
-	// Id returns an integer that uniquely identifies this datum.
-	Id() int64
+	// Id returns an integer that uniquely identifies this datum. The
+	// id must originally have been provided by Cluster. If the datum
+	// doesn't have an id yet, it should return 0.
+	Id(ids ...int64) int64
 	// Reqlinquish is a chance to persist the data before the datum
 	// can be assigned to another node. On a cluater change that
 	// requires a reassignment, the receiving node will wait for the
@@ -497,7 +502,11 @@ type DistDatum interface {
 	Relinquish() error
 }
 
-// NodeForDistDatum return the node responsible for this DistDatum.
+// NodeForDistDatum return the node responsible for this
+// DistDatum. The nodes are cached, the call doesn't compute
+// anything. The idea is that a NodeForDistDatum() should be pretty
+// fast so that you can call it a lot, e.g. for every incoming data
+// point.
 func (c *Cluster) NodeForDistDatum(dd DistDatum) *Node {
 	c.RLock()
 	defer c.RUnlock()
@@ -529,37 +538,37 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 
 	waitIds := make(map[int64]bool)
 
-	for id, dde := range c.dds {
+	for _, dde := range c.dds {
 		wg.Add(1)
-		go func(id int64, dde *ddEntry) {
+		go func(dde *ddEntry) {
 			defer wg.Done()
-			newNode := selectNode(readyNodes, id)
+			newNode := selectNode(readyNodes, dde.dd.Id())
 			if newNode == nil || dde.node.Name() != newNode.Name() {
 				ln := c.LocalNode()
 				if ln.Name() == dde.node.Name() { // we are the ex-node
 					if newNode != nil {
-						log.Printf("Transition(): Id %d is moving away to node %s", id, newNode.Name())
+						log.Printf("Transition(): Id %d is moving away to node %s", dde.dd.Id(), newNode.Name())
 					}
-					if err = c.dds[id].dd.Relinquish(); err != nil {
-						log.Printf("Transition(): Warning: Relinquish() failed for id %d", id)
+					if err = dde.dd.Relinquish(); err != nil {
+						log.Printf("Transition(): Warning: Relinquish() failed for id %d", dde.dd.Id())
 					} else {
 						// Notify the new node expecting this dd of Relinquish completion
 						body := make([]byte, binary.MaxVarintLen64)
 						binary.PutVarint(body, dde.dd.Id())
 						m := &Msg{Dst: newNode, Body: []byte(body)}
-						log.Printf("Transition(): Sending relinquish of id %d to node %s", id, newNode.Name())
+						log.Printf("Transition(): Sending relinquish of id %d to node %s", dde.dd.Id(), newNode.Name())
 						c.snd <- m
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
-					log.Printf("Transition(): Id %d is moving to this node from node %s", id, dde.node.Name())
+					log.Printf("Transition(): Id %d is moving to this node from node %s", dde.dd.Id(), dde.node.Name())
 					// Add to the list of ids to wait on, but only if there existed nodes
 					if dde.node.Name() != "<nil>" {
-						waitIds[id] = true
+						waitIds[dde.dd.Id()] = true // ZZZ this is a problem for non-unique ids
 					}
 				}
 			}
 			dde.node = newNode // Assign the correct node in the end
-		}(id, dde)
+		}(dde)
 	}
 
 	// Wait for this phase to finish

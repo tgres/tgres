@@ -23,7 +23,6 @@ import (
 	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -71,7 +70,9 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
+	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
+		// PG 9.5 required. NB: DO NOTHING causes RETURNING to return nothing, so we're using this dummy UPDATE to work around.
+		"ON CONFLICT (name) DO UPDATE SET step_ms = ds.step_ms "+
 		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms", p.prefix)); err != nil {
 		return err
 	}
@@ -467,44 +468,31 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	return &rra, err
 }
 
-func (p *pgSerDe) FetchDataSources() (map[string]*rrd.DataSource, map[int64]*rrd.DataSource, map[string]bool, error) {
+func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
 		log.Printf("fetchDataSources(): error querying database: %v", err)
-		return nil, nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
 
-	byName := make(map[string]*rrd.DataSource)
-	byId := make(map[int64]*rrd.DataSource)
-	prefixes := make(map[string]bool)
+	result := make([]*rrd.DataSource, 0)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds.Id)
 		if err != nil {
 			log.Printf("fetchDataSources(): error fetching RRAs: %v", err)
-			return nil, nil, nil, err
+			return nil, err
 		} else {
 			ds.RRAs = rras
 		}
-
-		// TODO this replicated functionality in dss.insert()
-
-		byName[ds.Name] = ds
-		byId[ds.Id] = ds
-
-		prefix := ds.Name
-		for ext := filepath.Ext(prefix); ext != ""; {
-			prefix = ds.Name[0 : len(prefix)-len(ext)]
-			prefixes[prefix] = true
-			ext = filepath.Ext(prefix)
-		}
+		result = append(result, ds)
 	}
 
-	return byName, byId, prefixes, nil
+	return result, nil
 }
 
 func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive, error) {
@@ -639,7 +627,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	return nil
 }
 
-func (p *pgSerDe) CreateDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error) {
+func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error) {
 	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("createDataSources(): error querying database: %v", err)

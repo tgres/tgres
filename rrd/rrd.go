@@ -17,6 +17,8 @@
 package rrd
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -52,6 +54,38 @@ type DataPoint struct {
 
 func (dp *DataPoint) Process() error {
 	return dp.DS.processDataPoint(dp)
+}
+
+func (dp *DataPoint) GobEncode() ([]byte, error) {
+	buf := bytes.Buffer{}
+	enc := gob.NewEncoder(&buf)
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	check(enc.Encode(dp.Name))
+	check(enc.Encode(dp.TimeStamp))
+	check(enc.Encode(dp.Value))
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (dp *DataPoint) GobDecode(b []byte) error {
+	dec := gob.NewDecoder(bytes.NewBuffer(b))
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	check(dec.Decode(&dp.Name))
+	check(dec.Decode(&dp.TimeStamp))
+	check(dec.Decode(&dp.Value))
+	return err
 }
 
 // When a DP arrives in-between PDP boundary, there is state we need
@@ -97,10 +131,10 @@ type RoundRobinArchive struct {
 // This thing knows how to load/save series in some storage
 
 type SerDe interface {
-	// Create a DS, and return it
-	CreateDataSource(name string, dsSpec *DSSpec) (*DataSource, error)
+	// Create a DS with name, and/or return it
+	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*DataSource, error)
 	// Fetch a list of data sources from the storage
-	FetchDataSources() (map[string]*DataSource, map[int64]*DataSource, map[string]bool, error)
+	FetchDataSources() ([]*DataSource, error)
 	// Flush a DS
 	FlushDataSource(ds *DataSource) error
 	// Query
@@ -143,15 +177,28 @@ func (dss *DataSources) Insert(ds *DataSource) {
 	defer dss.Unlock()
 	dss.byName[ds.Name] = ds
 	dss.byId[ds.Id] = ds
+	dss.addPrefixes(ds.Name)
+}
 
-	// TODO this code is dupe of fetchDataSources()
-	prefix := ds.Name
+// Add prefixes given a name
+func (dss *DataSources) addPrefixes(name string) {
+	prefix := name
 	for ext := filepath.Ext(prefix); ext != ""; {
-		prefix = ds.Name[0 : len(prefix)-len(ext)]
+		prefix = name[0 : len(prefix)-len(ext)]
 		dss.prefixes[prefix] = true
 		ext = filepath.Ext(prefix)
 	}
 
+}
+
+// This only deletes it from memory, it is still in
+// the database.
+func (dss *DataSources) Delete(ds *DataSource) {
+	dss.Lock()
+	defer dss.Unlock()
+
+	delete(dss.byName, ds.Name)
+	delete(dss.byId, ds.Id)
 }
 
 type FsFindNode struct {
@@ -225,15 +272,20 @@ func (dss *DataSources) DsIdsFromIdent(ident string) map[string]int64 {
 
 func (dss *DataSources) Reload(serde SerDe) error {
 
-	by_name, by_id, prefixes, err := serde.FetchDataSources()
+	dsList, err := serde.FetchDataSources()
 	if err != nil {
 		return err
 	}
 
 	dss.Lock()
-	dss.byName = by_name
-	dss.byId = by_id
-	dss.prefixes = prefixes
+	dss.byName = make(map[string]*DataSource)
+	dss.byId = make(map[int64]*DataSource)
+	dss.prefixes = make(map[string]bool)
+	for _, ds := range dsList {
+		dss.byName[ds.Name] = ds
+		dss.byId[ds.Id] = ds
+		dss.addPrefixes(ds.Name)
+	}
 	dss.Unlock()
 
 	return nil
