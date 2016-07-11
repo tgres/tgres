@@ -38,8 +38,8 @@ func init() {
 const updateNodeTO = 30 * time.Second
 
 type ddEntry struct {
-	dd   DistDatum
-	node *Node
+	dd    DistDatum
+	nodes []*Node
 }
 
 // Cluster is based on Memberlist and adds some functionality on top
@@ -53,6 +53,7 @@ type Cluster struct {
 	bcastq    *memberlist.TransmitLimitedQueue
 	dds       map[int64]*ddEntry
 	snd, rcv  chan *Msg // dds messages
+	nodesPer  int
 	lastId    int64
 }
 
@@ -71,7 +72,8 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 	c := &Cluster{
 		rcvChs:    make([]chan *Msg, 0),
 		chgNotify: make([]chan bool, 0),
-		dds:       make(map[int64]*ddEntry)}
+		dds:       make(map[int64]*ddEntry),
+		nodesPer:  1}
 	c.bcastq = &memberlist.TransmitLimitedQueue{NumNodes: func() int { return c.NumMembers() }}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.PushPullInterval = 15 * time.Second
@@ -124,13 +126,17 @@ func (c *Cluster) readyNodes() ([]*Node, error) {
 	return readyNodes, nil
 }
 
-// selectNode uses a simple module to assign a node given an integer
+// selectNodes uses a simple module to assign a node given an integer
 // id.
-func selectNode(nodes []*Node, id int64) *Node {
+func selectNodes(nodes []*Node, id int64, n int) []*Node {
 	if len(nodes) == 0 {
 		return nil
 	}
-	return nodes[int(id)%len(nodes)]
+	result := make([]*Node, n)
+	for i := 0; i < n; i++ {
+		result[i] = nodes[(int(id)+i)%len(nodes)]
+	}
+	return result
 }
 
 // LoadDistData will trigger a load of DistDatum's. Its argument is a
@@ -154,7 +160,7 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	for _, dd := range dds {
 		if dd.Id() == 0 {
 			c.lastId++
-			c.dds[c.lastId] = &ddEntry{dd: dd, node: selectNode(readyNodes, dd.Id(c.lastId))}
+			c.dds[c.lastId] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(c.lastId), c.nodesPer)}
 		} else {
 			// There is nothing to do - we already have this id and its node.
 		}
@@ -502,16 +508,17 @@ type DistDatum interface {
 	Relinquish() error
 }
 
-// NodeForDistDatum return the node responsible for this
-// DistDatum. The nodes are cached, the call doesn't compute
-// anything. The idea is that a NodeForDistDatum() should be pretty
-// fast so that you can call it a lot, e.g. for every incoming data
-// point.
-func (c *Cluster) NodeForDistDatum(dd DistDatum) *Node {
+// NodesForDistDatum returns the nodes responsible for this
+// DistDatum. The first node is the one responsible for Relinquish(),
+// the rest are up to the user to decide. The nodes are cached, the
+// call doesn't compute anything. The idea is that a
+// NodesForDistDatum() should be pretty fast so that you can call it a
+// lot, e.g. for every incoming data point.
+func (c *Cluster) NodesForDistDatum(dd DistDatum) []*Node {
 	c.RLock()
 	defer c.RUnlock()
 	if dde, ok := c.dds[dd.Id()]; ok {
-		return dde.node
+		return dde.nodes
 	}
 	return nil
 }
@@ -542,10 +549,21 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		wg.Add(1)
 		go func(dde *ddEntry) {
 			defer wg.Done()
-			newNode := selectNode(readyNodes, dde.dd.Id())
-			if newNode == nil || dde.node.Name() != newNode.Name() {
+
+			// The idea is that the first node in the list is the
+			// "lead" responsible for saving the data. What happens
+			// with the rest is up to the userland to deal with.
+			var newNode, oldNode *Node
+			newNodes := selectNodes(readyNodes, dde.dd.Id(), c.nodesPer)
+			if len(newNodes) > 0 {
+				newNode = newNodes[0]
+			}
+			if len(dde.nodes) > 0 {
+				oldNode = dde.nodes[0]
+			}
+			if newNode == nil || oldNode.Name() != newNode.Name() {
 				ln := c.LocalNode()
-				if ln.Name() == dde.node.Name() { // we are the ex-node
+				if ln.Name() == oldNode.Name() { // we are the ex-node
 					if newNode != nil {
 						log.Printf("Transition(): Id %d is moving away to node %s", dde.dd.Id(), newNode.Name())
 					}
@@ -560,14 +578,14 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 						c.snd <- m
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
-					log.Printf("Transition(): Id %d is moving to this node from node %s", dde.dd.Id(), dde.node.Name())
+					log.Printf("Transition(): Id %d is moving to this node from node %s", dde.dd.Id(), oldNode.Name())
 					// Add to the list of ids to wait on, but only if there existed nodes
-					if dde.node.Name() != "<nil>" {
+					if oldNode.Name() != "<nil>" {
 						waitIds[dde.dd.Id()] = true // ZZZ this is a problem for non-unique ids
 					}
 				}
 			}
-			dde.node = newNode // Assign the correct node in the end
+			dde.nodes = newNodes // Assign the correct nodes in the end
 		}(dde)
 	}
 
