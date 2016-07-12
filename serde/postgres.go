@@ -102,6 +102,8 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        unknown_ms BIGINT NOT NULL DEFAULT 0);
 
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_ds_name ON %[1]sds (name);
+
        CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
        ds_id INT NOT NULL,
@@ -118,6 +120,8 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        rra_id INT NOT NULL,
        n INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
+
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra_rra_id_n ON %[1]sts (rra_id, n);
     `
 	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
@@ -165,30 +169,6 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 		rows.Close()
 	}
 
-	create_sql = `
-       CREATE UNIQUE INDEX idx_ds_name ON %[1]sds (name);
-    `
-	// There is no IF NOT EXISTS for CREATE INDEX until 9.5
-	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
-			return err
-		}
-	} else {
-		rows.Close()
-	}
-
-	create_sql = `
-       CREATE UNIQUE INDEX idx_rra_rra_id_n ON %[1]sts (rra_id, n);
-    `
-	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			log.Printf("ERROR: initial CREATE INDEX failed: %v", err)
-			return err
-		}
-	} else {
-		rows.Close()
-	}
 	return nil
 }
 
