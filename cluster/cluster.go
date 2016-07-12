@@ -53,7 +53,7 @@ type Cluster struct {
 	bcastq    *memberlist.TransmitLimitedQueue
 	dds       map[int64]*ddEntry
 	snd, rcv  chan *Msg // dds messages
-	nodesPer  int
+	copies    int
 	lastId    int64
 }
 
@@ -73,7 +73,7 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 		rcvChs:    make([]chan *Msg, 0),
 		chgNotify: make([]chan bool, 0),
 		dds:       make(map[int64]*ddEntry),
-		nodesPer:  1}
+		copies:    1}
 	c.bcastq = &memberlist.TransmitLimitedQueue{NumNodes: func() int { return c.NumMembers() }}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.PushPullInterval = 15 * time.Second
@@ -108,6 +108,17 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 	c.snd, c.rcv = c.RegisterMsgType(false)
 
 	return c, nil
+}
+
+// Set the number of copies of DistDatims that the Cluster will
+// keep. The default is 1. You can only set it while the cluster is
+// empty.
+func (c *Cluster) Copies(n ...int) int {
+	if len(n) > 0 && len(c.dds) == 0 {
+		// only allow setting copies when the cluster is still empty
+		c.copies = n[0]
+	}
+	return c.copies
 }
 
 // readyNodes get a list of nodes and returns only the ones that are
@@ -160,7 +171,7 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	for _, dd := range dds {
 		if dd.Id() == 0 {
 			c.lastId++
-			c.dds[c.lastId] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(c.lastId), c.nodesPer)}
+			c.dds[c.lastId] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(c.lastId), c.copies)}
 		} else {
 			// There is nothing to do - we already have this id and its node.
 		}
@@ -554,7 +565,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 			// "lead" responsible for saving the data. What happens
 			// with the rest is up to the userland to deal with.
 			var newNode, oldNode *Node
-			newNodes := selectNodes(readyNodes, dde.dd.Id(), c.nodesPer)
+			newNodes := selectNodes(readyNodes, dde.dd.Id(), c.copies)
 			if len(newNodes) > 0 {
 				newNode = newNodes[0]
 			}
