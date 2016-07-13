@@ -120,7 +120,6 @@ func (t *Transceiver) Start() error {
 		for n, ds := range t.dss.List() {
 			result[n] = &distDatum{t, ds}
 		}
-		log.Printf("ZZZ +++ returning result: %#v", result)
 		return result, nil
 	})
 
@@ -215,6 +214,31 @@ func (t *Transceiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
 
+	// Channel for event forwards to other nodes and us
+	snd, rcv := t.cluster.RegisterMsgType(false)
+	go func() {
+		defer func() { recover() }() // if we're writing to a closed channel below
+
+		for {
+			m := <-rcv
+
+			// To get an event back:
+			var dp rrd.DataPoint
+			if err := m.Decode(&dp); err != nil {
+				log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
+				continue
+			}
+
+			var maxHops = t.cluster.NumMembers() * 2 // This is kind of arbitrary
+			if dp.Hops > maxHops {
+				log.Printf("dispatcher(): dropping data point, max hops (%d) reached", maxHops)
+				continue
+			}
+
+			t.dpCh <- &dp // See recover above
+		}
+	}()
+
 	for {
 		dp, ok := <-t.dpCh
 
@@ -233,8 +257,22 @@ func (t *Transceiver) dispatcher() {
 			}
 		}
 
-		if dp.DS != nil {
-			t.workerChs[dp.DS.Id%int64(t.NWorkers)] <- dp
+		for _, node := range t.cluster.NodesForDistDatum(&distDatum{t, dp.DS}) {
+			if node.Name() == t.cluster.LocalNode().Name() {
+				t.workerChs[dp.DS.Id%int64(t.NWorkers)] <- dp // This dp is for us
+			} else if dp.Hops == 0 { // we do not forward more than once
+				if node.Ready() {
+					dp.Hops++
+					if msg, err := cluster.NewMsgGob(node, dp); err == nil {
+						snd <- msg
+					}
+				} else {
+					// This should be a very rare thing
+					log.Printf("dispatcher(): Returning the data point to dispatcher!")
+					time.Sleep(100 * time.Millisecond)
+					t.dpCh <- dp
+				}
+			}
 		}
 	}
 }

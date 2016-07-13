@@ -50,6 +50,7 @@ type DataPoint struct {
 	Name      string
 	TimeStamp time.Time
 	Value     float64
+	Hops      int
 }
 
 func (dp *DataPoint) Process() error {
@@ -68,6 +69,7 @@ func (dp *DataPoint) GobEncode() ([]byte, error) {
 	check(enc.Encode(dp.Name))
 	check(enc.Encode(dp.TimeStamp))
 	check(enc.Encode(dp.Value))
+	check(enc.Encode(dp.Hops))
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +87,7 @@ func (dp *DataPoint) GobDecode(b []byte) error {
 	check(dec.Decode(&dp.Name))
 	check(dec.Decode(&dp.TimeStamp))
 	check(dec.Decode(&dp.Value))
+	check(dec.Decode(&dp.Hops))
 	return err
 }
 
