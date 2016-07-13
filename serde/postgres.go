@@ -13,6 +13,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//
+// Data layout notes.
+//
+// So we store datapoints as an array, and we know the latest
+// timestamp. Every time we advance to the next point, so does the
+// latest timestamp. By knowing the latest timestamp and the size of
+// the array, we can identify which array element is last, it is:
+// slots_since_epoch % slots
+//
+// If we take a slot with a number slot_n, its distance from the
+// latest slot can be calculated by this formula:
+//
+// distance = (total_slots + last_slot_n - slot_n) % total_slots
+//
+// E.g. with total_slots 100, slot_n 55 and last_slot_n 50:
+//
+// (100 + 50 - 55) % 100 => 95
+//
+// This means that if we advance forward from 55 by 95 slots, which
+// means at step 45 we'll reach the end of the array, and start from
+// the beginning, we'll arrive at 50.
+//
+// Or with total_slots 100, slot_n 45 and last_slot_n 50:
+//
+// (100 + 50 - 45) % 100 => 5
+//
+
 package serde
 
 import (
@@ -76,11 +103,13 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
+	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
+		"ON CONFLICT (ds_id, cf, steps_per_row, size, xff) DO UPDATE SET ds_id = rra.ds_id "+
 		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2)", p.prefix)); err != nil {
+	if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2) ON CONFLICT(rra_id, n) DO NOTHING",
+		p.prefix)); err != nil {
 		return err
 	}
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5", p.prefix)); err != nil {
@@ -116,12 +145,14 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        unknown_ms BIGINT NOT NULL DEFAULT 0,
        latest TIMESTAMPTZ DEFAULT NULL);
 
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra_ds_id ON %[1]srra (ds_id, cf, steps_per_row, size, xff);
+
        CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_id INT NOT NULL,
        n INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra_rra_id_n ON %[1]sts (rra_id, n);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_ts_rra_id_n ON %[1]sts (rra_id, n);
     `
 	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
@@ -513,7 +544,6 @@ func dpsAsString(dps map[int64]float64, start, end int64) string {
 }
 
 func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
-
 	var n int64
 	rraSize := int64(rra.Size)
 	if int32(len(rra.DPs)) == rra.Size { // The whole thing
@@ -607,6 +637,17 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	return nil
 }
 
+// CreateOrReturnDataSource loads or returns an existing DS. This is
+// done by using upsertss first on the ds table, then for each
+// RRA. This method also attempt to create the TS empty rows with ON
+// CONFLICT DO NOTHING. (There is no reason to ever load TS data
+// because of the nature of an RRD - we accumulate data points and
+// surgically write them to the proper slots in the TS table).Since
+// PostgreSQL 9.5 introduced upserts and we changed CreateDataSource
+// to CreateOrReturnDataSource the code in this module is a little
+// functionally overlapping and should probably be re-worked,
+// e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
+// pre-inserting rows in ts here.
 func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error) {
 	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
@@ -653,33 +694,6 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 
 	return ds, nil
 }
-
-//
-// Data layout notes.
-//
-// So we store datapoints as an array, and we know the latest
-// timestamp. Every time we advance to the next point, so does the
-// latest timestamp. By knowing the latest timestamp and the size of
-// the array, we can identify which array element is last, it is:
-// slots_since_epoch % slots
-//
-// If we take a slot with a number slot_n, its distance from the
-// latest slot can be calculated by this formula:
-//
-// distance = (total_slots + last_slot_n - slot_n) % total_slots
-//
-// E.g. with total_slots 100, slot_n 55 and last_slot_n 50:
-//
-// (100 + 50 - 55) % 100 => 95
-//
-// This means that if we advance forward from 55 by 95 slots, which
-// means at step 45 we'll reach the end of the array, and start from
-// the beginning, we'll arrive at 50.
-//
-// Or with total_slots 100, slot_n 45 and last_slot_n 50:
-//
-// (100 + 50 - 45) % 100 => 5
-//
 
 func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
 

@@ -114,6 +114,16 @@ func (t *Transceiver) Start() error {
 	log.Printf("Transceiver: Loading data from serde.")
 	t.dss.Reload(t.serde)
 
+	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
+		dss := t.dss.List()
+		result := make([]cluster.DistDatum, len(dss))
+		for n, ds := range t.dss.List() {
+			result[n] = &distDatum{t, ds}
+		}
+		log.Printf("ZZZ +++ returning result: %#v", result)
+		return result, nil
+	})
+
 	t.startWorkers()
 	t.startFlushers()
 	t.startStatWorker()
@@ -185,6 +195,22 @@ func (t *Transceiver) stopStatWorker() {
 	log.Printf("stopStatWorker(): stat worker finished.")
 }
 
+func (t *Transceiver) createOrLoadDS(dp *rrd.DataPoint) error {
+	if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
+		if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
+			t.dss.Insert(ds)
+			// tell the cluster about it (TODO should Insert() do this?)
+			t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
+				return []cluster.DistDatum{&distDatum{t, ds}}, nil
+			})
+			dp.DS = ds
+		} else {
+			return err
+		}
+	}
+	return nil
+}
+
 func (t *Transceiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
@@ -201,15 +227,9 @@ func (t *Transceiver) dispatcher() {
 		}
 
 		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
-			// DS does not exist, can we create it?
-			if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
-				if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
-					t.dss.Insert(ds)
-					dp.DS = ds
-				} else {
-					log.Printf("dispatcher(): createDataSource() error: %v", err)
-					continue
-				}
+			if err := t.createOrLoadDS(dp); err != nil {
+				log.Printf("dispatcher(): createDataSource() error: %v", err)
+				continue
 			}
 		}
 
@@ -520,12 +540,15 @@ type distDatum struct {
 	ds *rrd.DataSource
 }
 
-func (d *distDatum) Reqlinquish() error {
+func (d *distDatum) Relinquish() error {
 	d.t.flushDs(d.ds, true)
 	d.t.dss.Delete(d.ds)
 	return nil
 }
 
-func (d *distDatum) Id() int64 {
-	return d.ds.Id
+func (d *distDatum) Id(id ...int64) int64 {
+	if len(id) > 0 {
+		d.ds.ClusterId = id[0]
+	}
+	return d.ds.ClusterId
 }

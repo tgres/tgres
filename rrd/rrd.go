@@ -103,6 +103,7 @@ type DataSource struct {
 	UnknownMs   int64
 	RRAs        []*RoundRobinArchive
 	LastFlushRT time.Time
+	ClusterId   int64
 }
 
 type DataSources struct {
@@ -178,6 +179,16 @@ func (dss *DataSources) Insert(ds *DataSource) {
 	dss.byName[ds.Name] = ds
 	dss.byId[ds.Id] = ds
 	dss.addPrefixes(ds.Name)
+}
+
+func (dss *DataSources) List() []*DataSource {
+	result := make([]*DataSource, len(dss.byId))
+	n := 0
+	for _, ds := range dss.byId {
+		result[n] = ds
+		n++
+	}
+	return result
 }
 
 // Add prefixes given a name

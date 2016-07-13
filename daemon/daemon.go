@@ -18,6 +18,7 @@ package daemon
 import (
 	"flag"
 	"fmt"
+	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/serde"
 	x "github.com/tgres/tgres/transceiver"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -37,18 +39,15 @@ var (
 	gracefulChildPid int
 )
 
-func parseFlags() (string, string) {
-
-	var (
-		textCfgPath, gracefulProtos string
-	)
+func parseFlags() (textCfgPath, gracefulProtos, join string) {
 
 	// Parse the flags, if any
 	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
+	flag.StringVar(&join, "join", "", "List of add:port,addr:port,... of nodes to join")
 	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
 	flag.Parse()
 
-	return textCfgPath, gracefulProtos
+	return
 }
 
 func savePid(PidPath string) {
@@ -68,7 +67,7 @@ func Init() { // not to be confused with init()
 	log.SetPrefix(fmt.Sprintf("[%d] ", os.Getpid()))
 	log.Printf("Tgres starting.")
 
-	cfgPath, gracefulProtos := parseFlags()
+	cfgPath, gracefulProtos, join := parseFlags()
 
 	// This creates the Cfg variable
 	if err := ReadConfig(cfgPath); err != nil {
@@ -95,8 +94,21 @@ func Init() { // not to be confused with init()
 
 	log.Printf("Initialized DB connection.")
 
+	c, _ := cluster.NewCluster()
+
+	// Join other nodes, if any
+	var ips []string
+	if join != "" {
+		log.Printf("Joining nodes: %s", join)
+		ips = strings.Split(join, ",")
+		if err := c.Join(ips); err != nil {
+			log.Printf("Unable to join any cluster members: %v", err)
+			return
+		}
+	}
+
 	// Create the transceiver
-	t := x.New(db)
+	t := x.New(c, db)
 	t.NWorkers = Cfg.Workers
 	t.MaxCacheDuration = Cfg.MaxCache.Duration
 	t.MinCacheDuration = Cfg.MinCache.Duration
