@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"github.com/hashicorp/memberlist"
 	"log"
+	"net"
+	"net/rpc"
 	"sort"
 	"strings"
 	"sync"
@@ -50,16 +52,17 @@ type Cluster struct {
 	rcvChs    []chan *Msg
 	chgNotify []chan bool
 	meta      []byte
-	bcastq    *memberlist.TransmitLimitedQueue
 	dds       map[int64]*ddEntry
 	snd, rcv  chan *Msg // dds messages
 	copies    int
 	lastId    int64
+	rpcPort   int
+	rpc       net.Listener
 }
 
 // NewCluster creates a new Cluster with reasonable defaults.
 func NewCluster() (*Cluster, error) {
-	return NewClusterBind("", 0, "", 0, "")
+	return NewClusterBind("", 0, "", 0, 0, "")
 }
 
 // NewClusterBind creates a new Cluster while allowing for
@@ -68,13 +71,12 @@ func NewCluster() (*Cluster, error) {
 // as the hostname. (This is useful if your app is running in a Docker
 // container where it is impossible to figure out the outside IP
 // addresses and the hostname can be the same).
-func NewClusterBind(baddr string, bport int, aaddr string, aport int, name string) (*Cluster, error) {
+func NewClusterBind(baddr string, bport int, aaddr string, aport int, rpcport int, name string) (*Cluster, error) {
 	c := &Cluster{
 		rcvChs:    make([]chan *Msg, 0),
 		chgNotify: make([]chan bool, 0),
 		dds:       make(map[int64]*ddEntry),
 		copies:    1}
-	c.bcastq = &memberlist.TransmitLimitedQueue{NumNodes: func() int { return c.NumMembers() }}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.PushPullInterval = 15 * time.Second
 	if baddr != "" {
@@ -105,9 +107,43 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, name strin
 		return nil, err
 	}
 
-	c.snd, c.rcv = c.RegisterMsgType(false)
+	if rpcport == 0 {
+		c.rpcPort = 12354
+	} else {
+		c.rpcPort = rpcport
+	}
+
+	c.snd, c.rcv = c.RegisterMsgType()
+
+	rpc.Register(&ClusterRPC{c})
+	if c.rpc, err = net.Listen("tcp", fmt.Sprintf("%s:%d", baddr, c.rpcPort)); err != nil {
+		return nil, err
+	}
+
+	// Serve RPC Requests
+	go func() {
+		for {
+			rpc.Accept(c.rpc)
+		}
+	}()
 
 	return c, nil
+}
+
+type ClusterRPC struct {
+	c *Cluster
+}
+
+func (rpc *ClusterRPC) Message(msg Msg, reply *Msg) error {
+
+	if msg.Id < len(rpc.c.rcvChs) {
+		rpc.c.rcvChs[msg.Id] <- &msg
+	} else {
+		log.Printf("Cluster.Message() (via RPC): unknown msg Id: %d, dropping message.", msg.Id)
+	}
+
+	*reply = Msg{Id: 495, Body: []byte("HELLO")}
+	return nil
 }
 
 // Set the number of copies of DistDatims that the Cluster will
@@ -237,32 +273,14 @@ func (sn sortableNodes) Swap(i, j int) {
 	sn.sortBy[i], sn.sortBy[j] = sn.sortBy[j], sn.sortBy[i]
 }
 
-type broadcast struct {
-	msg []byte
-}
-
-// Implement the memberlist.Broadcast interface
-
-func (b *broadcast) Invalidates(bc memberlist.Broadcast) bool {
-	return false
-}
-
-func (b *broadcast) Message() []byte {
-	return b.msg
-}
-
-func (b *broadcast) Finished() {
-}
-
 // RegisterMsgType makes sending messages across nodes simpler. It
 // returns two channels, one to send the other to receive a *Msg
 // structure. The nodes of the cluster must call RegisterMsgType in
 // exact same order because that is what determines the internal
-// message id and the channel to which it will be passed. If the bcast
-// argument is true, the messages will be broadcast to all other
-// nodes, otherwise the message is sent to the destination specified
-// in Msg.Dst. Messages are compressed using flate.
-func (c *Cluster) RegisterMsgType(bcast bool) (snd, rcv chan *Msg) {
+// message id and the channel to which it will be passed. The message
+// is sent to the destination specified in Msg.Dst. Messages are
+// compressed using flate.
+func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
 
 	snd, rcv = make(chan *Msg, 16), make(chan *Msg, 16)
 
@@ -272,13 +290,28 @@ func (c *Cluster) RegisterMsgType(bcast bool) (snd, rcv chan *Msg) {
 	go func(id int) {
 		for {
 			msg := <-snd
+
+			if msg.Dst == nil {
+				log.Printf("Cluster: cannot send message when Dst is not set, ignoring.")
+				continue
+			}
+
+			if msg.Dst.rpc == nil {
+				addr := fmt.Sprintf("%s:%d", msg.Dst.Addr, c.rpcPort)
+				log.Printf("Cluster: establishing RPC connection to node %s via %s", msg.Dst.Name(), addr)
+				conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+				if err != nil {
+					log.Printf("Cluster: cannot establish connection to %s: %v, dropping this message.", addr, err)
+					continue
+				}
+				msg.Dst.rpc = rpc.NewClient(conn)
+			}
+
 			msg.Src = c.LocalNode()
 			msg.Id = id
-			if bcast && c.NumMembers() > 1 {
-				c.bcastq.QueueBroadcast(&broadcast{msg.bytes()})
-			} else if msg.Dst != nil {
-				c.SendToTCP(msg.Dst.Node, msg.bytes())
-			}
+
+			var resp Msg
+			msg.Dst.rpc.Call("ClusterRPC.Message", msg, &resp)
 		}
 	}(id)
 
@@ -377,7 +410,7 @@ func (c *Cluster) NotifyMsg(b []byte) {
 }
 
 func (c *Cluster) GetBroadcasts(overhead, limit int) [][]byte {
-	return c.bcastq.GetBroadcasts(overhead, limit)
+	return nil
 }
 
 func (c *Cluster) LocalState(join bool) []byte            { return []byte{} }
@@ -406,6 +439,7 @@ func (c *Cluster) notifyAll() {
 
 type Node struct {
 	*memberlist.Node
+	rpc *rpc.Client
 }
 
 func (n *Node) extractMeta() (*nodeMeta, error) {
@@ -592,7 +626,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					log.Printf("Transition(): Id %d is moving to this node from node %s", dde.dd.Id(), oldNode.Name())
 					// Add to the list of ids to wait on, but only if there existed nodes
 					if oldNode.Name() != "<nil>" {
-						waitIds[dde.dd.Id()] = true // ZZZ this is a problem for non-unique ids
+						waitIds[dde.dd.Id()] = true
 					}
 				}
 			}

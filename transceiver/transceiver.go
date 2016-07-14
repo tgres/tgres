@@ -215,7 +215,7 @@ func (t *Transceiver) dispatcher() {
 	defer t.dispatcherWg.Done()
 
 	// Channel for event forwards to other nodes and us
-	snd, rcv := t.cluster.RegisterMsgType(false)
+	snd, rcv := t.cluster.RegisterMsgType()
 	go func() {
 		defer func() { recover() }() // if we're writing to a closed channel below
 
@@ -340,8 +340,7 @@ func (t *Transceiver) worker(id int64) {
 				if err := dp.Process(); err == nil {
 					recent[ds.Id] = true
 				} else {
-					// ZZZ
-					//log.Printf("worker(%d): dp.process() error: %v", id, err)
+					log.Printf("worker(%d): dp.process() error: %v", id, err)
 				}
 			} else {
 				flushEverything = true
