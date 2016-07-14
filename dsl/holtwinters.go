@@ -106,7 +106,7 @@ func hwTripleExponentialSmoothing(data []float64, slen int, trend float64, seaso
 		}
 
 		if i >= len(data) { // we are forecasting
-			m := len(data) - i + 1
+			m := i - len(data) + 1
 			result[i] = (level + float64(m)*trend) * seasonal[i%slen]
 		} else {
 			val := data[i]
