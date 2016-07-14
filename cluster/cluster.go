@@ -1,4 +1,3 @@
-//
 // Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -566,6 +565,21 @@ func (c *Cluster) NodesForDistDatum(dd DistDatum) []*Node {
 		return dde.nodes
 	}
 	return nil
+}
+
+func (c *Cluster) List() map[int64]*ddEntry {
+	return c.dds
+}
+
+func (dde *ddEntry) Node() *Node {
+	if len(dde.nodes) == 0 {
+		return nil
+	}
+	return dde.nodes[0]
+}
+
+func (dde *ddEntry) DD() DistDatum {
+	return dde.dd
 }
 
 // Transition() provides the transition on cluster
