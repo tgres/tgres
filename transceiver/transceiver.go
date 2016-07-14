@@ -340,7 +340,7 @@ func (t *Transceiver) worker(id int64) {
 				if err := dp.Process(); err == nil {
 					recent[ds.Id] = true
 				} else {
-					log.Printf("worker(%d): dp.process() error: %v", id, err)
+					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name, err)
 				}
 			} else {
 				flushEverything = true
