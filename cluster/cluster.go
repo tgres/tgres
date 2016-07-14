@@ -627,8 +627,9 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					if newNode != nil {
 						log.Printf("Transition(): Id %d is moving away to node %s", dde.dd.Id(), newNode.Name())
 					}
+					log.Printf("Transition(): Calling Relinquish for %d (%s).", dde.dd.Id(), dde.dd.GetName())
 					if err = dde.dd.Relinquish(); err != nil {
-						log.Printf("Transition(): Warning: Relinquish() failed for id %d", dde.dd.Id())
+						log.Printf("Transition(): Warning: Relinquish() failed for id %d (%s)", dde.dd.Id(), dde.dd.GetName())
 					} else {
 						// Notify the new node expecting this dd of Relinquish completion
 						body := make([]byte, binary.MaxVarintLen64)
