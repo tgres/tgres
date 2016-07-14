@@ -625,7 +625,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 				ln := c.LocalNode()
 				if ln.Name() == oldNode.Name() { // we are the ex-node
 					if newNode != nil {
-						log.Printf("Transition(): Id %d is moving away to node %s", dde.dd.Id(), newNode.Name())
+						log.Printf("Transition(): Id %d (%s) is moving away to node %s", dde.dd.Id(), dde.dd.GetName(), newNode.Name())
 					}
 					log.Printf("Transition(): Calling Relinquish for %d (%s).", dde.dd.Id(), dde.dd.GetName())
 					if err = dde.dd.Relinquish(); err != nil {
@@ -639,7 +639,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 						c.snd <- m
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
-					log.Printf("Transition(): Id %d is moving to this node from node %s", dde.dd.Id(), oldNode.Name())
+					log.Printf("Transition(): Id %d (%s) is moving to this node from node %s", dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
 					// Add to the list of ids to wait on, but only if there existed nodes
 					if oldNode.Name() != "<nil>" {
 						waitIds[dde.dd.Id()] = true
