@@ -51,10 +51,9 @@ type Cluster struct {
 	rcvChs    []chan *Msg
 	chgNotify []chan bool
 	meta      []byte
-	dds       map[int64]*ddEntry
+	dds       map[string]*ddEntry
 	snd, rcv  chan *Msg // dds messages
 	copies    int
-	lastId    int64
 	rpcPort   int
 	rpc       net.Listener
 }
@@ -74,7 +73,7 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, rpcport in
 	c := &Cluster{
 		rcvChs:    make([]chan *Msg, 0),
 		chgNotify: make([]chan bool, 0),
-		dds:       make(map[int64]*ddEntry),
+		dds:       make(map[string]*ddEntry),
 		copies:    1}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.PushPullInterval = 15 * time.Second
@@ -205,11 +204,9 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	}
 
 	for _, dd := range dds {
-		if dd.Id() == 0 {
-			c.lastId++
-			c.dds[c.lastId] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(c.lastId), c.copies)}
-		} else {
-			// There is nothing to do - we already have this id and its node.
+		key := fmt.Sprintf("%s:%d", dd.Type(), dd.Id())
+		if c.dds[key] == nil {
+			c.dds[key] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(), c.copies)}
 		}
 	}
 	return nil
@@ -540,16 +537,25 @@ func (l *logger) Write(b []byte) (int, error) {
 // nodes are responsible for forwarding requests to the responsible
 // node.
 type DistDatum interface {
-	// Id returns an integer that uniquely identifies this datum. The
-	// id must originally have been provided by Cluster. If the datum
-	// doesn't have an id yet, it should return 0.
-	Id(ids ...int64) int64
+	// Id returns an integer that uniquely identifies this datum for
+	// this type.
+	Id() int64
+
+	// Type returns a string that identifies the type. The value
+	// doesn't matter, so long as the type:id conbination uniquely
+	// identifies this DistDatum. (A good practice is to just use the
+	// type name as a string).
+	Type() string
+
 	// Reqlinquish is a chance to persist the data before the datum
 	// can be assigned to another node. On a cluater change that
 	// requires a reassignment, the receiving node will wait for the
 	// Relinquish operation to complete (up to a configurable
 	// timeout).
 	Relinquish() error
+
+	// This is only used for logging/debugging. It should return some
+	// kind of a meaningful symbolic name for this datum, if any.
 	GetName() string
 }
 
@@ -562,13 +568,13 @@ type DistDatum interface {
 func (c *Cluster) NodesForDistDatum(dd DistDatum) []*Node {
 	c.RLock()
 	defer c.RUnlock()
-	if dde, ok := c.dds[dd.Id()]; ok {
+	if dde, ok := c.dds[fmt.Sprintf("%s:%d", dd.Type(), dd.Id())]; ok {
 		return dde.nodes
 	}
 	return nil
 }
 
-func (c *Cluster) List() map[int64]*ddEntry {
+func (c *Cluster) List() map[string]*ddEntry {
 	return c.dds
 }
 
@@ -603,7 +609,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		return err
 	}
 
-	waitIds := make(map[int64]bool)
+	waitIds := make(map[string]bool)
 
 	for _, dde := range c.dds {
 		wg.Add(1)
@@ -625,24 +631,23 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 				ln := c.LocalNode()
 				if ln.Name() == oldNode.Name() { // we are the ex-node
 					if newNode != nil {
-						log.Printf("Transition(): Id %d (%s) is moving away to node %s", dde.dd.Id(), dde.dd.GetName(), newNode.Name())
+						log.Printf("Transition(): Id %s:%d (%s) is moving away to node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), newNode.Name())
 					}
-					log.Printf("Transition(): Calling Relinquish for %d (%s).", dde.dd.Id(), dde.dd.GetName())
+					log.Printf("Transition(): Calling Relinquish for %s:%d (%s).", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
 					if err = dde.dd.Relinquish(); err != nil {
-						log.Printf("Transition(): Warning: Relinquish() failed for id %d (%s)", dde.dd.Id(), dde.dd.GetName())
+						log.Printf("Transition(): Warning: Relinquish() failed for id %s:%d (%s)", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
 					} else {
 						// Notify the new node expecting this dd of Relinquish completion
-						body := make([]byte, binary.MaxVarintLen64)
-						binary.PutVarint(body, dde.dd.Id())
-						m := &Msg{Dst: newNode, Body: []byte(body)}
-						log.Printf("Transition(): Sending relinquish of id %d to node %s", dde.dd.Id(), newNode.Name())
+						body := []byte(fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id()))
+						m := &Msg{Dst: newNode, Body: body}
+						log.Printf("Transition(): Sending relinquish of id %s:%d to node %s", dde.dd.Type(), dde.dd.Id(), newNode.Name())
 						c.snd <- m
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
-					log.Printf("Transition(): Id %d (%s) is moving to this node from node %s", dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
+					log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
 					// Add to the list of ids to wait on, but only if there existed nodes
 					if oldNode.Name() != "<nil>" {
-						waitIds[dde.dd.Id()] = true
+						waitIds[fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id())] = true
 					}
 				}
 			}
@@ -679,12 +684,9 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 				return
 			}
 
-			if id, err := binary.ReadVarint(bytes.NewReader(m.Body)); err == nil {
-				log.Printf("Transition(): Got relinquish message for id %d from %s.", id, m.Src.Name())
-				delete(waitIds, id)
-			} else {
-				log.Printf("Transition(): WARNING: Error decoding message from %s: %v", m.Src.Name(), err)
-			}
+			key := string(m.Body)
+			log.Printf("Transition(): Got relinquish message for %s from %s.", key, m.Src.Name())
+			delete(waitIds, key)
 			if len(waitIds) > 0 {
 				log.Printf("Transition(): Still waiting on %d relinquish messages: %v", len(waitIds), waitIds)
 			}

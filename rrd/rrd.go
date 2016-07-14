@@ -106,7 +106,6 @@ type DataSource struct {
 	UnknownMs   int64
 	RRAs        []*RoundRobinArchive
 	LastFlushRT time.Time
-	ClusterId   int64
 }
 
 type DataSources struct {

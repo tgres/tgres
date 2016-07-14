@@ -584,12 +584,11 @@ func (d *distDatum) Relinquish() error {
 	return nil
 }
 
-func (d *distDatum) Id(id ...int64) int64 {
-	if len(id) > 0 {
-		d.ds.ClusterId = id[0]
-	}
-	return d.ds.ClusterId
+func (d *distDatum) Id() int64 {
+	return d.ds.Id
 }
+
+func (d *distDatum) Type() string { return "DataSource" }
 
 func (d *distDatum) GetName() string {
 	return d.ds.Name
