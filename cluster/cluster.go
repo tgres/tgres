@@ -192,6 +192,8 @@ func selectNodes(nodes []*Node, id int64, n int) []*Node {
 // user-side. You should LoadDistData prior to marking your node as
 // ready.
 func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
+	c.Lock()
+	defer c.Unlock()
 	dds, err := f()
 	if err != nil {
 		return err
@@ -202,7 +204,6 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 		return err
 	}
 
-	c.Lock()
 	for _, dd := range dds {
 		if dd.Id() == 0 {
 			c.lastId++
@@ -211,7 +212,6 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 			// There is nothing to do - we already have this id and its node.
 		}
 	}
-	c.Unlock()
 	return nil
 }
 
