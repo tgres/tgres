@@ -590,3 +590,7 @@ func (d *distDatum) Id(id ...int64) int64 {
 	}
 	return d.ds.ClusterId
 }
+
+func (d *distDatum) GetName() string {
+	return d.ds.Name
+}

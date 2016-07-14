@@ -550,6 +550,7 @@ type DistDatum interface {
 	// Relinquish operation to complete (up to a configurable
 	// timeout).
 	Relinquish() error
+	GetName() string
 }
 
 // NodesForDistDatum returns the nodes responsible for this
