@@ -56,6 +56,7 @@ type Cluster struct {
 	copies    int
 	rpcPort   int
 	rpc       net.Listener
+	joined    bool
 }
 
 // NewCluster creates a new Cluster with reasonable defaults.
@@ -193,6 +194,11 @@ func selectNodes(nodes []*Node, id int64, n int) []*Node {
 func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 	c.Lock()
 	defer c.Unlock()
+
+	if !c.joined {
+		return fmt.Errorf("LoadDistData(): Must call Join() before loading the data.")
+	}
+
 	dds, err := f()
 	if err != nil {
 		return err
@@ -209,6 +215,7 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 			c.dds[key] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(), c.copies)}
 		}
 	}
+
 	return nil
 }
 
@@ -218,6 +225,7 @@ func (c *Cluster) Join(existing []string) error {
 	if n, err := c.Memberlist.Join(existing); n <= 0 {
 		return err
 	}
+	c.joined = true
 	return nil
 }
 
