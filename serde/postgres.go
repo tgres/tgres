@@ -343,6 +343,7 @@ func (dps *dbSeries) Next() bool {
 			dps.posEnd = ts
 			dps.value = value
 			dps.latest = dps.posEnd
+			log.Printf("ZZZ *** in Next: begin: %v end: %v val: %v", dps.posBegin, dps.posEnd, dps.value)
 		}
 		return true
 	} else {

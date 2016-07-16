@@ -222,7 +222,7 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 // Join joins a cluster given at least one node address/port. NB: You
 // can always join yourself if this is a cluster of one node.
 func (c *Cluster) Join(existing []string) error {
-	if n, err := c.Memberlist.Join(existing); n <= 0 {
+	if _, err := c.Memberlist.Join(existing); err != nil {
 		return err
 	}
 	c.joined = true
