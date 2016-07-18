@@ -112,7 +112,10 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 
 func (t *Transceiver) Start() error {
 	log.Printf("Transceiver: Loading data from serde.")
-	t.dss.Reload(t.serde)
+	if err := t.dss.Reload(t.serde); err != nil {
+		log.Printf("transceiver.Start(): Reload() error: %v", err)
+		return err
+	}
 
 	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
 		dss := t.dss.List()
@@ -293,15 +296,12 @@ func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
 
 // Satisfy DSGetter interface in tgres/dsl
 func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
-	log.Printf("ZZZ *** in GetDSById()")
 	return t.requestDsCopy(id)
 }
 func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
-	log.Printf("ZZZ *** in DsIdsFromIdent()")
 	return t.dss.DsIdsFromIdent(ident)
 }
 func (t *Transceiver) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
-	log.Printf("ZZZ *** in SeriesQuery()")
 	return t.serde.SeriesQuery(ds, from, to, maxPoints)
 }
 
@@ -583,7 +583,6 @@ type distDatum struct {
 
 func (d *distDatum) Relinquish() error {
 	d.t.flushDs(d.ds, true)
-	d.t.dss.Delete(d.ds)
 	return nil
 }
 

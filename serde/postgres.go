@@ -343,7 +343,6 @@ func (dps *dbSeries) Next() bool {
 			dps.posEnd = ts
 			dps.value = value
 			dps.latest = dps.posEnd
-			log.Printf("ZZZ *** in Next: begin: %v end: %v val: %v", dps.posBegin, dps.posEnd, dps.value)
 		}
 		return true
 	} else {
@@ -706,9 +705,11 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
 	}
-	if to.IsZero() || to.After(rra.Latest) {
-		to = rra.Latest
-	}
+	// Do not adjust "to" because in a cluster this node might not be responsible for this datum and thus
+	// not aware of what actual Latest is.
+	// if to.IsZero() || to.After(rra.Latest) {
+	// 	to = rra.Latest
+	// }
 
 	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
 	return rrd.Series(dps), nil

@@ -231,6 +231,7 @@ func (c *Cluster) Join(existing []string) error {
 
 // LocalNode returns a pointer to the local node.
 func (c *Cluster) LocalNode() *Node {
+	defer func() { recover() }() // there may be a bug in memberlist?
 	return &Node{Node: c.Memberlist.LocalNode()}
 }
 
