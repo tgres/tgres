@@ -85,9 +85,9 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 	if len(parts) < 3 || len(parts) > 4 {
 		return fmt.Errorf("Invalid RRA specification (not enough or too many elements): %q", string(text))
 	}
-	r.Function = parts[0]
-	if strings.ToLower(r.Function) != "average" {
-		return fmt.Errorf("Invalid function: %q", r.Function)
+	r.Function = strings.ToUpper(parts[0])
+	if r.Function != "AVERAGE" && r.Function != "MIN" && r.Function != "MAX" && r.Function != "LAST" {
+		return fmt.Errorf("Invalid function: %q (valid funcs: average, min, max, last)", r.Function)
 	}
 	var err error
 	if r.Step, err = misc.BetterParseDuration(parts[1]); err != nil {

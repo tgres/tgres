@@ -577,10 +577,18 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 	return nil
 }
 
-func (ds *DataSource) ClearRRAs() {
+func (ds *DataSource) ClearRRAs(clearLU bool) {
 	for _, rra := range ds.RRAs {
 		rra.DPs = make(map[int64]float64)
 		rra.Start, rra.End = 0, 0
+	}
+	if clearLU {
+		// This is so that if we are a cluster node that is no longer
+		// responsible for an event, but then become responsible
+		// again, the new DP doesn't set NaNs all the way to LU. We're
+		// making an assumption that this is done whenever a blocking
+		// flush is requested (i.e. at the Relinquish).
+		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{}
 	}
 }
 

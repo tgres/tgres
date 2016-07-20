@@ -20,7 +20,6 @@ import (
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/statsd"
 	"log"
-	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -121,7 +120,7 @@ func (t *Transceiver) Start() error {
 		dss := t.dss.List()
 		result := make([]cluster.DistDatum, len(dss))
 		for n, ds := range t.dss.List() {
-			result[n] = &distDatum{t, ds}
+			result[n] = &distDatumDataSource{t, ds}
 		}
 		return result, nil
 	})
@@ -203,7 +202,7 @@ func (t *Transceiver) createOrLoadDS(dp *rrd.DataPoint) error {
 			t.dss.Insert(ds)
 			// tell the cluster about it (TODO should Insert() do this?)
 			t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-				return []cluster.DistDatum{&distDatum{t, ds}}, nil
+				return []cluster.DistDatum{&distDatumDataSource{t, ds}}, nil
 			})
 			dp.DS = ds
 		} else {
@@ -260,7 +259,7 @@ func (t *Transceiver) dispatcher() {
 			}
 		}
 
-		for _, node := range t.cluster.NodesForDistDatum(&distDatum{t, dp.DS}) {
+		for _, node := range t.cluster.NodesForDistDatum(&distDatumDataSource{t, dp.DS}) {
 			if node.Name() == t.cluster.LocalNode().Name() {
 				t.workerChs[dp.DS.Id%int64(t.NWorkers)] <- dp // This dp is for us
 			} else if dp.Hops == 0 { // we do not forward more than once
@@ -340,6 +339,7 @@ func (t *Transceiver) worker(id int64) {
 		case dp, ok := <-t.workerChs[id]:
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
+
 				if err := dp.Process(); err == nil {
 					recent[ds.Id] = true
 				} else {
@@ -394,7 +394,7 @@ func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
 		<-fr.resp
 	}
 	ds.LastFlushRT = time.Now()
-	ds.ClearRRAs()
+	ds.ClearRRAs(block) // block = clearLU in this case (see rrd.go)
 }
 
 func (t *Transceiver) startWorkers() {
@@ -462,12 +462,37 @@ func (t *Transceiver) statWorker() {
 	t.statWg.Add(1)
 	defer t.statWg.Done()
 
+	// Channel for event forwards to other nodes and us
+	snd, rcv := t.cluster.RegisterMsgType()
+	go func() {
+		defer func() { recover() }() // if we're writing to a closed channel below
+
+		for {
+			m := <-rcv
+
+			// To get an event back:
+			var st statsd.Stat
+			if err := m.Decode(&st); err != nil {
+				log.Printf("statWorker(): msg <- rcv statsd.Stat decoding FAILED, ignoring this stat.")
+				continue
+			}
+
+			var maxHops = t.cluster.NumMembers() * 2 // This is kind of arbitrary
+			if st.Hops > maxHops {
+				log.Printf("statWorker(): dropping stat, max hops (%d) reached", maxHops)
+				continue
+			}
+
+			t.stCh <- &st // See recover above
+		}
+	}()
+
 	var flushCh = make(chan int, 1)
 	go func() {
 		for {
 			// NB: We do not use a time.Ticker here because my simple
 			// experiments show that it will not stay aligned on a
-			// multiple of durationif the system clock is
+			// multiple of duration if the system clock is
 			// adjusted. This thing will mostly remain aligned.
 			clock := time.Now()
 			time.Sleep(clock.Truncate(t.StatFlushDuration).Add(t.StatFlushDuration).Sub(clock))
@@ -479,92 +504,52 @@ func (t *Transceiver) statWorker() {
 		}
 	}()
 
-	log.Printf("  - statWorker() started.")
+	log.Printf("statWorker(): started.")
 	t.startWg.Done()
 
-	counts := make(map[string]int64)
-	gauges := make(map[string]float64)
-	timers := make(map[string][]float64)
-
-	prefix := t.StatsNamePrefix
-
-	var flushStats = func() {
-		for name, count := range counts {
-			perSec := float64(count) / t.StatFlushDuration.Seconds()
-			t.QueueDataPoint(prefix+"."+name, time.Now(), perSec)
-		}
-		for name, gauge := range gauges {
-			t.QueueDataPoint(prefix+".gauges."+name, time.Now(), gauge)
-		}
-		for name, times := range timers {
-			// count
-			t.QueueDataPoint(prefix+".timers."+name+".count", time.Now(), float64(len(times)))
-
-			// lower, upper, sum, mean
-			if len(times) > 0 {
-				var (
-					lower, upper = times[0], times[0]
-					sum          float64
-				)
-
-				for _, v := range times[1:] {
-					lower = math.Min(lower, v)
-					upper = math.Max(upper, v)
-					sum += v
-				}
-				t.QueueDataPoint(prefix+".timers."+name+".lower", time.Now(), lower)
-				t.QueueDataPoint(prefix+".timers."+name+".upper", time.Now(), upper)
-				t.QueueDataPoint(prefix+".timers."+name+".sum", time.Now(), sum)
-				t.QueueDataPoint(prefix+".timers."+name+".mean", time.Now(), sum/float64(len(times)))
-			}
-
-			// TODO - these will require sorting:
-			// count_ps ?
-			// mean_90
-			// median
-			// std
-			// sum_90
-			// upper_90
-
-		}
-		// clear the maps
-		counts = make(map[string]int64)
-		gauges = make(map[string]float64)
-		timers = make(map[string][]float64)
-	}
+	acc := statsd.NewAccumulator(t, t.StatsNamePrefix)
+	accDd := &distDatumAccumulator{acc}
+	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
+		log.Printf("statWorker(): adding the statsd.Accumulator DistDatum to the cluster")
+		return []cluster.DistDatum{accDd}, nil
+	})
 
 	for {
-		// It's important to flush stats at as precise time as
-		// possible. This non-blocking select will guarantee that we
-		// process flushCh even if there is stuff in the stCh.
+		// It's nice to flush stats at as precise time as
+		// possible. This non-blocking select trick guarantees that we
+		// always process flushCh even if there is stuff in the stCh.
 		select {
 		case <-flushCh:
-			flushStats()
+			acc.Flush()
 		default:
 		}
 
 		select {
 		case <-flushCh:
-			flushStats()
+			acc.Flush()
 		case st, ok := <-t.stCh:
 			if !ok {
-				flushStats() // Final flush
+				acc.Flush()
 				return
 			}
-			if st.Metric == "c" {
-				if _, ok := counts[st.Name]; !ok {
-					counts[st.Name] = 0
+
+			// Is this stat for us?
+			for _, node := range t.cluster.NodesForDistDatum(accDd) {
+				if node.Name() == t.cluster.LocalNode().Name() {
+					if err := acc.Process(st); err != nil {
+						log.Printf("statWorker(): a.Process() error %v", err)
+					}
+				} else if st.Hops == 0 { // we do not forward more than once
+					if node.Ready() {
+						st.Hops++
+						if msg, err := cluster.NewMsgGob(node, st); err == nil {
+							snd <- msg
+						}
+					} else {
+						// Drop it
+						log.Printf("statWorker(): dropping stat on the floor because no node is Ready!")
+					}
 				}
-				counts[st.Name] += int64(st.Value)
-			} else if st.Metric == "g" {
-				gauges[st.Name] = st.Value
-			} else if st.Metric == "ms" {
-				if _, ok := timers[st.Name]; !ok {
-					timers[st.Name] = make([]float64, 4)
-				}
-				timers[st.Name] = append(timers[st.Name], st.Value)
-			} else {
-				log.Printf("statWorker(): invalid metric type: %q, ignoring.", st.Metric)
 			}
 		}
 	}
@@ -574,24 +559,36 @@ func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
 	return t.dss.FsFind(pattern)
 }
 
-// Implement cluster.DistDatum
+// Implement cluster.DistDatum for data sources
 
-type distDatum struct {
+type distDatumDataSource struct {
 	t  *Transceiver
 	ds *rrd.DataSource
 }
 
-func (d *distDatum) Relinquish() error {
+func (d *distDatumDataSource) Relinquish() error {
 	d.t.flushDs(d.ds, true)
 	return nil
 }
 
-func (d *distDatum) Id() int64 {
-	return d.ds.Id
+func (d *distDatumDataSource) Id() int64 { return d.ds.Id }
+
+func (d *distDatumDataSource) Type() string { return "DataSource" }
+
+func (d *distDatumDataSource) GetName() string {
+	return d.ds.Name
 }
 
-func (d *distDatum) Type() string { return "DataSource" }
+// Implement cluster.DistDatum for stats
 
-func (d *distDatum) GetName() string {
-	return d.ds.Name
+type distDatumAccumulator struct {
+	a *statsd.Accumulator
+}
+
+func (d *distDatumAccumulator) Id() int64       { return 1 }
+func (d *distDatumAccumulator) Type() string    { return "statsd.Accumulator" }
+func (d *distDatumAccumulator) GetName() string { return "TheStatsAccumulator" }
+func (d *distDatumAccumulator) Relinquish() error {
+	d.a.Flush()
+	return nil
 }
