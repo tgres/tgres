@@ -267,6 +267,7 @@ func (t *Transceiver) dispatcher() {
 					dp.Hops++
 					if msg, err := cluster.NewMsgGob(node, dp); err == nil {
 						snd <- msg
+						t.QueueStatCount("tgres.dispatcher_forward", 1)
 					}
 				} else {
 					// This should be a very rare thing
@@ -285,6 +286,15 @@ func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
 
 func (t *Transceiver) QueueStat(st *statsd.Stat) {
 	t.stCh <- st
+}
+
+func (t *Transceiver) QueueStatCount(name string, n int) {
+	s := &statsd.Stat{
+		Name:   name,
+		Value:  float64(n),
+		Metric: "c",
+	}
+	t.QueueStat(s)
 }
 
 func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
