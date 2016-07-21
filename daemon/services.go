@@ -54,6 +54,13 @@ func newServiceManager(t *transceiver.Transceiver) *ServiceManager {
 	}
 }
 
+func processListenSpec(listenSpec string) string {
+	if os.Getenv("TGRES_BIND") != "" {
+		return strings.Replace(listenSpec, "0.0.0.0", os.Getenv("TGRES_BIND"), 1)
+	}
+	return listenSpec
+}
+
 func (r *ServiceManager) run(gracefulProtos string) error {
 
 	// TODO If a listen-spec changes in the config and a graceful
@@ -131,7 +138,7 @@ func (g *wwwServer) Start(file *os.File) error {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", Cfg.HttpListenSpec)
+			gl, err = net.Listen("tcp", processListenSpec(Cfg.HttpListenSpec))
 		}
 	} else {
 		fmt.Printf("Not starting HTTP server because http-listen-spec is blank.\n")
@@ -146,7 +153,7 @@ func (g *wwwServer) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Printf("HTTP protocol Listening on %s\n", Cfg.HttpListenSpec)
+	fmt.Printf("HTTP protocol Listening on %s\n", processListenSpec(Cfg.HttpListenSpec))
 
 	go httpServer(Cfg.HttpListenSpec, g.listener, g.t)
 
@@ -183,7 +190,7 @@ func (g *graphitePickleServiceManager) Start(file *os.File) error {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", Cfg.GraphitePickleListenSpec)
+			gl, err = net.Listen("tcp", processListenSpec(Cfg.GraphitePickleListenSpec))
 		}
 	} else {
 		log.Printf("Not starting Graphite Pickle Protocol because graphite-pickle-listen-spec is blank.")
@@ -196,7 +203,7 @@ func (g *graphitePickleServiceManager) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Printf("Graphite Pickle protocol Listening on %s\n", Cfg.GraphitePickleListenSpec)
+	fmt.Printf("Graphite Pickle protocol Listening on %s\n", processListenSpec(Cfg.GraphitePickleListenSpec))
 
 	go g.graphitePickleServer()
 
@@ -322,7 +329,7 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 		if file != nil {
 			g.conn, err = net.FileConn(file)
 		} else {
-			udpAddr, err = net.ResolveUDPAddr("udp", Cfg.GraphiteUdpListenSpec)
+			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(Cfg.GraphiteUdpListenSpec))
 			if err == nil {
 				g.conn, err = net.ListenUDP("udp", udpAddr)
 			}
@@ -335,7 +342,7 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 		return fmt.Errorf("Error starting Graphite UDP Text Protocol serviceManager: %v", err)
 	}
 
-	fmt.Printf("Graphite UDP protocol Listening on %s\n", Cfg.GraphiteTextListenSpec)
+	fmt.Printf("Graphite UDP protocol Listening on %s\n", processListenSpec(Cfg.GraphiteTextListenSpec))
 
 	// for UDP timeout must be 0
 	go handleGraphiteTextProtocol(g.t, g.conn, 0)
@@ -373,7 +380,7 @@ func (g *graphiteTextServiceManager) Start(file *os.File) error {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", Cfg.GraphiteTextListenSpec)
+			gl, err = net.Listen("tcp", processListenSpec(Cfg.GraphiteTextListenSpec))
 		}
 	} else {
 		log.Printf("Not starting Graphite Text protocol because graphite-test-listen-spec is blank")
@@ -386,7 +393,7 @@ func (g *graphiteTextServiceManager) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Println("Graphite text protocol Listening on " + Cfg.GraphiteTextListenSpec)
+	fmt.Println("Graphite text protocol Listening on " + processListenSpec(Cfg.GraphiteTextListenSpec))
 
 	go g.graphiteTextServer()
 
@@ -530,7 +537,7 @@ func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
 		if file != nil {
 			g.conn, err = net.FileConn(file)
 		} else {
-			udpAddr, err = net.ResolveUDPAddr("udp", Cfg.StatsdUdpListenSpec)
+			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(Cfg.StatsdUdpListenSpec))
 			if err == nil {
 				g.conn, err = net.ListenUDP("udp", udpAddr)
 			}
@@ -543,7 +550,7 @@ func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
 		return fmt.Errorf("Error starting Statsd UDP Text Protocol serviceManager: %v", err)
 	}
 
-	fmt.Printf("Statsd UDP protocol Listening on %s\n", Cfg.StatsdTextListenSpec)
+	fmt.Printf("Statsd UDP protocol Listening on %s\n", processListenSpec(Cfg.StatsdTextListenSpec))
 
 	// for UDP timeout must be 0
 	go handleStatsdTextProtocol(g.t, g.conn, 0)
