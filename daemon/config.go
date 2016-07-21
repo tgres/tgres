@@ -82,13 +82,21 @@ type RRASpec struct {
 func (r *RRASpec) UnmarshalText(text []byte) error {
 	r.Xff = 0.5
 	parts := strings.SplitN(string(text), ":", 4)
-	if len(parts) < 3 || len(parts) > 4 {
+	if len(parts) < 2 || len(parts) > 4 {
 		return fmt.Errorf("Invalid RRA specification (not enough or too many elements): %q", string(text))
 	}
+
+	// If the first character of the first part is a digit, assume we're skipping CF and defaulting to
+	// AVERAGE.
+	if len(parts[0]) > 0 && strings.Contains("0123456789", string(parts[0][0])) {
+		parts = append([]string{"AVERAGE"}, parts...)
+	}
+
 	r.Function = strings.ToUpper(parts[0])
 	if r.Function != "AVERAGE" && r.Function != "MIN" && r.Function != "MAX" && r.Function != "LAST" {
 		return fmt.Errorf("Invalid function: %q (valid funcs: average, min, max, last)", r.Function)
 	}
+
 	var err error
 	if r.Step, err = misc.BetterParseDuration(parts[1]); err != nil {
 		return fmt.Errorf("Invalid Step: %q (%v)", parts[1], err)

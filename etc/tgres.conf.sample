@@ -29,7 +29,9 @@ db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 regexp = "foo"
 step = "10s"
 heartbeat = "2h"
-rras = ["AVERAGE:10s:6h", "AVERAGE:1m:10d", "AVERAGE:10m:93d", "AVERAGE:1d:5y:1"]
+# rra is "[Average|Min|Max|last:]ts:ts[:xff]"
+# function is not case-sensitive, default is "average". Default xff is 0.5
+rras = ["10s:6h", "1m:10d", "10m:93d", "1d:5y:1"]
 
 [[ds]]
 regexp = ".*"
