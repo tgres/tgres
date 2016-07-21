@@ -94,7 +94,17 @@ func Init() { // not to be confused with init()
 
 	log.Printf("Initialized DB connection.")
 
-	c, _ := cluster.NewCluster()
+	var c *cluster.Cluster
+	tgresBind := os.Getenv("TGRES_BIND")
+	if tgresBind != "" {
+		c, err = cluster.NewClusterBind(tgresBind, 0, tgresBind, 0, 0, tgresBind)
+	} else {
+		c, err = cluster.NewCluster()
+	}
+	if err != nil {
+		log.Printf("Unable to create cluster: %v", err)
+		return
+	}
 
 	// Join other nodes, if any
 	var ips []string
