@@ -30,7 +30,7 @@ type dataPointQueuer interface {
 	QueueDataPoint(string, time.Time, float64)
 }
 
-type Accumulator struct {
+type Aggregator struct {
 	t         dataPointQueuer
 	prefix    string
 	counts    map[string]int64
@@ -39,8 +39,8 @@ type Accumulator struct {
 	lastFlush time.Time
 }
 
-func NewAccumulator(t dataPointQueuer, prefix string) *Accumulator {
-	return &Accumulator{
+func NewAggregator(t dataPointQueuer, prefix string) *Aggregator {
+	return &Aggregator{
 		t:         t,
 		prefix:    prefix,
 		counts:    make(map[string]int64),
@@ -50,7 +50,7 @@ func NewAccumulator(t dataPointQueuer, prefix string) *Accumulator {
 	}
 }
 
-func (a *Accumulator) Flush() {
+func (a *Aggregator) Flush() {
 	for name, count := range a.counts {
 		dur := time.Now().Sub(a.lastFlush)
 		perSec := float64(count) / dur.Seconds()
@@ -89,6 +89,8 @@ func (a *Accumulator) Flush() {
 		// sum_90
 		// upper_90
 
+		// And really we should do this using rrd.Series
+
 	}
 	// clear the maps
 	a.counts = make(map[string]int64)
@@ -97,7 +99,7 @@ func (a *Accumulator) Flush() {
 	a.lastFlush = time.Now()
 }
 
-func (a *Accumulator) Process(st *Stat) error {
+func (a *Aggregator) Process(st *Stat) error {
 	if st.Metric == "c" {
 		if _, ok := a.counts[st.Name]; !ok {
 			a.counts[st.Name] = 0
@@ -162,6 +164,11 @@ func (st *Stat) GobDecode(b []byte) error {
 	return err
 }
 
+// ParseStatsdPacket parses a statsd packet e.g: gorets:1|c|@0.1. See
+// https://github.com/etsy/statsd/blob/master/docs/metric_types.md
+// There is no need to support multi-metric packets here, since it
+// uses newline as separator, the text handler in daemon/services.go
+// would take care of it.
 func ParseStatsdPacket(packet string) (*Stat, error) {
 
 	var (

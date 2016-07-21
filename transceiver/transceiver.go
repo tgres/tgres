@@ -288,13 +288,11 @@ func (t *Transceiver) QueueStat(st *statsd.Stat) {
 	t.stCh <- st
 }
 
+// NEXT: Think about these, what exactly is "stat" and calling on a nil pointer
 func (t *Transceiver) QueueStatCount(name string, n int) {
-	s := &statsd.Stat{
-		Name:   name,
-		Value:  float64(n),
-		Metric: "c",
+	if t != nil {
+		t.QueueStat(&statsd.Stat{Name: name, Value: float64(n), Metric: "c"})
 	}
-	t.QueueStat(s)
 }
 
 func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
@@ -517,11 +515,11 @@ func (t *Transceiver) statWorker() {
 	log.Printf("statWorker(): started.")
 	t.startWg.Done()
 
-	acc := statsd.NewAccumulator(t, t.StatsNamePrefix)
-	accDd := &distDatumAccumulator{acc}
+	agg := statsd.NewAggregator(t, t.StatsNamePrefix)
+	aggDd := &distDatumAggregator{agg}
 	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-		log.Printf("statWorker(): adding the statsd.Accumulator DistDatum to the cluster")
-		return []cluster.DistDatum{accDd}, nil
+		log.Printf("statWorker(): adding the statsd.Aggregator DistDatum to the cluster")
+		return []cluster.DistDatum{aggDd}, nil
 	})
 
 	for {
@@ -530,23 +528,23 @@ func (t *Transceiver) statWorker() {
 		// always process flushCh even if there is stuff in the stCh.
 		select {
 		case <-flushCh:
-			acc.Flush()
+			agg.Flush()
 		default:
 		}
 
 		select {
 		case <-flushCh:
-			acc.Flush()
+			agg.Flush()
 		case st, ok := <-t.stCh:
 			if !ok {
-				acc.Flush()
+				agg.Flush()
 				return
 			}
 
 			// Is this stat for us?
-			for _, node := range t.cluster.NodesForDistDatum(accDd) {
+			for _, node := range t.cluster.NodesForDistDatum(aggDd) {
 				if node.Name() == t.cluster.LocalNode().Name() {
-					if err := acc.Process(st); err != nil {
+					if err := agg.Process(st); err != nil {
 						log.Printf("statWorker(): a.Process() error %v", err)
 					}
 				} else if st.Hops == 0 { // we do not forward more than once
@@ -591,14 +589,14 @@ func (d *distDatumDataSource) GetName() string {
 
 // Implement cluster.DistDatum for stats
 
-type distDatumAccumulator struct {
-	a *statsd.Accumulator
+type distDatumAggregator struct {
+	a *statsd.Aggregator
 }
 
-func (d *distDatumAccumulator) Id() int64       { return 1 }
-func (d *distDatumAccumulator) Type() string    { return "statsd.Accumulator" }
-func (d *distDatumAccumulator) GetName() string { return "TheStatsAccumulator" }
-func (d *distDatumAccumulator) Relinquish() error {
+func (d *distDatumAggregator) Id() int64       { return 1 }
+func (d *distDatumAggregator) Type() string    { return "statsd.Aggregator" }
+func (d *distDatumAggregator) GetName() string { return "TheStatsAggregator" }
+func (d *distDatumAggregator) Relinquish() error {
 	d.a.Flush()
 	return nil
 }
