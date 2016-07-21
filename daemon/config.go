@@ -148,6 +148,9 @@ func (c *Config) processConfigPidFile(wd string) error {
 }
 
 func (c *Config) processConfigLogFile(wd string) error {
+	if os.Getenv("TGRES_LOG") != "" {
+		c.LogPath = os.Getenv("TGRES_LOG")
+	}
 	if c.LogPath == "" {
 		return fmt.Errorf("log-file setting empty")
 	}
