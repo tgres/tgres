@@ -16,6 +16,7 @@
 package daemon
 
 import (
+	"fmt"
 	h "github.com/tgres/tgres/http"
 	x "github.com/tgres/tgres/transceiver"
 	"net"
@@ -27,6 +28,7 @@ func httpServer(addr string, l net.Listener, t *x.Transceiver) {
 
 	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(t))
 	http.HandleFunc("/render", h.GraphiteRenderHandler(t))
+	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
 
 	server := &http.Server{
 		Addr:           addr,
