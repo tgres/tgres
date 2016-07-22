@@ -97,7 +97,16 @@ func Init() { // not to be confused with init()
 	var c *cluster.Cluster
 	tgresBind := os.Getenv("TGRES_BIND")
 	if tgresBind != "" {
-		c, err = cluster.NewClusterBind(tgresBind, 0, tgresBind, 0, 0, tgresBind)
+		if os.Getenv("TGRES_ADDRFROMDB") != "" {
+			aaddr, err := db.MyDbAddr()
+			if err != nil {
+				log.Printf("Database error: %v", err)
+				return
+			}
+			c, err = cluster.NewClusterBind(tgresBind, 0, *aaddr, 0, 0, tgresBind)
+		} else {
+			c, err = cluster.NewClusterBind(tgresBind, 0, tgresBind, 0, 0, tgresBind)
+		}
 	} else {
 		c, err = cluster.NewCluster()
 	}

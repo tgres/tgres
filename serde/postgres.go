@@ -50,6 +50,8 @@ import (
 	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
+	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +107,31 @@ func (p *pgSerDe) ListDbClientIps() ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+func (p *pgSerDe) MyDbAddr() (*string, error) {
+	hostname, _ := os.Hostname()
+	randToken := fmt.Sprintf("%s%d", hostname, rand.Intn(1000000000))
+	sql := fmt.Sprintf("SELECT client_addr FROM pg_stat_activity WHERE query LIKE '%%%s%%'", randToken)
+	rows, err := p.dbConn.Query(sql)
+	if err != nil {
+		log.Printf("myPostgresAddr(): error querying database: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var addr *string
+		if err := rows.Scan(&addr); err != nil {
+			log.Printf("myPostgresAddr(): error scanning row: %v", err)
+			return nil, err
+		}
+		if addr != nil {
+			log.Printf("myPostgresAddr(): %s", *addr)
+			return addr, nil
+		}
+	}
+	return nil, nil
 }
 
 func (p *pgSerDe) prepareSqlStatements() error {
