@@ -12,6 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Cluster is a simple clustering package built on top of
+// https://godoc.org/github.com/hashicorp/memberlist.
+//
+// The assumption behind this package is that you have identical
+// nodes, each responsible for a certain part of the data, a datum,
+// identified by an integer id, and any node forwards requests to the
+// node designated for the datum. There is no leader.
+//
+// If a node must terminate, it is given an opportunity to save the
+// data it is responsible for, then signal the nodes now responsible
+// that they can take over the processing.
+//
+// Any cluster change triggers a "transition". During a transition
+// each datum is "relinquished", and upon the relinquish the next
+// responsible node is notified. All this is managed by Cluster, all
+// that is required from the application is to enure that each datum
+// implements the DistDatum interface..
 package cluster
 
 import (

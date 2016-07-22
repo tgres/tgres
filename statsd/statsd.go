@@ -89,8 +89,6 @@ func (a *Aggregator) Flush() {
 		// sum_90
 		// upper_90
 
-		// And really we should do this using rrd.Series
-
 	}
 	// clear the maps
 	a.counts = make(map[string]int64)

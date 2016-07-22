@@ -181,6 +181,9 @@ func (c *Config) processConfigLogCycleInterval() error {
 }
 
 func (c *Config) processDbConnectString() error {
+	if os.Getenv("TGRES_DB_CONNECT") != "" {
+		c.DbConnectString = os.Getenv("TGRES_DB_CONNECT")
+	}
 	if c.DbConnectString == "" {
 		return fmt.Errorf("db-connect-string empty")
 	}
