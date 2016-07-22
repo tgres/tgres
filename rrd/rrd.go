@@ -142,6 +142,8 @@ type SerDe interface {
 	FlushDataSource(ds *DataSource) error
 	// Query
 	SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, error)
+	// Use the database to infer outside IPs of other connected clients
+	ListDbClientIps() ([]string, error)
 }
 
 // This is a Series

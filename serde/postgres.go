@@ -83,6 +83,30 @@ func InitDb(connect_string, prefix string) (rrd.SerDe, error) {
 	}
 }
 
+// A hack to use the DB to see who else is connected
+func (p *pgSerDe) ListDbClientIps() ([]string, error) {
+	const sql = "SELECT DISTINCT(client_addr) FROM pg_stat_activity"
+	rows, err := p.dbConn.Query(sql)
+	if err != nil {
+		log.Printf("ListDbClientIps(): error querying database: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]string, 0)
+	for rows.Next() {
+		var addr *string
+		if err := rows.Scan(&addr); err != nil {
+			log.Printf("ListDbClientIps(): error scanning row: %v", err)
+			return nil, err
+		}
+		if addr != nil {
+			result = append(result, *addr)
+		}
+	}
+	return result, nil
+}
+
 func (p *pgSerDe) prepareSqlStatements() error {
 	var err error
 	if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sts ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5", p.prefix)); err != nil {

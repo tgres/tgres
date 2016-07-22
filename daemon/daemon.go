@@ -109,12 +109,17 @@ func Init() { // not to be confused with init()
 	// Join other nodes, if any
 	var ips []string
 	if join != "" {
-		log.Printf("Joining nodes: %s", join)
 		ips = strings.Split(join, ",")
-		if err := c.Join(ips); err != nil {
-			log.Printf("Unable to join any cluster members: %v", err)
+	} else if os.Getenv("TGRES_ADDRFROMDB") != "" {
+		if ips, err = db.ListDbClientIps(); err != nil {
+			log.Printf("Error from db.ListDbClientIps(): %v", err)
 			return
 		}
+	}
+	if err := c.Join(ips); err != nil {
+		log.Printf("Joining nodes: %s", strings.Join(ips, ","))
+		log.Printf("Unable to join any cluster members: %v", err)
+		return
 	}
 
 	// Create the transceiver
