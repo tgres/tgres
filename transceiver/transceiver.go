@@ -216,6 +216,9 @@ func (t *Transceiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
 
+	// Monitor Cluster changes
+	clusterChgCh := t.cluster.NotifyClusterChanges()
+
 	// Channel for event forwards to other nodes and us
 	snd, rcv := t.cluster.RegisterMsgType()
 	go func() {
@@ -241,8 +244,23 @@ func (t *Transceiver) dispatcher() {
 		}
 	}()
 
+	log.Printf("dispatcher(): marking cluster node as Ready.")
+	t.cluster.Ready(true)
+
 	for {
-		dp, ok := <-t.dpCh
+
+		var dp *rrd.DataPoint
+		var ok bool
+		select {
+		case _, ok = <-clusterChgCh:
+			if ok {
+				if err := t.cluster.Transition(45 * time.Second); err != nil {
+					log.Printf("dispatcher(): Transition error: %v", err)
+				}
+			}
+			continue
+		case dp, ok = <-t.dpCh:
+		}
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
