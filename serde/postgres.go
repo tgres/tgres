@@ -359,6 +359,15 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 		dps.groupByMs = finalGroupByMs
 	}
 
+	// Ensure that we never return data beyond lastUpdate (it would
+	// cause us to return bogus data because the RRD would wrap
+	// around). We do this *after* calculating groupBy because groupBy
+	// should be based on the screen resolution, not what we have in
+	// the db.
+	if dps.to.After(dps.LastUpdate()) {
+		dps.to = dps.LastUpdate()
+	}
+
 	// TODO: support milliseconds?
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 
@@ -756,12 +765,9 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
 	}
-	// Do not adjust "to" because in a cluster this node might not be responsible for this datum and thus
-	// not aware of what actual Latest is.
-	// if to.IsZero() || to.After(rra.Latest) {
-	// 	to = rra.Latest
-	// }
 
+	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
+	// to be the earliest of "to" or "LastUpdate".
 	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
 	return rrd.Series(dps), nil
 }
