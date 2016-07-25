@@ -6,6 +6,9 @@ storage, written in Go.
 It is presently work-in-progress, still under development, things in
 flux.
 
+As of Jul 2016, Tgres is clustered. I'll be describing it in more
+detail in a blog post.
+
 Tgres can receive data using Graphite Text, UDP and Pickle
 protocols, as well as Statsd (counters, gauges and timers). It
 supports enough of a Graphite HTTP API to be usable with
@@ -42,13 +45,6 @@ Other (future) goals/notes:
 
 It has to be simple. There shouldn't be many daemons/components - just
 this one process to receive and serve the data and the database server.
-
-Horizontal scaling is an interesting problem, a consensus algorithm
-such as Raft may or may not be the right answer, we recognize that
-this is a tough call and that bridge, if we ever get there, will be
-crossed very carefully. Ideally scaling should happen in tandem with
-the best practices on the PostgreSQL side, which appears to be a
-moving target at this point.
 
 Presently Tgres does not store the original datapoints as they
 come in, data is always aggregated. This may change.
