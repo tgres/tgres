@@ -270,7 +270,7 @@ func (t *Transceiver) dispatcher() {
 			break
 		}
 
-		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
+		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil || time.Now().Sub(dp.DS.LastUpdateRT) > t.MaxCacheDuration {
 			if err := t.createOrLoadDS(dp); err != nil {
 				log.Printf("dispatcher(): createDataSource() error: %v", err)
 				continue

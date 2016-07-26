@@ -96,16 +96,17 @@ func (dp *DataPoint) GobDecode(b []byte) error {
 // completes the PDP. This state is kept in DataSource.
 
 type DataSource struct {
-	Id          int64
-	Name        string
-	StepMs      int64
-	HeartbeatMs int64
-	LastUpdate  time.Time
-	LastDs      float64
-	Value       float64
-	UnknownMs   int64
-	RRAs        []*RoundRobinArchive
-	LastFlushRT time.Time
+	Id           int64                // Id
+	Name         string               // Series name
+	StepMs       int64                // Step Size in Ms
+	HeartbeatMs  int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
+	LastUpdate   time.Time            // Last time we received an update (series time - can be in the past or future)
+	LastDs       float64              // Last value we saw
+	Value        float64              // Current Value (the weighted average)
+	UnknownMs    int64                // Ms of the data that is "unknown" (e.g. because of exceeded HB)
+	RRAs         []*RoundRobinArchive // Array of Round Robin Archives
+	LastFlushRT  time.Time            // Last time this DS was flushed (actual real time).
+	LastUpdateRT time.Time            // Last time this DS was update (actual real time).
 }
 
 type DataSources struct {
@@ -294,13 +295,26 @@ func (dss *DataSources) Reload(serde SerDe) error {
 	}
 
 	dss.Lock()
+	currentDss := dss.byId
 	dss.byName = make(map[string]*DataSource)
 	dss.byId = make(map[int64]*DataSource)
 	dss.prefixes = make(map[string]bool)
-	for _, ds := range dsList {
-		dss.byName[ds.Name] = ds
-		dss.byId[ds.Id] = ds
-		dss.addPrefixes(ds.Name)
+	for _, newDs := range dsList {
+		if currentDs, ok := currentDss[newDs.Id]; ok {
+			if currentDs.LastUpdate.After(newDs.LastUpdate) {
+				// Our cached data is more recent, save it
+				newDs.LastUpdate = currentDs.LastUpdate
+				newDs.LastDs = currentDs.LastDs
+				newDs.Value = currentDs.Value
+				newDs.UnknownMs = currentDs.UnknownMs
+				newDs.RRAs = currentDs.RRAs
+				newDs.LastFlushRT = currentDs.LastFlushRT
+			}
+		}
+		newDs.LastUpdateRT = time.Now()
+		dss.byName[newDs.Name] = newDs
+		dss.byId[newDs.Id] = newDs
+		dss.addPrefixes(newDs.Name)
 	}
 	dss.Unlock()
 
@@ -488,6 +502,7 @@ func (ds *DataSource) processDataPoint(dp *DataPoint) error {
 
 	ds.LastUpdate = dp.TimeStamp
 	ds.LastDs = dp.Value
+	ds.LastUpdateRT = time.Now()
 
 	return nil
 }

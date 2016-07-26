@@ -515,7 +515,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	if lastupdate.Valid {
 		ds.LastUpdate = lastupdate.Time
 	} else {
-		ds.LastUpdate = time.Unix(0, 0)
+		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{} !
 	}
 	return &ds, err
 }
