@@ -96,17 +96,16 @@ func (dp *DataPoint) GobDecode(b []byte) error {
 // completes the PDP. This state is kept in DataSource.
 
 type DataSource struct {
-	Id           int64                // Id
-	Name         string               // Series name
-	StepMs       int64                // Step Size in Ms
-	HeartbeatMs  int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
-	LastUpdate   time.Time            // Last time we received an update (series time - can be in the past or future)
-	LastDs       float64              // Last value we saw
-	Value        float64              // Current Value (the weighted average)
-	UnknownMs    int64                // Ms of the data that is "unknown" (e.g. because of exceeded HB)
-	RRAs         []*RoundRobinArchive // Array of Round Robin Archives
-	LastFlushRT  time.Time            // Last time this DS was flushed (actual real time).
-	LastUpdateRT time.Time            // Last time this DS was update (actual real time).
+	Id          int64                // Id
+	Name        string               // Series name
+	StepMs      int64                // Step Size in Ms
+	HeartbeatMs int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
+	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
+	LastDs      float64              // Last value we saw
+	Value       float64              // Current Value (the weighted average)
+	UnknownMs   int64                // Ms of the data that is "unknown" (e.g. because of exceeded HB)
+	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
+	LastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
 
 type DataSources struct {
@@ -307,7 +306,6 @@ func (dsns *DataSourceNames) DsIdsFromIdent(ident string) map[string]int64 {
 }
 
 func (dss *DataSources) Reload(serde SerDe) error {
-
 	dsList, err := serde.FetchDataSources()
 	if err != nil {
 		return err
@@ -329,7 +327,6 @@ func (dss *DataSources) Reload(serde SerDe) error {
 				newDs.LastFlushRT = currentDs.LastFlushRT
 			}
 		}
-		newDs.LastUpdateRT = time.Now()
 		dss.byName[newDs.Name] = newDs
 		dss.byId[newDs.Id] = newDs
 	}
@@ -519,7 +516,6 @@ func (ds *DataSource) processDataPoint(dp *DataPoint) error {
 
 	ds.LastUpdate = dp.TimeStamp
 	ds.LastDs = dp.Value
-	ds.LastUpdateRT = time.Now()
 
 	return nil
 }

@@ -280,7 +280,7 @@ func (t *Transceiver) dispatcher() {
 			break
 		}
 
-		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil || time.Now().Sub(dp.DS.LastUpdateRT) > t.MaxCacheDuration {
+		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
 			if err := t.createOrLoadDS(dp); err != nil {
 				log.Printf("dispatcher(): createDataSource() error: %v", err)
 				continue
@@ -375,7 +375,6 @@ func (t *Transceiver) worker(id int64) {
 		case dp, ok := <-t.workerChs[id]:
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
-
 				if err := dp.Process(); err == nil {
 					recent[ds.Id] = true
 				} else {
