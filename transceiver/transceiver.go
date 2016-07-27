@@ -105,7 +105,7 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
-		rcache:            &ReadCache{serde: serde},
+		rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
 		dpCh:              make(chan *rrd.DataPoint, 65536), // so we can survive a graceful restart
 		stCh:              make(chan *statsd.Stat, 65536),   // ditto
 	}
