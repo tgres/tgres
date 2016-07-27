@@ -39,6 +39,7 @@ type Transceiver struct {
 	StatsNamePrefix                    string
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
+	rcache                             *ReadCache
 	dpCh                               chan *rrd.DataPoint    // incoming data point
 	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest // ds to flush
@@ -104,18 +105,27 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
+		rcache:            &ReadCache{serde: serde},
 		dpCh:              make(chan *rrd.DataPoint, 65536), // so we can survive a graceful restart
 		stCh:              make(chan *statsd.Stat, 65536),   // ditto
 	}
 }
 
 func (t *Transceiver) Start() error {
+
 	log.Printf("Transceiver: Loading data from serde.")
 	if err := t.dss.Reload(t.serde); err != nil {
-		log.Printf("transceiver.Start(): Reload() error: %v", err)
+		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
 		return err
 	}
 
+	// ZZZ
+	if err := t.rcache.Reload(); err != nil {
+		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
+		return err
+	}
+
+	// Let the cluster know about our data
 	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
 		dss := t.dss.List()
 		result := make([]cluster.DistDatum, len(dss))
@@ -324,7 +334,7 @@ func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
 	return t.requestDsCopy(id)
 }
 func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
-	return t.dss.DsIdsFromIdent(ident)
+	return t.rcache.DsIdsFromIdent(ident)
 }
 func (t *Transceiver) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
 	return t.serde.SeriesQuery(ds, from, to, maxPoints)
@@ -582,7 +592,7 @@ func (t *Transceiver) statWorker() {
 }
 
 func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
-	return t.dss.FsFind(pattern)
+	return t.rcache.FsFind(pattern)
 }
 
 // Implement cluster.DistDatum for data sources

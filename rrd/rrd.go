@@ -111,9 +111,8 @@ type DataSource struct {
 
 type DataSources struct {
 	sync.RWMutex
-	byName   map[string]*DataSource
-	byId     map[int64]*DataSource
-	prefixes map[string]bool // for Graphite-like listings
+	byName map[string]*DataSource
+	byId   map[int64]*DataSource
 }
 
 type RoundRobinArchive struct {
@@ -132,13 +131,22 @@ type RoundRobinArchive struct {
 	End         int64
 }
 
+// for Graphite-like listings
+type DataSourceNames struct {
+	sync.RWMutex
+	names    map[string]int64
+	prefixes map[string]bool
+}
+
 // This thing knows how to load/save series in some storage
 
 type SerDe interface {
 	// Create a DS with name, and/or return it
 	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*DataSource, error)
-	// Fetch a list of data sources from the storage
+
+	FetchDataSource(id int64) (*DataSource, error)
 	FetchDataSources() ([]*DataSource, error)
+	FetchDataSourceNames() (map[string]int64, error)
 	// Flush a DS
 	FlushDataSource(ds *DataSource) error
 	// Query
@@ -184,7 +192,6 @@ func (dss *DataSources) Insert(ds *DataSource) {
 	defer dss.Unlock()
 	dss.byName[ds.Name] = ds
 	dss.byId[ds.Id] = ds
-	dss.addPrefixes(ds.Name)
 }
 
 func (dss *DataSources) List() []*DataSource {
@@ -195,17 +202,6 @@ func (dss *DataSources) List() []*DataSource {
 		n++
 	}
 	return result
-}
-
-// Add prefixes given a name
-func (dss *DataSources) addPrefixes(name string) {
-	prefix := name
-	for ext := filepath.Ext(prefix); ext != ""; {
-		prefix = name[0 : len(prefix)-len(ext)]
-		dss.prefixes[prefix] = true
-		ext = filepath.Ext(prefix)
-	}
-
 }
 
 // This only deletes it from memory, it is still in
@@ -237,29 +233,52 @@ func (fns fsNodes) Swap(i, j int) {
 	fns[i], fns[j] = fns[j], fns[i]
 }
 
-func (dss *DataSources) FsFind(pattern string) []*FsFindNode {
+// Add prefixes given a name:
+// "abcd" => []
+// "abcd.efg.hij" => ["abcd.efg", "abcd"]
+func (dsns *DataSourceNames) addPrefixes(name string) {
+	prefix := name
+	for ext := filepath.Ext(prefix); ext != ""; {
+		prefix = name[0 : len(prefix)-len(ext)]
+		dsns.prefixes[prefix] = true
+		ext = filepath.Ext(prefix)
+	}
+}
 
-	// TODO This should happen in Postgres because at 1M+ series this
-	// wouldn't work that well... But then this API is ill designed
-	// for that too...
+func (dsns *DataSourceNames) Reload(serde SerDe) error {
+	names, err := serde.FetchDataSourceNames()
+	if err != nil {
+		return err
+	}
 
-	dss.RLock()
-	defer dss.RUnlock()
+	dsns.Lock()
+	defer dsns.Unlock()
+
+	dsns.names = make(map[string]int64)
+	dsns.prefixes = make(map[string]bool)
+	for name, id := range names {
+		dsns.names[name] = id
+		dsns.addPrefixes(name)
+	}
+
+	return nil
+}
+
+func (dsns *DataSourceNames) FsFind(pattern string) []*FsFindNode {
+
+	dsns.RLock()
+	defer dsns.RUnlock()
 
 	dots := strings.Count(pattern, ".")
 
 	set := make(map[string]*FsFindNode)
-	for k, ds := range dss.byName {
-
-		// NB: It's safe to touch DS id, because it is assigned
-		// protected by the same dss lock, but not other members!
-
+	for k, dsId := range dsns.names {
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: true, dsId: ds.Id}
+			set[k] = &FsFindNode{Name: k, Leaf: true, dsId: dsId}
 		}
 	}
 
-	for k, _ := range dss.prefixes {
+	for k, _ := range dsns.prefixes {
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
 			set[k] = &FsFindNode{Name: k, Leaf: false}
 		}
@@ -277,9 +296,9 @@ func (dss *DataSources) FsFind(pattern string) []*FsFindNode {
 	return result
 }
 
-func (dss *DataSources) DsIdsFromIdent(ident string) map[string]int64 {
+func (dsns *DataSourceNames) DsIdsFromIdent(ident string) map[string]int64 {
 	result := make(map[string]int64)
-	for _, node := range dss.FsFind(ident) {
+	for _, node := range dsns.FsFind(ident) {
 		if node.Leaf { // only leaf nodes are series names
 			result[node.Name] = node.dsId
 		}
@@ -298,7 +317,6 @@ func (dss *DataSources) Reload(serde SerDe) error {
 	currentDss := dss.byId
 	dss.byName = make(map[string]*DataSource)
 	dss.byId = make(map[int64]*DataSource)
-	dss.prefixes = make(map[string]bool)
 	for _, newDs := range dsList {
 		if currentDs, ok := currentDss[newDs.Id]; ok {
 			if currentDs.LastUpdate.After(newDs.LastUpdate) {
@@ -314,7 +332,6 @@ func (dss *DataSources) Reload(serde SerDe) error {
 		newDs.LastUpdateRT = time.Now()
 		dss.byName[newDs.Name] = newDs
 		dss.byId[newDs.Id] = newDs
-		dss.addPrefixes(newDs.Name)
 	}
 	dss.Unlock()
 

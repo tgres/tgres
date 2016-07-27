@@ -539,13 +539,66 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	return &rra, err
 }
 
+func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
+
+	const sql = `SELECT id, name FROM %[1]sds ds`
+
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
+	if err != nil {
+		log.Printf("FetchDataSourceNames(): error querying database: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64, 0)
+	for rows.Next() {
+		var (
+			id   int64
+			name string
+		)
+		err := rows.Scan(&id, &name)
+		if err != nil {
+			log.Printf("FetchDataSourceNames(): error scanning row: %v", err)
+			return nil, err
+		}
+		result[name] = id
+	}
+	return result, nil
+}
+
+func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
+
+	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE id = $1`
+
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), id)
+	if err != nil {
+		log.Printf("FetchDataSource(): error querying database: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		ds, err := dataSourceFromRow(rows)
+		rras, err := p.fetchRoundRobinArchives(ds.Id)
+		if err != nil {
+			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
+			return nil, err
+		} else {
+			ds.RRAs = rras
+		}
+		return ds, nil
+	}
+
+	return nil, nil
+}
+
 func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
-		log.Printf("fetchDataSources(): error querying database: %v", err)
+		log.Printf("FetchDataSources(): error querying database: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -555,7 +608,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds.Id)
 		if err != nil {
-			log.Printf("fetchDataSources(): error fetching RRAs: %v", err)
+			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
 			ds.RRAs = rras
