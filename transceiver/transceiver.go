@@ -39,7 +39,7 @@ type Transceiver struct {
 	StatsNamePrefix                    string
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
-	rcache                             *ReadCache
+	Rcache                             *ReadCache
 	dpCh                               chan *rrd.DataPoint    // incoming data point
 	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest // ds to flush
@@ -105,7 +105,7 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
-		rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
+		Rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
 		dpCh:              make(chan *rrd.DataPoint, 65536), // so we can survive a graceful restart
 		stCh:              make(chan *statsd.Stat, 65536),   // ditto
 	}
@@ -120,7 +120,7 @@ func (t *Transceiver) Start() error {
 	}
 
 	// ZZZ
-	if err := t.rcache.Reload(); err != nil {
+	if err := t.Rcache.Reload(); err != nil {
 		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
 		return err
 	}
@@ -334,7 +334,7 @@ func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
 	return t.requestDsCopy(id)
 }
 func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
-	return t.rcache.DsIdsFromIdent(ident)
+	return t.Rcache.DsIdsFromIdent(ident)
 }
 func (t *Transceiver) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
 	return t.serde.SeriesQuery(ds, from, to, maxPoints)
@@ -591,7 +591,7 @@ func (t *Transceiver) statWorker() {
 }
 
 func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
-	return t.rcache.FsFind(pattern)
+	return t.Rcache.FsFind(pattern)
 }
 
 // Implement cluster.DistDatum for data sources
