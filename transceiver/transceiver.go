@@ -43,7 +43,6 @@ type Transceiver struct {
 	dpCh                               chan *rrd.DataPoint    // incoming data point
 	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest // ds to flush
-	dsCopyChs                          []chan *dsCopyRequest  // request a copy of a DS (used by HTTP)
 	stCh                               chan *statsd.Stat      // incoming statd stats
 	workerWg                           sync.WaitGroup
 	flusherWg                          sync.WaitGroup
@@ -316,31 +315,11 @@ func (t *Transceiver) QueueStat(st *statsd.Stat) {
 	t.stCh <- st
 }
 
-// NEXT: Think about these, what exactly is "stat" and calling on a nil pointer
 func (t *Transceiver) QueueStatCount(name string, n int) {
 	if t != nil {
 		t.QueueStat(&statsd.Stat{Name: name, Value: float64(n), Metric: "c"})
 	}
 }
-
-func (t *Transceiver) requestDsCopy(id int64) *rrd.DataSource {
-	req := &dsCopyRequest{id, make(chan *rrd.DataSource)}
-	t.dsCopyChs[id%int64(t.NWorkers)] <- req
-	return <-req.resp
-}
-
-// Satisfy DSGetter interface in tgres/dsl
-func (t *Transceiver) GetDSById(id int64) *rrd.DataSource {
-	return t.requestDsCopy(id)
-}
-func (t *Transceiver) DsIdsFromIdent(ident string) map[string]int64 {
-	return t.Rcache.DsIdsFromIdent(ident)
-}
-func (t *Transceiver) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
-	return t.serde.SeriesQuery(ds, from, to, maxPoints)
-}
-
-// End DSGetter interface
 
 func (t *Transceiver) worker(id int64) {
 
@@ -383,15 +362,6 @@ func (t *Transceiver) worker(id int64) {
 			} else {
 				flushEverything = true
 			}
-		case r := <-t.dsCopyChs[id]:
-			ds = t.dss.GetById(r.dsId)
-			if ds == nil {
-				log.Printf("worker(%d): WAT? cannot lookup ds id (%d) sent for copy?", id, r.dsId)
-			} else {
-				r.resp <- ds.MostlyCopy()
-				close(r.resp)
-			}
-			continue
 		}
 
 		if ds == nil {
@@ -435,13 +405,11 @@ func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
 func (t *Transceiver) startWorkers() {
 
 	t.workerChs = make([]chan *rrd.DataPoint, t.NWorkers)
-	t.dsCopyChs = make([]chan *dsCopyRequest, t.NWorkers)
 
 	log.Printf("Starting %d workers...", t.NWorkers)
 	t.startWg.Add(t.NWorkers)
 	for i := 0; i < t.NWorkers; i++ {
 		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
-		t.dsCopyChs[i] = make(chan *dsCopyRequest, 1024)
 
 		go t.worker(int64(i))
 	}
