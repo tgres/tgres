@@ -32,5 +32,6 @@ func (r *ReadCache) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoint
 // End of DSGetter
 
 func (r *ReadCache) FsFind(pattern string) []*rrd.FsFindNode {
+	r.dsns.Reload(r.serde)
 	return r.dsns.FsFind(pattern)
 }
