@@ -264,6 +264,8 @@ func gracefulExit(t *x.Transceiver) {
 
 	quitting = true
 
+	t.ClusterReady(false)
+
 	log.Printf("Waiting for all TCP connections to finish...")
 	serviceMgr.closeListeners()
 	log.Printf("TCP connections finished.")

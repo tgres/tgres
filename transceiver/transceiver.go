@@ -154,6 +154,14 @@ func (t *Transceiver) Stop() {
 	close(t.dpCh)
 	t.dispatcherWg.Wait()
 	log.Printf("Dispatcher finished.")
+
+	log.Printf("Leaving cluster.")
+	t.cluster.Leave(1 * time.Second)
+	t.cluster.Shutdown()
+}
+
+func (t *Transceiver) ClusterReady(ready bool) {
+	t.cluster.Ready(ready)
 }
 
 func (t *Transceiver) stopWorkers() {
