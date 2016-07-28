@@ -304,7 +304,7 @@ func (sn sortableNodes) Swap(i, j int) {
 // compressed using flate.
 func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
 
-	snd, rcv = make(chan *Msg, 16), make(chan *Msg, 16)
+	snd, rcv = make(chan *Msg, 128), make(chan *Msg, 128)
 
 	c.rcvChs = append(c.rcvChs, rcv)
 	id := len(c.rcvChs) - 1
@@ -333,7 +333,10 @@ func (c *Cluster) RegisterMsgType() (snd, rcv chan *Msg) {
 			msg.Id = id
 
 			var resp Msg
-			msg.Dst.rpc.Call("ClusterRPC.Message", msg, &resp)
+			if err := msg.Dst.rpc.Call("ClusterRPC.Message", msg, &resp); err != nil {
+				log.Printf("Cluster: error sending message to %s", msg.Dst.Name())
+				msg.Dst.rpc = nil
+			}
 		}
 	}(id)
 
