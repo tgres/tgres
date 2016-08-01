@@ -1,5 +1,15 @@
 
 
+Getting Started:
+
+$ go get github.com/tgres/tgres
+
+Now you should have a tgres binary in $GOPATH/bin. Look in
+$GOPATH/src/github.com/tgres/tgres/etc for a sample config file. The
+user of the PostgreSQL database needs CREATE TABLE permissions.
+
+More about Tgres:
+
 Tgres is a "Time Series Database" which uses PostgreSQL for
 storage, written in Go.
 
