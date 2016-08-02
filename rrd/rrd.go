@@ -495,7 +495,7 @@ func (ds *DataSource) processDataPoint(dp *DataPoint) error {
 		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, dp.DS.LastUpdate)
 	}
 
-	if dsLastUpdate == 0 { // never-before updated
+	if dsLastUpdate == 0 { // never-before updated (or was zeroed out in ClearRRA)
 		for _, rra := range ds.RRAs {
 			rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
 			roundedDpEndsOn := dpTimeStamp / ds.StepMs * ds.StepMs

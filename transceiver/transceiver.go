@@ -398,6 +398,10 @@ func (t *Transceiver) worker(id int64) {
 }
 
 func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
+	if ds.LastUpdate == time.Unix(0, 0) {
+		// Do not flush empty DSs
+		return
+	}
 	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
 	if block {
 		fr.resp = make(chan bool, 1)
