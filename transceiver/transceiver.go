@@ -330,6 +330,7 @@ func (t *Transceiver) QueueStatCount(name string, n int) {
 }
 
 func (t *Transceiver) worker(id int64) {
+	t.workerWg.Add(1)
 	defer t.workerWg.Done()
 
 	recent := make(map[int64]bool)
@@ -349,15 +350,14 @@ func (t *Transceiver) worker(id int64) {
 
 	for {
 		var (
-			ds *rrd.DataSource
-			dp *rrd.DataPoint
-			ok bool
+			ds            *rrd.DataSource
+			channelClosed bool
 		)
 
 		select {
 		case <-periodicFlushCheck:
 			// Nothing to do here
-		case dp, ok = <-t.workerChs[id]:
+		case dp, ok := <-t.workerChs[id]:
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
 				if err := dp.Process(); err == nil {
@@ -365,6 +365,8 @@ func (t *Transceiver) worker(id int64) {
 				} else {
 					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name, err)
 				}
+			} else {
+				channelClosed = true
 			}
 		}
 
@@ -376,25 +378,24 @@ func (t *Transceiver) worker(id int64) {
 					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
 					continue
 				}
-				t.flushDs(ds, false)
-				delete(recent, ds.Id)
+				if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+					t.flushDs(ds, false)
+					delete(recent, ds.Id)
+				}
 			}
-		} else {
+		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
 			// flush just this one ds
 			t.flushDs(ds, false)
 			delete(recent, ds.Id)
 		}
 
-		if !ok {
+		if channelClosed {
 			break
 		}
 	}
 }
 
 func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
-	if !ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
-		return
-	}
 	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
 	if block {
 		fr.resp = make(chan bool, 1)
@@ -416,7 +417,6 @@ func (t *Transceiver) startWorkers() {
 	for i := 0; i < t.NWorkers; i++ {
 		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
 
-		t.workerWg.Add(1)
 		go t.worker(int64(i))
 	}
 
