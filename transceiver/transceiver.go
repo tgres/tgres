@@ -330,17 +330,11 @@ func (t *Transceiver) QueueStatCount(name string, n int) {
 }
 
 func (t *Transceiver) worker(id int64) {
-
-	t.workerWg.Add(1)
 	defer t.workerWg.Done()
 
-	var (
-		ds              *rrd.DataSource
-		flushEverything bool
-		recent          = make(map[int64]bool)
-	)
+	recent := make(map[int64]bool)
 
-	var periodicFlushCheck = make(chan int)
+	periodicFlushCheck := make(chan int)
 	go func() {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
@@ -354,12 +348,16 @@ func (t *Transceiver) worker(id int64) {
 	t.startWg.Done()
 
 	for {
-		ds, flushEverything = nil, false
+		var (
+			ds *rrd.DataSource
+			dp *rrd.DataPoint
+			ok bool
+		)
 
 		select {
 		case <-periodicFlushCheck:
 			// Nothing to do here
-		case dp, ok := <-t.workerChs[id]:
+		case dp, ok = <-t.workerChs[id]:
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
 				if err := dp.Process(); err == nil {
@@ -367,39 +365,34 @@ func (t *Transceiver) worker(id int64) {
 				} else {
 					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name, err)
 				}
-			} else {
-				flushEverything = true
 			}
 		}
 
 		if ds == nil {
-			// flushEverything or periodic
+			// periodic flush - check recent
 			for dsId, _ := range recent {
 				ds = t.dss.GetById(dsId)
 				if ds == nil {
 					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
 					continue
-				} else if flushEverything || ds.ShouldBeFlushed(t.MaxCachedPoints,
-					t.MinCacheDuration, t.MaxCacheDuration) {
-					t.flushDs(ds, false)
-					delete(recent, ds.Id)
 				}
+				t.flushDs(ds, false)
+				delete(recent, ds.Id)
 			}
-		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+		} else {
 			// flush just this one ds
 			t.flushDs(ds, false)
 			delete(recent, ds.Id)
 		}
 
-		if flushEverything {
+		if !ok {
 			break
 		}
 	}
 }
 
 func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
-	if ds.LastUpdate == time.Unix(0, 0) {
-		// Do not flush empty DSs
+	if !ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
 		return
 	}
 	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
@@ -423,6 +416,7 @@ func (t *Transceiver) startWorkers() {
 	for i := 0; i < t.NWorkers; i++ {
 		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
 
+		t.workerWg.Add(1)
 		go t.worker(int64(i))
 	}
 

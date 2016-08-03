@@ -101,8 +101,8 @@ type DataSource struct {
 	StepMs      int64                // Step Size in Ms
 	HeartbeatMs int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
 	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
-	LastDs      float64              // Last value we saw
-	Value       float64              // Current Value (the weighted average)
+	LastDs      float64              // Last final value we saw
+	Value       float64              // Weighted value (e.g. f we are 2/3 way into a step, Value should be 2/3 of the final step value)
 	UnknownMs   int64                // Ms of the data that is "unknown" (e.g. because of exceeded HB)
 	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
 	LastFlushRT time.Time            // Last time this DS was flushed (actual real time).

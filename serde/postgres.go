@@ -731,7 +731,6 @@ func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 }
 
 func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
-
 	for _, rra := range ds.RRAs {
 		if len(rra.DPs) > 0 {
 			if err := p.FlushRoundRobinArchive(rra); err != nil {
