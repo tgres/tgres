@@ -121,7 +121,9 @@ func (a *Aggregator) Flush(now time.Time) {
 		switch agg.kind {
 		case aggKindValue:
 			// store rate
-			a.t.QueueDataPoint(name, now, agg.value/now.Sub(a.lastFlush).Seconds())
+			if now.After(a.lastFlush) {
+				a.t.QueueDataPoint(name, now, agg.value/now.Sub(a.lastFlush).Seconds())
+			}
 
 		case aggKindGauge:
 			// store as is
