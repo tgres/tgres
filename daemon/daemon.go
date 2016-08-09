@@ -29,7 +29,6 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 )
 
 var (
@@ -165,24 +164,6 @@ func Init() { // not to be confused with init()
 		s := <-ch
 		log.Printf("start(): Received %v, proceeding to load the data", s)
 	}
-
-	// ZZZ
-	ln := c.LocalNode()
-	go func() {
-		for {
-			// Ask for members of the cluster
-			log.Printf("ZZZ MEMBERS:")
-			members, _ := c.SortedNodes()
-			for n, member := range members {
-				if ln.Name() == member.Name() {
-					log.Printf("ZZZ+n: %v, node: %v, ln: %v,  %s %s %s\n", n, member, ln, member.Name(), member.Addr, string(member.Node.Meta))
-				} else {
-					log.Printf("ZZZ n: %v, node: %v, ln: %v,  %s %s %s\n", n, member, ln, member.Name(), member.Addr, string(member.Node.Meta))
-				}
-			}
-			time.Sleep(15 * time.Second)
-		}
-	}()
 
 	// *finally* start the transceiver (because graceful restart, parent must save first)
 	if err := t.Start(); err != nil {

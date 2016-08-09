@@ -16,6 +16,7 @@
 package transceiver
 
 import (
+	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/statsd"
@@ -40,10 +41,10 @@ type Transceiver struct {
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
 	Rcache                             *ReadCache
-	dpCh                               chan *rrd.DataPoint    // incoming data point
-	workerChs                          []chan *rrd.DataPoint  // incoming data point with ds
-	flusherChs                         []chan *dsFlushRequest // ds to flush
-	stCh                               chan *statsd.Stat      // incoming statd stats
+	dpCh                               chan *rrd.DataPoint      // incoming data point
+	workerChs                          []chan *rrd.DataPoint    // incoming data point with ds
+	flusherChs                         []chan *dsFlushRequest   // ds to flush
+	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	workerWg                           sync.WaitGroup
 	flusherWg                          sync.WaitGroup
 	statWg                             sync.WaitGroup
@@ -105,8 +106,8 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
 		Rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
-		dpCh:              make(chan *rrd.DataPoint, 65536), // so we can survive a graceful restart
-		stCh:              make(chan *statsd.Stat, 65536),   // ditto
+		dpCh:              make(chan *rrd.DataPoint, 65536),      // so we can survive a graceful restart
+		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 	}
 }
 
@@ -202,12 +203,12 @@ func (t *Transceiver) stopFlushers() {
 func (t *Transceiver) stopStatWorker() {
 
 	log.Printf("stopStatWorker(): waiting for stat channel to empty...")
-	for len(t.stCh) > 0 {
+	for len(t.aggCh) > 0 {
 		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Printf("stopStatWorker(): closing stat channel...")
-	close(t.stCh)
+	close(t.aggCh)
 	log.Printf("stopStatWorker(): waiting for stat worker to finish...")
 	t.statWg.Wait()
 	log.Printf("stopStatWorker(): stat worker finished.")
@@ -302,7 +303,7 @@ func (t *Transceiver) dispatcher() {
 					dp.Hops++
 					if msg, err := cluster.NewMsgGob(node, dp); err == nil {
 						snd <- msg
-						t.QueueStatCount("tgres.dispatcher_forward", 1)
+						t.queueAddValue("tgres.dispatcher_forward", 1)
 					}
 				} else {
 					// This should be a very rare thing
@@ -319,13 +320,18 @@ func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
 	t.dpCh <- &rrd.DataPoint{Name: name, TimeStamp: ts, Value: v}
 }
 
-func (t *Transceiver) QueueStat(st *statsd.Stat) {
-	t.stCh <- st
+// TODO we could have shorthands such as:
+// QueueGauge()
+// QueueGaugeDelta()
+// QueueAppendValue()
+// ... but for now QueueAggregatorCommand seems sufficient
+func (t *Transceiver) QueueAggregatorCommand(agg *aggregator.Command) {
+	t.aggCh <- agg
 }
 
-func (t *Transceiver) QueueStatCount(name string, n int) {
+func (t *Transceiver) queueAddValue(name string, f float64) {
 	if t != nil {
-		t.QueueStat(&statsd.Stat{Name: name, Value: float64(n), Metric: "c"})
+		t.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, f))
 	}
 }
 
@@ -461,12 +467,12 @@ func (t *Transceiver) startFlushers() {
 }
 
 func (t *Transceiver) startStatWorker() {
-	log.Printf("Starting statWorker...")
+	log.Printf("Starting aggWorker...")
 	t.startWg.Add(1)
-	go t.statWorker()
+	go t.aggWorker()
 }
 
-func (t *Transceiver) statWorker() {
+func (t *Transceiver) aggWorker() {
 
 	t.statWg.Add(1)
 	defer t.statWg.Done()
@@ -480,23 +486,23 @@ func (t *Transceiver) statWorker() {
 			m := <-rcv
 
 			// To get an event back:
-			var st statsd.Stat
-			if err := m.Decode(&st); err != nil {
-				log.Printf("statWorker(): msg <- rcv statsd.Stat decoding FAILED, ignoring this stat.")
+			var ac aggregator.Command
+			if err := m.Decode(&ac); err != nil {
+				log.Printf("aggWorker(): msg <- rcv aggreagator.Command decoding FAILED, ignoring this command.")
 				continue
 			}
 
 			var maxHops = t.cluster.NumMembers() * 2 // This is kind of arbitrary
-			if st.Hops > maxHops {
-				log.Printf("statWorker(): dropping stat, max hops (%d) reached", maxHops)
+			if ac.Hops > maxHops {
+				log.Printf("aggWorker(): dropping command, max hops (%d) reached", maxHops)
 				continue
 			}
 
-			t.stCh <- &st // See recover above
+			t.aggCh <- &ac // See recover above
 		}
 	}()
 
-	var flushCh = make(chan int, 1)
+	var flushCh = make(chan time.Time, 1)
 	go func() {
 		for {
 			// NB: We do not use a time.Ticker here because my simple
@@ -506,20 +512,22 @@ func (t *Transceiver) statWorker() {
 			clock := time.Now()
 			time.Sleep(clock.Truncate(t.StatFlushDuration).Add(t.StatFlushDuration).Sub(clock))
 			if len(flushCh) == 0 {
-				flushCh <- 1
+				flushCh <- time.Now()
 			} else {
-				log.Printf("statWorker(): dropping stat flush timer on the floor - busy system?")
+				log.Printf("aggWorker(): dropping aggreagator flush timer on the floor - busy system?")
 			}
 		}
 	}()
 
-	log.Printf("statWorker(): started.")
+	log.Printf("aggWorker(): started.")
 	t.startWg.Done()
 
-	agg := statsd.NewAggregator(t, t.StatsNamePrefix)
+	statsd.Prefix = t.StatsNamePrefix
+
+	agg := aggregator.NewAggregator(t)
 	aggDd := &distDatumAggregator{agg}
 	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-		log.Printf("statWorker(): adding the statsd.Aggregator DistDatum to the cluster")
+		log.Printf("statWorker(): adding the aggregator.Aggregator DistDatum to the cluster")
 		return []cluster.DistDatum{aggDd}, nil
 	})
 
@@ -528,35 +536,32 @@ func (t *Transceiver) statWorker() {
 		// possible. This non-blocking select trick guarantees that we
 		// always process flushCh even if there is stuff in the stCh.
 		select {
-		case <-flushCh:
-			agg.Flush()
+		case now := <-flushCh:
+			agg.Flush(now)
 		default:
 		}
 
 		select {
-		case <-flushCh:
-			agg.Flush()
-		case st, ok := <-t.stCh:
+		case now := <-flushCh:
+			agg.Flush(now)
+		case ac, ok := <-t.aggCh:
 			if !ok {
-				agg.Flush()
+				agg.Flush(time.Now())
 				return
 			}
 
-			// Is this stat for us?
 			for _, node := range t.cluster.NodesForDistDatum(aggDd) {
 				if node.Name() == t.cluster.LocalNode().Name() {
-					if err := agg.Process(st); err != nil {
-						log.Printf("statWorker(): a.Process() error %v", err)
-					}
-				} else if st.Hops == 0 { // we do not forward more than once
+					agg.ProcessCmd(ac)
+				} else if ac.Hops == 0 { // we do not forward more than once
 					if node.Ready() {
-						st.Hops++
-						if msg, err := cluster.NewMsgGob(node, st); err == nil {
+						ac.Hops++
+						if msg, err := cluster.NewMsgGob(node, ac); err == nil {
 							snd <- msg
 						}
 					} else {
 						// Drop it
-						log.Printf("statWorker(): dropping stat on the floor because no node is Ready!")
+						log.Printf("aggWorker(): dropping command on the floor because no node is Ready!")
 					}
 				}
 			}
@@ -591,13 +596,13 @@ func (d *distDatumDataSource) GetName() string {
 // Implement cluster.DistDatum for stats
 
 type distDatumAggregator struct {
-	a *statsd.Aggregator
+	a *aggregator.Aggregator
 }
 
 func (d *distDatumAggregator) Id() int64       { return 1 }
-func (d *distDatumAggregator) Type() string    { return "statsd.Aggregator" }
-func (d *distDatumAggregator) GetName() string { return "TheStatsAggregator" }
+func (d *distDatumAggregator) Type() string    { return "aggregator.Aggregator" }
+func (d *distDatumAggregator) GetName() string { return "TheAggregator" }
 func (d *distDatumAggregator) Relinquish() error {
-	d.a.Flush()
+	d.a.Flush(time.Now())
 	return nil
 }

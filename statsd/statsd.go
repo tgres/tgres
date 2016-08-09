@@ -16,102 +16,39 @@
 package statsd
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
+	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/misc"
-	"math"
 	"strings"
-	"time"
 )
 
-// This is the transceiver really
-type dataPointQueuer interface {
-	QueueDataPoint(string, time.Time, float64)
-}
+var (
+	Prefix string = "stats"
+)
 
-type Aggregator struct {
-	t         dataPointQueuer
-	prefix    string
-	counts    map[string]int64
-	gauges    map[string]float64
-	timers    map[string][]float64
-	lastFlush time.Time
-}
-
-func NewAggregator(t dataPointQueuer, prefix string) *Aggregator {
-	return &Aggregator{
-		t:         t,
-		prefix:    prefix,
-		counts:    make(map[string]int64),
-		gauges:    make(map[string]float64),
-		timers:    make(map[string][]float64),
-		lastFlush: time.Now(),
-	}
-}
-
-func (a *Aggregator) Flush() {
-	for name, count := range a.counts {
-		dur := time.Now().Sub(a.lastFlush)
-		perSec := float64(count) / dur.Seconds()
-		a.t.QueueDataPoint(a.prefix+"."+name, time.Now(), perSec)
-	}
-	for name, gauge := range a.gauges {
-		a.t.QueueDataPoint(a.prefix+".gauges."+name, time.Now(), gauge)
-	}
-	for name, times := range a.timers {
-		// count
-		a.t.QueueDataPoint(a.prefix+".timers."+name+".count", time.Now(), float64(len(times)))
-
-		// lower, upper, sum, mean
-		if len(times) > 0 {
-			var (
-				lower, upper = times[0], times[0]
-				sum          float64
-			)
-
-			for _, v := range times[1:] {
-				lower = math.Min(lower, v)
-				upper = math.Max(upper, v)
-				sum += v
-			}
-			a.t.QueueDataPoint(a.prefix+".timers."+name+".lower", time.Now(), lower)
-			a.t.QueueDataPoint(a.prefix+".timers."+name+".upper", time.Now(), upper)
-			a.t.QueueDataPoint(a.prefix+".timers."+name+".sum", time.Now(), sum)
-			a.t.QueueDataPoint(a.prefix+".timers."+name+".mean", time.Now(), sum/float64(len(times)))
-		}
-
-		// TODO - these will require sorting:
-		// count_ps ?
-		// mean_90
-		// median
-		// std
-		// sum_90
-		// upper_90
-
-	}
-	// clear the maps
-	a.counts = make(map[string]int64)
-	a.gauges = make(map[string]float64)
-	a.timers = make(map[string][]float64)
-	a.lastFlush = time.Now()
-}
-
-func (a *Aggregator) Process(st *Stat) error {
+func (st *Stat) AggregatorCmd() *aggregator.Command {
 	if st.Metric == "c" {
-		if _, ok := a.counts[st.Name]; !ok {
-			a.counts[st.Name] = 0
-		}
-		a.counts[st.Name] += int64(st.Value)
+		return aggregator.NewCommand(
+			aggregator.CmdAdd,
+			Prefix+"."+st.Name,
+			st.Value*(1/st.Sample))
 	} else if st.Metric == "g" {
-		a.gauges[st.Name] = st.Value
-	} else if st.Metric == "ms" {
-		if _, ok := a.timers[st.Name]; !ok {
-			a.timers[st.Name] = make([]float64, 4)
+		if st.Delta {
+			return aggregator.NewCommand(
+				aggregator.CmdAddGauge,
+				Prefix+".gauges."+st.Name,
+				st.Value)
+		} else {
+			return aggregator.NewCommand(
+				aggregator.CmdSetGauge,
+				Prefix+".gauges."+st.Name,
+				st.Value)
 		}
-		a.timers[st.Name] = append(a.timers[st.Name], st.Value)
-	} else {
-		return fmt.Errorf("invalid metric type: %q, ignoring.", st.Metric)
+	} else if st.Metric == "ms" {
+		return aggregator.NewCommand(
+			aggregator.CmdAppend,
+			Prefix+".timers."+st.Name,
+			st.Value)
 	}
 	return nil
 }
@@ -121,45 +58,7 @@ type Stat struct {
 	Value  float64
 	Metric string
 	Sample float64
-	Hops   int
-}
-
-// TODO Why do we need these if all the members are public
-// base types?
-func (st *Stat) GobEncode() ([]byte, error) {
-	buf := bytes.Buffer{}
-	enc := gob.NewEncoder(&buf)
-	var err error
-	check := func(er error) {
-		if er != nil && err == nil {
-			err = er
-		}
-	}
-	check(enc.Encode(st.Name))
-	check(enc.Encode(st.Value))
-	check(enc.Encode(st.Metric))
-	check(enc.Encode(st.Sample))
-	check(enc.Encode(st.Hops))
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func (st *Stat) GobDecode(b []byte) error {
-	dec := gob.NewDecoder(bytes.NewBuffer(b))
-	var err error
-	check := func(er error) {
-		if er != nil && err == nil {
-			err = er
-		}
-	}
-	check(dec.Decode(&st.Name))
-	check(dec.Decode(&st.Value))
-	check(dec.Decode(&st.Metric))
-	check(dec.Decode(&st.Sample))
-	check(dec.Decode(&st.Hops))
-	return err
+	Delta  bool
 }
 
 // ParseStatsdPacket parses a statsd packet e.g: gorets:1|c|@0.1. See
@@ -170,7 +69,7 @@ func (st *Stat) GobDecode(b []byte) error {
 func ParseStatsdPacket(packet string) (*Stat, error) {
 
 	var (
-		result = &Stat{}
+		result = &Stat{Sample: 1}
 		parts  []string
 	)
 
@@ -185,6 +84,8 @@ func ParseStatsdPacket(packet string) (*Stat, error) {
 		return result, nil
 	}
 
+	// NB: This cannot be done with a single Sscanf for "%f|%s|@%f"
+	// because the %s is hungry and will eat the rest of the string.
 	parts = strings.Split(parts[1], "|")
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("invalid packet: %q", packet)
@@ -193,11 +94,20 @@ func ParseStatsdPacket(packet string) (*Stat, error) {
 	if n, err := fmt.Sscanf(parts[0], "%f", &result.Value); n != 1 || err != nil {
 		return nil, fmt.Errorf("error %v scanning input (cannot parse value|metric): %q", err, packet)
 	}
+	if parts[0][0] == '+' || parts[1][0] == '-' { // safe because "" would cause an error above
+		result.Delta = true
+	}
+	if parts[1] != "c" && parts[1] != "g" && parts[1] != "ms" {
+		return nil, fmt.Errorf("invalid metric type: %q", parts[1])
+	}
 	result.Metric = parts[1]
 
 	if len(parts) > 2 {
 		if n, err := fmt.Sscanf(parts[2], "@%f", &result.Sample); n != 1 || err != nil {
 			return nil, fmt.Errorf("error %v scanning input (bad @sample?): %q", err, packet)
+		}
+		if result.Sample < 0 || result.Sample > 1 {
+			return nil, fmt.Errorf("invalid sample: %q (must be between 0 and 1.0)", parts[2])
 		}
 	}
 

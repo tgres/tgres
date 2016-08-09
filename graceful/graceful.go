@@ -35,6 +35,7 @@ func (w gracefulConn) Close() error {
 	if err == nil {
 		TcpWg.Done()
 	}
+
 	return err
 }
 

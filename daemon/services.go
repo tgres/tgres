@@ -478,7 +478,6 @@ func parseGraphitePacket(packetStr string) (string, time.Time, float64, error) {
 
 // TODO isn't this identical to handleGraphiteTextProtocol?
 func handleStatsdTextProtocol(t *transceiver.Transceiver, conn net.Conn, timeout int) {
-
 	defer conn.Close() // decrements graceful.TcpWg
 
 	if timeout != 0 {
@@ -491,7 +490,7 @@ func handleStatsdTextProtocol(t *transceiver.Transceiver, conn net.Conn, timeout
 
 	for connbuf.Scan() {
 		if stat, err := statsd.ParseStatsdPacket(connbuf.Text()); err == nil {
-			t.QueueStat(stat)
+			t.QueueAggregatorCommand(stat.AggregatorCmd())
 		} else {
 			log.Printf("parseStatsdPacket(): %v", err)
 		}
@@ -550,7 +549,7 @@ func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
 		return fmt.Errorf("Error starting Statsd UDP Text Protocol serviceManager: %v", err)
 	}
 
-	fmt.Printf("Statsd UDP protocol Listening on %s\n", processListenSpec(Cfg.StatsdTextListenSpec))
+	fmt.Printf("Statsd UDP protocol Listening on %s\n", processListenSpec(Cfg.StatsdUdpListenSpec))
 
 	// for UDP timeout must be 0
 	go handleStatsdTextProtocol(g.t, g.conn, 0)
