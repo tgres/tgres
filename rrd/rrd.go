@@ -624,6 +624,9 @@ func (ds *DataSource) ClearRRAs(clearLU bool) {
 }
 
 func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
+	if ds.LastUpdate == time.Unix(0, 0) {
+		return false
+	}
 	pc := ds.pointCount()
 	if pc > maxCachedPoints {
 		return ds.LastFlushRT.Add(minCache).Before(time.Now())

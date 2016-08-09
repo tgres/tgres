@@ -741,7 +741,8 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
-		log.Printf("flushDataSource(): database error: %v", err)
+		log.Printf("flushDataSource(): database error: %v flushing data source %#v", err, ds)
+		return err
 	} else {
 		rows.Close()
 	}
