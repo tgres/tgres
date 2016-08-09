@@ -17,6 +17,7 @@ package http
 
 import (
 	"fmt"
+	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/misc"
 	x "github.com/tgres/tgres/transceiver"
 	"log"
@@ -24,7 +25,18 @@ import (
 	"time"
 )
 
-var pixelGif = []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;")
+func sendPixel(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "Tue, 03 Mar 1998 01:34:48 GMT") // 888888888
+	w.Header().Set("Last-Modified", "Tue, 03 Mar 1998 01:34:48 GMT")
+	w.Header().Set("X-Content-Type-Options", "nosniff") // IE: https://msdn.microsoft.com/en-us/library/gg622941(v=vs.85).aspx
+	w.Header().Set("Content-Type", "image/gif")
+	w.Header().Set("Cache-Control", "private, no-cache, no-cache=Set-Cookie, proxy-revalidate")
+	// Date set by net/http
+
+	w.Write([]byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"))
+}
 
 func PixelHandler(t *x.Transceiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -34,16 +46,7 @@ func PixelHandler(t *x.Transceiver) http.HandlerFunc {
 			}
 		}()
 
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "Tue, 03 Mar 1998 01:34:48 GMT") // 888888888
-		w.Header().Set("Last-Modified", "Tue, 03 Mar 1998 01:34:48 GMT")
-		w.Header().Set("X-Content-Type-Options", "nosniff") // IE: https://msdn.microsoft.com/en-us/library/gg622941(v=vs.85).aspx
-		w.Header().Set("Content-Type", "image/gif")
-		w.Header().Set("Cache-Control", "private, no-cache, no-cache=Set-Cookie, proxy-revalidate")
-		// Date set by net/http
-
-		w.Write(pixelGif) // At this point the client is satisfied
+		sendPixel(w)
 
 		err := r.ParseForm()
 		if err != nil {
@@ -77,4 +80,62 @@ func PixelHandler(t *x.Transceiver) http.HandlerFunc {
 		}
 
 	}
+}
+
+func PixelAddHandler(t *x.Transceiver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pixelAggHandler(r, w, t, aggregator.CmdAdd)
+	}
+}
+
+func PixelAddGaugeHandler(t *x.Transceiver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pixelAggHandler(r, w, t, aggregator.CmdAddGauge)
+	}
+}
+
+func PixelSetGaugeHandler(t *x.Transceiver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pixelAggHandler(r, w, t, aggregator.CmdSetGauge)
+	}
+}
+
+func PixelAppendHandler(t *x.Transceiver) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pixelAggHandler(r, w, t, aggregator.CmdAppend)
+	}
+}
+
+func pixelAggHandler(r *http.Request, w http.ResponseWriter, t *x.Transceiver, cmd aggregator.AggCmd) {
+	defer func() {
+		if rc := recover(); rc != nil {
+			log.Printf("pixelAggHandler: Recovered (this request is dropped): %v", rc)
+		}
+	}()
+
+	sendPixel(w)
+
+	err := r.ParseForm()
+	if err != nil {
+		log.Printf("pixelAggHandler: error from ParseForm(): %v", err)
+		return
+	}
+
+	for name, vals := range r.Form {
+
+		// foo.bar.baz=12.345
+
+		for _, valStr := range vals {
+
+			var val float64
+			n, _ := fmt.Sscanf(valStr, "%f", &val)
+			if n < 1 {
+				log.Printf("PixelAddHandler: error parsing %q", valStr)
+				return
+			}
+
+			t.QueueAggregatorCommand(aggregator.NewCommand(cmd, misc.SanitizeName(name), val))
+		}
+	}
+
 }

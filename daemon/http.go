@@ -30,6 +30,10 @@ func httpServer(addr string, l net.Listener, t *x.Transceiver) {
 	http.HandleFunc("/render", h.GraphiteRenderHandler(t))
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
 	http.HandleFunc("/pixel", h.PixelHandler(t))
+	http.HandleFunc("/pixel/add", h.PixelAddHandler(t))
+	http.HandleFunc("/pixel/addgauge", h.PixelAddGaugeHandler(t))
+	http.HandleFunc("/pixel/setgauge", h.PixelSetGaugeHandler(t))
+	http.HandleFunc("/pixel/append", h.PixelAppendHandler(t))
 
 	server := &http.Server{
 		Addr:           addr,
