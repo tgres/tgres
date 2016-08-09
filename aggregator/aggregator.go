@@ -112,6 +112,10 @@ func (a *Aggregator) ProcessCmd(cmd *Command) {
 }
 
 func (a *Aggregator) Flush(now time.Time) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	for name, agg := range a.m {
 
 		switch agg.kind {

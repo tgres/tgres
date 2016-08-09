@@ -487,6 +487,10 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 func (ds *DataSource) processDataPoint(dp *DataPoint) error {
 
+	if math.IsInf(dp.Value, 0) {
+		return fmt.Errorf("Inf is not a valid data point value: %#v", dp)
+	}
+
 	// Do everything in milliseconds
 	dpTimeStamp := dp.TimeStamp.UnixNano() / 1000000
 	dsLastUpdate := ds.LastUpdate.UnixNano() / 1000000
