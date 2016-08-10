@@ -1,81 +1,80 @@
 
+Tgres is a tool for receiving and reporting on simple time series
+written in Go which uses PostgreSQL for storage.
 
-Getting Started:
+### Current Status
 
+Phase 1 or proof-of-concept for the project is the ability to (mostly)
+act as a drop-in replacement for Graphite (except for chart
+generation) and Statsd. Currently Tgres supports nearly all of
+Graphite functions.
+
+As of Aug 2016 Tgres is feature-complete for phase 1, which means that
+the development will focus on tests, documentation and stability for a
+while.
+
+Tgres is not ready for production use, but is definitely stable enough
+for tinkering for those interested.
+
+### Getting Started
+
+You need a newer Go (1.6.1) and PostgreSQL 9.5 or later.
+
+```
 $ go get github.com/tgres/tgres
+```
 
-Now you should have a tgres binary in $GOPATH/bin. Look in
-$GOPATH/src/github.com/tgres/tgres/etc for a sample config file. The
-user of the PostgreSQL database needs CREATE TABLE permissions.
+Now you should have a tgres binary in `$GOPATH/bin`.
 
-More about Tgres:
+Look in `$GOPATH/src/github.com/tgres/tgres/etc` for a sample config
+file.  Make a copy of this file and edit it, at the very least check
+the `db-connect-string` setting. Also check `log-file` directory, it
+must be writable.
 
-Tgres is a "Time Series Database" which uses PostgreSQL for
-storage, written in Go.
+The user of the PostgreSQL database needs CREATE TABLE permissions. On
+first run tgres will create three tables (ds, rra and ts) and two
+views (tv and tvd).
 
-It is presently work-in-progress, still under development, things in
-flux.
+Tgres is invoked like this:
+```
+$ $GOPATH/bin/tgres -c /path/to/config
+```
 
-As of Jul 2016, Tgres is clustered. I'll be describing it in more
-detail in a blog post.
+### Other (random) notes
 
-Tgres can receive data using Graphite Text, UDP and Pickle
-protocols, as well as Statsd (counters, gauges and timers). It
-supports enough of a Graphite HTTP API to be usable with
-Grafana. Tgres implements the majority of the Graphite functions.
+* Tgres can be used as a standalone daemon, but is also suitable for
+  use as a Golang package for applications that want to provide TS
+  capabilities.
 
-Tgres places emphasis on accuracy and stores data similarly to
-RRDTool, using a weighted average of points that arrive within the
-same step rather than discarding them.
+* Tgres can receive data using Graphite Text, UDP and Pickle
+  protocols, as well as Statsd (counters, gauges and timers). It
+  supports enough of a Graphite HTTP API to be usable with
+  Grafana. Tgres implements the majority of the Graphite functions.
 
-Internally a datapoint refers to a time interval rather than a point
-in time. This is a more accurate and flexible representation which
-should also allow correct updates of past data (NIY).
+* Tgres supports a simplistic form of clustering - currently the
+  cluster must share the PG back-end, but otherwise looking quite
+  promising.
 
-Tgres stores data in a round-robin database split over a number of
-PostgreSQL rows of arrays. This means that a series occupies a
-constant number of rows in a database and can be updated in single row
-chunks for IO efficiency. The number of datapoints per row is
-configurable for each series individually. Tgres provides two
-PostgreSQL views to make time series appear as a regular table.
+* A round-robin archive is split over a number of PostgreSQL rows of
+  arrays.  This means that a series occupies a constant number of rows
+  in the database and can be updated in single row chunks for IO
+  efficiency. Tgres provides two PostgreSQL views to make time series
+  appear as a regular table.
 
-Tgres caches datapoints in memory until a certain number of
-datapoints has accumulated or a certain time period has been reached
-to reduce IO.
+* Tgres caches datapoints in memory until a certain number of
+  datapoints has accumulated or a certain time period has been reached
+  to reduce IO.
 
-Tgres relies on goroutines heavily and will take advantage of
-multiple CPU's on SMP architectures.
+* One of the main goals of Tgres is to address the data isolation
+  problem with most of the TS databases out there. TS data can reside
+  in the same PostgreSQL database as other data and can be easily
+  joined, analyzed, etc.
 
-One of the main goals of Tgres is to address the data isolation
-problem with most of the TS databases out there. Your TS data can reside
-in the same PostgreSQL database as other data and can be easily
-joined, analyzed, etc.
+* It has to be simple. There shouldn't be many daemons/components -
+  just this one process to receive and serve the data and the database
+  server.
 
-Other (future) goals/notes:
-
-It has to be simple. There shouldn't be many daemons/components - just
-this one process to receive and serve the data and the database server.
-
-Presently Tgres does not store the original datapoints as they
-come in, data is always aggregated. This may change.
-
-Graphite API was used only as a starting point, to be able to prove the
-concept and test against existing tools (mostly Grafana). Longer term
-there may be more interesting methods of exchanging data, e.g. gob or
-Redis protocol, etc.
-
-Some terminology:
-
-RRD - Round Robin Database. This is the "technology" that makes it
-      possible, it doesn't referer to any specific.
-
-DS -  Data Source. This is your temperature in the room or bytes per
-      second passing through, etc. A data source has a name. At a very
-      high level it is a "time series" (only calling it that would be
-      confusing with respect to RRA's).
-
-RRA - Round Robin Archive. An RRA is an actual series. A DS has at
-      least one RRA, usually more than one. For example if we store 60
-      points at 1 minute resolution, that's one RRA, and if we store
-      12 points at 1 hour resolution, that's another RRA. An RRA is a
-      fixed size array of floats.
+* Graphite API was used only as a starting point, to be able to prove
+  the concept and test against existing tools (mostly Grafana). Longer
+  term there may be more interesting methods of exchanging data,
+  e.g. gob or Redis protocol, etc.
