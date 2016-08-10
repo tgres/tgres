@@ -41,8 +41,8 @@ type Transceiver struct {
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
 	Rcache                             *ReadCache
-	dpCh                               chan *rrd.DataPoint      // incoming data point
-	workerChs                          []chan *rrd.DataPoint    // incoming data point with ds
+	dpCh                               chan *rrd.IncomingDP     // incoming data point
+	workerChs                          []chan *rrd.IncomingDP   // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest   // ds to flush
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	workerWg                           sync.WaitGroup
@@ -106,7 +106,7 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
 		Rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
-		dpCh:              make(chan *rrd.DataPoint, 65536),      // so we can survive a graceful restart
+		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 	}
 }
@@ -214,7 +214,7 @@ func (t *Transceiver) stopStatWorker() {
 	log.Printf("stopStatWorker(): stat worker finished.")
 }
 
-func (t *Transceiver) createOrLoadDS(dp *rrd.DataPoint) error {
+func (t *Transceiver) createOrLoadDS(dp *rrd.IncomingDP) error {
 	if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
 		if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
 			t.dss.Insert(ds)
@@ -246,7 +246,7 @@ func (t *Transceiver) dispatcher() {
 			m := <-rcv
 
 			// To get an event back:
-			var dp rrd.DataPoint
+			var dp rrd.IncomingDP
 			if err := m.Decode(&dp); err != nil {
 				log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
 				continue
@@ -267,7 +267,7 @@ func (t *Transceiver) dispatcher() {
 
 	for {
 
-		var dp *rrd.DataPoint
+		var dp *rrd.IncomingDP
 		var ok bool
 		select {
 		case _, ok = <-clusterChgCh:
@@ -301,7 +301,7 @@ func (t *Transceiver) dispatcher() {
 			} else if dp.Hops == 0 { // we do not forward more than once
 				if node.Ready() {
 					dp.Hops++
-					if msg, err := cluster.NewMsgGob(node, dp); err == nil {
+					if msg, err := cluster.NewMsg(node, dp); err == nil {
 						snd <- msg
 						t.queueAddValue("tgres.dispatcher_forward", 1)
 					}
@@ -317,7 +317,7 @@ func (t *Transceiver) dispatcher() {
 }
 
 func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
-	t.dpCh <- &rrd.DataPoint{Name: name, TimeStamp: ts, Value: v}
+	t.dpCh <- &rrd.IncomingDP{Name: name, TimeStamp: ts, Value: v}
 }
 
 // TODO we could have shorthands such as:
@@ -416,12 +416,12 @@ func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
 
 func (t *Transceiver) startWorkers() {
 
-	t.workerChs = make([]chan *rrd.DataPoint, t.NWorkers)
+	t.workerChs = make([]chan *rrd.IncomingDP, t.NWorkers)
 
 	log.Printf("Starting %d workers...", t.NWorkers)
 	t.startWg.Add(t.NWorkers)
 	for i := 0; i < t.NWorkers; i++ {
-		t.workerChs[i] = make(chan *rrd.DataPoint, 1024)
+		t.workerChs[i] = make(chan *rrd.IncomingDP, 1024)
 
 		go t.worker(int64(i))
 	}
@@ -556,7 +556,7 @@ func (t *Transceiver) aggWorker() {
 				} else if ac.Hops == 0 { // we do not forward more than once
 					if node.Ready() {
 						ac.Hops++
-						if msg, err := cluster.NewMsgGob(node, ac); err == nil {
+						if msg, err := cluster.NewMsg(node, ac); err == nil {
 							snd <- msg
 						}
 					} else {

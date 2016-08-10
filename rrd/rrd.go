@@ -13,12 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rrd does the thing ZZZ.
+// Package rrd contains the logic for maintaining in-memory
+// Round-Robin Archives of data points.
 package rrd
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -29,13 +28,15 @@ import (
 )
 
 // DSSpec describes a DataSource. DSSpec is a schema that is used to
-// create the DataSource.
-
+// create the DataSource. This is necessary so that DS's can be crated
+// on-the-fly.
 type DSSpec struct {
 	Step      time.Duration
 	Heartbeat time.Duration
 	RRAs      []*RRASpec
 }
+
+// RRASpec is the RRA definition part of DSSpec.
 type RRASpec struct {
 	Function string
 	Step     time.Duration
@@ -43,9 +44,10 @@ type RRASpec struct {
 	Xff      float64
 }
 
-// This represents incoming data, as is.
-
-type DataPoint struct {
+// DataPoint represents incoming data, i.e. this is the form in which
+// input data is expected. This is not an internal representation of a
+// data point, it's the format in which they are expected to arrive.
+type IncomingDP struct {
 	DS        *DataSource
 	Name      string
 	TimeStamp time.Time
@@ -53,42 +55,14 @@ type DataPoint struct {
 	Hops      int
 }
 
-func (dp *DataPoint) Process() error {
-	return dp.DS.processDataPoint(dp)
-}
-
-func (dp *DataPoint) GobEncode() ([]byte, error) {
-	buf := bytes.Buffer{}
-	enc := gob.NewEncoder(&buf)
-	var err error
-	check := func(er error) {
-		if er != nil && err == nil {
-			err = er
-		}
+// Process will append the data point to the the DS's archive(s). Once
+// an incoming data point is processed, it can be discarded, it's not
+// very useful for anything.
+func (dp *IncomingDP) Process() error {
+	if dp.DS == nil {
+		return fmt.Errorf("Cannot process data point with nil DS.")
 	}
-	check(enc.Encode(dp.Name))
-	check(enc.Encode(dp.TimeStamp))
-	check(enc.Encode(dp.Value))
-	check(enc.Encode(dp.Hops))
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func (dp *DataPoint) GobDecode(b []byte) error {
-	dec := gob.NewDecoder(bytes.NewBuffer(b))
-	var err error
-	check := func(er error) {
-		if er != nil && err == nil {
-			err = er
-		}
-	}
-	check(dec.Decode(&dp.Name))
-	check(dec.Decode(&dp.TimeStamp))
-	check(dec.Decode(&dp.Value))
-	check(dec.Decode(&dp.Hops))
-	return err
+	return dp.DS.processIncomingDP(dp)
 }
 
 // When a DP arrives in-between PDP boundary, there is state we need
@@ -485,7 +459,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 	return nil
 }
 
-func (ds *DataSource) processDataPoint(dp *DataPoint) error {
+func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 
 	if math.IsInf(dp.Value, 0) {
 		return fmt.Errorf("Inf is not a valid data point value: %#v", dp)

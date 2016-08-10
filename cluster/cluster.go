@@ -517,9 +517,8 @@ type Msg struct {
 	Body     []byte
 }
 
-// NewMsgGob creates a Msg from a payload which implements
-// gob.GobEncoder.
-func NewMsgGob(dest *Node, payload gob.GobEncoder) (*Msg, error) {
+// NewMsg creates a Msg from a payload which is gob-encodable
+func NewMsg(dest *Node, payload interface{}) (*Msg, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(payload); err != nil {
