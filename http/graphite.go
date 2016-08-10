@@ -103,7 +103,7 @@ func GraphiteRenderHandler(t *x.Transceiver) http.HandlerFunc {
 					value := series.CurrentValue()
 					ts := series.CurrentPosBeginsAfter().Unix() // NOTE: Graphite protocol marks the *beginning* of the point
 					if ts > 0 {
-						if math.IsNaN(value) {
+						if math.IsNaN(value) || math.IsInf(value, 0) {
 							fmt.Fprintf(w, "[null, %v]", ts)
 						} else {
 							fmt.Fprintf(w, "[%v, %v]", value, ts)
