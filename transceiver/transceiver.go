@@ -114,8 +114,8 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 func (t *Transceiver) Start() error {
 
 	log.Printf("Transceiver: Loading data from serde.")
-	if err := t.dss.Reload(t.serde); err != nil {
-		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
+	if err := t.dss.ReloadAll(t.serde); err != nil {
+		log.Printf("transceiver.Start(): dss.ReloadAll() error: %v", err)
 		return err
 	}
 
@@ -587,6 +587,10 @@ func (d *distDatumDataSource) Relinquish() error {
 	return nil
 }
 
+func (d *distDatumDataSource) Acquire() error {
+	return d.t.dss.Reload(d.t.serde, d.ds.Id)
+}
+
 func (d *distDatumDataSource) Id() int64 { return d.ds.Id }
 
 func (d *distDatumDataSource) Type() string { return "DataSource" }
@@ -608,3 +612,4 @@ func (d *distDatumAggregator) Relinquish() error {
 	d.a.Flush(time.Now())
 	return nil
 }
+func (d *distDatumAggregator) Acquire() error { return nil }

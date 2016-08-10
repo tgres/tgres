@@ -279,7 +279,7 @@ func (dsns *DataSourceNames) DsIdsFromIdent(ident string) map[string]int64 {
 	return result
 }
 
-func (dss *DataSources) Reload(serde SerDe) error {
+func (dss *DataSources) ReloadAll(serde SerDe) error {
 	dsList, err := serde.FetchDataSources()
 	if err != nil {
 		return err
@@ -292,7 +292,7 @@ func (dss *DataSources) Reload(serde SerDe) error {
 	for _, newDs := range dsList {
 		if currentDs, ok := currentDss[newDs.Id]; ok {
 			if currentDs.LastUpdate.After(newDs.LastUpdate) {
-				// Our cached data is more recent, save it
+				// Our cached data is more recent, keep it
 				newDs.LastUpdate = currentDs.LastUpdate
 				newDs.LastDs = currentDs.LastDs
 				newDs.Value = currentDs.Value
@@ -304,6 +304,20 @@ func (dss *DataSources) Reload(serde SerDe) error {
 		dss.byName[newDs.Name] = newDs
 		dss.byId[newDs.Id] = newDs
 	}
+	dss.Unlock()
+
+	return nil
+}
+
+func (dss *DataSources) Reload(serde SerDe, id int64) error {
+	newDs, err := serde.FetchDataSource(id)
+	if err != nil {
+		return err
+	}
+
+	dss.Lock()
+	dss.byName[newDs.Name] = newDs
+	dss.byId[newDs.Id] = newDs
 	dss.Unlock()
 
 	return nil

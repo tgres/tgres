@@ -582,6 +582,11 @@ type DistDatum interface {
 	// timeout).
 	Relinquish() error
 
+	// Acquire is chance to do something just before we can start
+	// processing data for this DistDatum (which normally would just
+	// be Relinquished by another node).
+	Acquire() error
+
 	// This is only used for logging/debugging. It should return some
 	// kind of a meaningful symbolic name for this datum, if any.
 	GetName() string
@@ -637,7 +642,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		return err
 	}
 
-	waitIds := make(map[string]bool)
+	waitDds := make(map[string]DistDatum)
 
 	for _, dde := range c.dds {
 		wg.Add(1)
@@ -673,9 +678,9 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					}
 				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
 					log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
-					// Add to the list of ids to wait on, but only if there existed nodes
+					// Add to the list of dds to wait on, but only if there existed nodes
 					if oldNode.Name() != "<nil>" {
-						waitIds[fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id())] = true
+						waitDds[fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id())] = dde.dd
 					}
 				}
 			}
@@ -691,7 +696,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 	go func() {
 		defer wg.Done()
 
-		log.Printf("Transition(): Waiting on %d relinquish messages... (timeout %v) %v", len(waitIds), timeout, waitIds)
+		log.Printf("Transition(): Waiting on %d relinquish messages... (timeout %v) %v", len(waitDds), timeout, waitDds)
 
 		tmout := make(chan bool, 1)
 		go func() {
@@ -700,7 +705,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		}()
 
 		for {
-			if len(waitIds) == 0 {
+			if len(waitDds) == 0 {
 				return
 			}
 
@@ -714,9 +719,14 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 
 			key := string(m.Body)
 			log.Printf("Transition(): Got relinquish message for %s from %s.", key, m.Src.Name())
-			delete(waitIds, key)
-			if len(waitIds) > 0 {
-				log.Printf("Transition(): Still waiting on %d relinquish messages: %v", len(waitIds), waitIds)
+			if waitDds[key] != nil {
+				if err := waitDds[key].Acquire(); err != nil {
+					log.Printf("Transition(): Acquire(%d) error: %v", key, err)
+				}
+			}
+			delete(waitDds, key)
+			if len(waitDds) > 0 {
+				log.Printf("Transition(): Still waiting on %d relinquish messages: %v", len(waitDds), waitDds)
 			}
 		}
 
