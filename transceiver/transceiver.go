@@ -18,7 +18,9 @@ package transceiver
 import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 	"github.com/tgres/tgres/statsd"
 	"log"
 	"math/rand"
@@ -32,7 +34,7 @@ type MatchingDSSpecFinder interface {
 
 type Transceiver struct {
 	cluster                            *cluster.Cluster
-	serde                              rrd.SerDe
+	serde                              serde.SerDe
 	NWorkers                           int
 	MaxCacheDuration, MinCacheDuration time.Duration
 	MaxCachedPoints                    int
@@ -40,7 +42,7 @@ type Transceiver struct {
 	StatsNamePrefix                    string
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *rrd.DataSources
-	Rcache                             *ReadCache
+	Rcache                             *dsl.ReadCache
 	dpCh                               chan *rrd.IncomingDP     // incoming data point
 	workerChs                          []chan *rrd.IncomingDP   // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest   // ds to flush
@@ -93,7 +95,7 @@ func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	}
 }
 
-func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
+func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
 	return &Transceiver{
 		cluster:           clstr,
 		serde:             serde,
@@ -105,7 +107,7 @@ func New(clstr *cluster.Cluster, serde rrd.SerDe) *Transceiver {
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
 		dss:               &rrd.DataSources{},
-		Rcache:            &ReadCache{serde: serde, dsns: &rrd.DataSourceNames{}},
+		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 	}
@@ -119,7 +121,7 @@ func (t *Transceiver) Start() error {
 		return err
 	}
 
-	// ZZZ
+	// ZZZ - remove me?
 	if err := t.Rcache.Reload(); err != nil {
 		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
 		return err
@@ -567,10 +569,6 @@ func (t *Transceiver) aggWorker() {
 			}
 		}
 	}
-}
-
-func (t *Transceiver) FsFind(pattern string) []*rrd.FsFindNode {
-	return t.Rcache.FsFind(pattern)
 }
 
 // Implement cluster.DistDatum for data sources

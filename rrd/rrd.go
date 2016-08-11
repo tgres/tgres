@@ -16,8 +16,8 @@
 // Package rrd contains the logic for maintaining in-memory
 // Round-Robin Archives of data points.
 //
-// Throughout documentation and code the following terms may appear as
-// two or three letter abbreviations, listed in parenthesis:
+// Throughout documentation and code the following terms are used
+// (sometimes as abbreviations, listed in parenthesis):
 //
 // Round-Robin Database (RRD): Collectively all the logic in this
 // package and an instance of the data it maintains is referred to as
@@ -52,9 +52,6 @@ package rrd
 import (
 	"fmt"
 	"math"
-	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -149,7 +146,7 @@ type RoundRobinArchive struct {
 	// we can compute any slot's timestamp without having to store it.
 	DPs map[int64]float64
 
-	// In the undelying SerDe, how many data points are stored in a single (database) row.
+	// In the undelying storage, how many data points are stored in a single (database) row.
 	Width int64
 	// DPs index of the starting slot (important for sparsity).
 	Start int64
@@ -157,62 +154,27 @@ type RoundRobinArchive struct {
 	End int64
 }
 
-// for Graphite-like listings
-type DataSourceNames struct {
-	sync.RWMutex
-	names    map[string]int64
-	prefixes map[string]bool
-}
-
-// This thing knows how to load/save series in some storage
-
-type SerDe interface {
-	// Create a DS with name, and/or return it
-	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*DataSource, error)
-
+// Subset of serde.SerDe that we need here
+type rrdSerDe interface {
 	FetchDataSource(id int64) (*DataSource, error)
 	FetchDataSources() ([]*DataSource, error)
-	FetchDataSourceNames() (map[string]int64, error)
-	// Flush a DS
-	FlushDataSource(ds *DataSource) error
-	// Query
-	SeriesQuery(ds *DataSource, from, to time.Time, maxPoints int64) (Series, error)
-	// Use the database to infer outside IPs of other connected clients
-	ListDbClientIps() ([]string, error)
-	MyDbAddr() (*string, error)
 }
 
-// This is a Series
-
-type Series interface {
-	Next() bool
-	Close() error
-
-	CurrentValue() float64
-	CurrentPosBeginsAfter() time.Time
-	CurrentPosEndsOn() time.Time
-
-	StepMs() int64
-	GroupByMs(...int64) int64
-	TimeRange(...time.Time) (time.Time, time.Time)
-	LastUpdate() time.Time
-	MaxPoints(...int64) int64
-
-	Alias(...string) string
-}
-
+// GetByName rlocks and gets a DS pointer.
 func (dss *DataSources) GetByName(name string) *DataSource {
 	dss.RLock()
 	defer dss.RUnlock()
 	return dss.byName[name]
 }
 
+// GetById rlocks and gets a DS pointer.
 func (dss *DataSources) GetById(id int64) *DataSource {
 	dss.RLock()
 	defer dss.RUnlock()
 	return dss.byId[id]
 }
 
+// Insert locks and inserts a DS.
 func (dss *DataSources) Insert(ds *DataSource) {
 	dss.Lock()
 	defer dss.Unlock()
@@ -220,7 +182,11 @@ func (dss *DataSources) Insert(ds *DataSource) {
 	dss.byId[ds.Id] = ds
 }
 
+// List rlocks, then returns a slice of *DS
 func (dss *DataSources) List() []*DataSource {
+	dss.RLock()
+	defer dss.RUnlock()
+
 	result := make([]*DataSource, len(dss.byId))
 	n := 0
 	for _, ds := range dss.byId {
@@ -240,99 +206,7 @@ func (dss *DataSources) Delete(ds *DataSource) {
 	delete(dss.byId, ds.Id)
 }
 
-type FsFindNode struct {
-	Name string
-	Leaf bool
-	dsId int64
-}
-
-type fsNodes []*FsFindNode
-
-// sort.Interface
-func (fns fsNodes) Len() int {
-	return len(fns)
-}
-func (fns fsNodes) Less(i, j int) bool {
-	return fns[i].Name < fns[j].Name
-}
-func (fns fsNodes) Swap(i, j int) {
-	fns[i], fns[j] = fns[j], fns[i]
-}
-
-// Add prefixes given a name:
-// "abcd" => []
-// "abcd.efg.hij" => ["abcd.efg", "abcd"]
-func (dsns *DataSourceNames) addPrefixes(name string) {
-	prefix := name
-	for ext := filepath.Ext(prefix); ext != ""; {
-		prefix = name[0 : len(prefix)-len(ext)]
-		dsns.prefixes[prefix] = true
-		ext = filepath.Ext(prefix)
-	}
-}
-
-func (dsns *DataSourceNames) Reload(serde SerDe) error {
-	names, err := serde.FetchDataSourceNames()
-	if err != nil {
-		return err
-	}
-
-	dsns.Lock()
-	defer dsns.Unlock()
-
-	dsns.names = make(map[string]int64)
-	dsns.prefixes = make(map[string]bool)
-	for name, id := range names {
-		dsns.names[name] = id
-		dsns.addPrefixes(name)
-	}
-
-	return nil
-}
-
-func (dsns *DataSourceNames) FsFind(pattern string) []*FsFindNode {
-
-	dsns.RLock()
-	defer dsns.RUnlock()
-
-	dots := strings.Count(pattern, ".")
-
-	set := make(map[string]*FsFindNode)
-	for k, dsId := range dsns.names {
-		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: true, dsId: dsId}
-		}
-	}
-
-	for k, _ := range dsns.prefixes {
-		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: false}
-		}
-	}
-
-	// convert to array
-	result := make(fsNodes, 0)
-	for _, v := range set {
-		result = append(result, v)
-	}
-
-	// so that results are consistently ordered, or Grafanas get confused
-	sort.Sort(result)
-
-	return result
-}
-
-func (dsns *DataSourceNames) DsIdsFromIdent(ident string) map[string]int64 {
-	result := make(map[string]int64)
-	for _, node := range dsns.FsFind(ident) {
-		if node.Leaf { // only leaf nodes are series names
-			result[node.Name] = node.dsId
-		}
-	}
-	return result
-}
-
-func (dss *DataSources) ReloadAll(serde SerDe) error {
+func (dss *DataSources) ReloadAll(serde rrdSerDe) error {
 	dsList, err := serde.FetchDataSources()
 	if err != nil {
 		return err
@@ -362,7 +236,7 @@ func (dss *DataSources) ReloadAll(serde SerDe) error {
 	return nil
 }
 
-func (dss *DataSources) Reload(serde SerDe, id int64) error {
+func (dss *DataSources) Reload(serde rrdSerDe, id int64) error {
 	newDs, err := serde.FetchDataSource(id)
 	if err != nil {
 		return err

@@ -31,7 +31,7 @@ import (
 func GraphiteMetricsFindHandler(t *x.Transceiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
-		nodes := t.FsFind(r.FormValue("query"))
+		nodes := t.Rcache.FsFind(r.FormValue("query"))
 		for n, node := range nodes {
 			parts := strings.Split(node.Name, ".")
 			if node.Leaf {
@@ -153,7 +153,7 @@ func parseTime(s string) (*time.Time, error) {
 func processTarget(t *x.Transceiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	dc := dsl.NewDslCtx(dsl.DSGetter(t.Rcache), query, from, to, maxPoints)
+	dc := dsl.NewDslCtx(t.Rcache, query, from, to, maxPoints)
 	result, err := dc.ParseDsl()
 	return result, err
 }

@@ -17,7 +17,6 @@ package dsl
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/rrd"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -26,21 +25,15 @@ import (
 	"time"
 )
 
-type DSGetter interface {
-	GetDSById(ds_id int64) *rrd.DataSource
-	DsIdsFromIdent(ident string) map[string]int64
-	SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error)
-}
-
 type DslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	dsGetter            DSGetter
+	rcache              *ReadCache
 }
 
-func NewDslCtx(dsGetter DSGetter, src string, from, to, maxPoints int64) *DslCtx {
-	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, dsGetter}
+func NewDslCtx(rcache *ReadCache, src string, from, to, maxPoints int64) *DslCtx {
+	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, rcache}
 }
 
 func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
@@ -76,12 +69,12 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
 }
 
-func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]rrd.Series, error) {
-	ids := dc.dsGetter.DsIdsFromIdent(ident)
-	result := make(map[string]rrd.Series)
+func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]Series, error) {
+	ids := dc.rcache.dsIdsFromIdent(ident)
+	result := make(map[string]Series)
 	for name, id := range ids {
-		ds := dc.dsGetter.GetDSById(id)
-		dps, err := dc.dsGetter.SeriesQuery(ds, from, to, dc.maxPoints)
+		ds := dc.rcache.getDSById(id)
+		dps, err := dc.rcache.seriesQuery(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}

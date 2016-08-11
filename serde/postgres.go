@@ -47,6 +47,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/lib/pq"
+	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
@@ -67,7 +68,7 @@ func sqlOpen(a, b string) (*sql.DB, error) {
 	return sql.Open(a, b)
 }
 
-func InitDb(connect_string, prefix string) (rrd.SerDe, error) {
+func InitDb(connect_string, prefix string) (SerDe, error) {
 	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
 		return nil, err
 	} else {
@@ -81,7 +82,7 @@ func InitDb(connect_string, prefix string) (rrd.SerDe, error) {
 		if err := p.prepareSqlStatements(); err != nil {
 			return nil, err
 		}
-		return rrd.SerDe(p), nil
+		return SerDe(p), nil
 	}
 }
 
@@ -808,7 +809,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (rrd.Series, error) {
+func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (dsl.Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 
@@ -822,5 +823,5 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
 	// to be the earliest of "to" or "LastUpdate".
 	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
-	return rrd.Series(dps), nil
+	return dsl.Series(dps), nil
 }
