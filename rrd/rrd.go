@@ -15,6 +15,38 @@
 
 // Package rrd contains the logic for maintaining in-memory
 // Round-Robin Archives of data points.
+//
+// Throughout documentation and code the following terms may appear as
+// two or three letter abbreviations, listed in parenthesis:
+//
+// Round-Robin Database (RRD): Collectively all the logic in this
+// package and an instance of the data it maintains is referred to as
+// an RRD.
+//
+// Data Sourse (DS): Data Source is all there is to know about a time
+// series, its name, resolution and other parameters, as well as the
+// data. A DS has at least one, but usually several RRAs. DS is also
+// the structure which stores the PDP state.
+//
+// Data Point (DP): There actually isn't a data structure representing
+// a data point (except for an incoming data point IncomingDP). A
+// datapoint is just a float64.
+//
+// Round-Robin Archive (RRA): An array of data points at a specific
+// resolutoin and going back a pre-defined duration of time.
+//
+// Primary Data Point (PDP): A conceptual data point which represents
+// the most current and not-yet-complete time slot. There is one PDP
+// per DS and per each RRA. When the PDP is complete its content is
+// saved into one or more RRAs. The PDP state is part of the DS
+// structure.
+//
+// DS Step: Step is the smallest unit of time for the DS in
+// milliseconds. RRA resolutions and sizes must be multiples of the DS
+// step.
+//
+// DS Heartbeat (HB): Duration of time that can pass without data. A
+// gap in data which exceeds HB is filled with NaNs.
 package rrd
 
 import (
@@ -44,7 +76,7 @@ type RRASpec struct {
 	Xff      float64
 }
 
-// DataPoint represents incoming data, i.e. this is the form in which
+// IncomingDP represents incoming data, i.e. this is the form in which
 // input data is expected. This is not an internal representation of a
 // data point, it's the format in which they are expected to arrive.
 type IncomingDP struct {
@@ -65,10 +97,8 @@ func (dp *IncomingDP) Process() error {
 	return dp.DS.processIncomingDP(dp)
 }
 
-// When a DP arrives in-between PDP boundary, there is state we need
-// to maintain. We cannot save it in an RRA until a subsequent DP
-// completes the PDP. This state is kept in DataSource.
-
+// DataSource describes a time series and its parameters, RRA and
+// intermediate state (PDP).
 type DataSource struct {
 	Id          int64                // Id
 	Name        string               // Series name
@@ -82,26 +112,49 @@ type DataSource struct {
 	LastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
 
+// A collection of data sources kept by an integer id as well as a
+// string name.
 type DataSources struct {
 	sync.RWMutex
 	byName map[string]*DataSource
 	byId   map[int64]*DataSource
 }
 
+// RoundRobinArchive and all its parameters.
 type RoundRobinArchive struct {
-	Id          int64
-	DsId        int64
-	Cf          string
+	Id   int64 // Id
+	DsId int64 // DS id
+	// Consolidation function (CF). How data points from a
+	// higher-resolution RRA are aggregated into a lower-resolution
+	// one. Must be MAX, MIN, LAST or AVERAGE.
+	Cf string
+	// A single "row" (i.e. a single value) span in DS steps.
 	StepsPerRow int32
-	Size        int32
-	Xff         float32
-	Value       float64
-	UnknownMs   int64
-	Latest      time.Time
-	DPs         map[int64]float64
-	Width       int64
-	Start       int64
-	End         int64
+	// Number of data points in the RRA.
+	Size int32
+	// XFiles Factor (XFF). When consolidating, how much of the
+	// higher-resolution RRA (as a value between 0 and 1) is allowed
+	// to be NaN before the consolidated data becomes NaN as well.
+	Xff float32
+	// PDP, store for intermediate value during consolidation.
+	Value float64
+	// How much of the PDP is "unknown".
+	UnknownMs int64
+	// Time at which most recent data point and the RRA end.
+	Latest time.Time
+
+	// The slice of data points (as a map so that its sparse). Slots
+	// in DPs are time-aligned starting at the "beginning of the
+	// epoch" (Jan 1 1971 UTC). This means that if Latest is defined,
+	// we can compute any slot's timestamp without having to store it.
+	DPs map[int64]float64
+
+	// In the undelying SerDe, how many data points are stored in a single (database) row.
+	Width int64
+	// DPs index of the starting slot (important for sparsity).
+	Start int64
+	// DPs index of the ending slot (not necessarily Start-1).
+	End int64
 }
 
 // for Graphite-like listings
