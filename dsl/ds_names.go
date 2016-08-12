@@ -79,7 +79,7 @@ func (dsns *DataSourceNames) reload(db dataSourceFetcher) error {
 	return nil
 }
 
-func (dsns *DataSourceNames) FsFind(pattern string) []*FsFindNode {
+func (dsns *DataSourceNames) fsFind(pattern string) []*FsFindNode {
 
 	dsns.RLock()
 	defer dsns.RUnlock()
@@ -111,9 +111,9 @@ func (dsns *DataSourceNames) FsFind(pattern string) []*FsFindNode {
 	return result
 }
 
-func (dsns *DataSourceNames) DsIdsFromIdent(ident string) map[string]int64 {
+func (dsns *DataSourceNames) dsIdsFromIdent(ident string) map[string]int64 {
 	result := make(map[string]int64)
-	for _, node := range dsns.FsFind(ident) {
+	for _, node := range dsns.fsFind(ident) {
 		if node.Leaf { // only leaf nodes are series names
 			result[node.Name] = node.dsId
 		}

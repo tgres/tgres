@@ -53,7 +53,12 @@ func (r *ReadCache) getDSById(id int64) *rrd.DataSource {
 }
 
 func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {
-	return r.dsns.DsIdsFromIdent(ident)
+	result := r.dsns.dsIdsFromIdent(ident)
+	if len(result) == 0 {
+		r.dsns.reload(r.db)
+		result = r.dsns.dsIdsFromIdent(ident)
+	}
+	return result
 }
 
 func (r *ReadCache) seriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (Series, error) {
@@ -62,5 +67,5 @@ func (r *ReadCache) seriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoint
 
 func (r *ReadCache) FsFind(pattern string) []*FsFindNode {
 	r.dsns.reload(r.db)
-	return r.dsns.FsFind(pattern)
+	return r.dsns.fsFind(pattern)
 }
