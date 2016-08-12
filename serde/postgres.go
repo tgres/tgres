@@ -769,14 +769,15 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	for _, rra := range ds.RRAs {
 		if len(rra.DPs) > 0 {
 			if err := p.flushRoundRobinArchive(rra); err != nil {
-				log.Printf("flushDataSource(): error flushing RRA, probable data loss: %v", err)
+				log.Printf("FlushDataSource(): error flushing RRA, probable data loss: %v", err)
 				return err
 			}
 		}
 	}
 
+	log.Printf("ZZZ FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, UnknownMs: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs)
 	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
-		log.Printf("flushDataSource(): database error: %v flushing data source %#v", err, ds)
+		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
 		rows.Close()
