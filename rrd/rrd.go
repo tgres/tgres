@@ -396,6 +396,7 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 	}
 
 	if dsLastUpdate == 0 { // never-before updated (or was zeroed out in ClearRRA)
+		// Set UnknownMs to the offset into the PDP for each RRA
 		for _, rra := range ds.RRAs {
 			rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
 			roundedDpEndsOn := dpTimeStamp / ds.StepMs * ds.StepMs
