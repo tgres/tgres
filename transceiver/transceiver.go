@@ -106,7 +106,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
-		dss:               rrd.NewDataSources(serde, false),
+		dss:               rrd.NewDataSources(false),
 		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
@@ -561,12 +561,14 @@ type distDatumDataSource struct {
 func (d *distDatumDataSource) Relinquish() error {
 	if d.ds.LastUpdate != time.Unix(0, 0) {
 		d.t.flushDs(d.ds, true)
+		d.t.dss.Delete(d.ds)
 	}
 	return nil
 }
 
 func (d *distDatumDataSource) Acquire() error {
-	return d.t.dss.Reload(d.t.serde, d.ds.Id)
+	d.t.dss.Delete(d.ds) // it will get loaded afresh when needed
+	return nil
 }
 
 func (d *distDatumDataSource) Id() int64 { return d.ds.Id }

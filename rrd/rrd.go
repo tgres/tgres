@@ -115,7 +115,6 @@ type DataSources struct {
 	l      rwLocker
 	byName map[string]*DataSource
 	byId   map[int64]*DataSource
-	db     rrdSerDe
 }
 
 type rwLocker interface {
@@ -128,9 +127,8 @@ type rwLocker interface {
 // DataSources will maintain a lock, otherwise there is no locking,
 // but the caller needs to ensure that it is never used concurrently
 // (e.g. always in the same goroutine).
-func NewDataSources(db rrdSerDe, locking bool) *DataSources {
+func NewDataSources(locking bool) *DataSources {
 	dss := &DataSources{
-		db:     db,
 		byId:   make(map[int64]*DataSource),
 		byName: make(map[string]*DataSource),
 	}
@@ -175,13 +173,6 @@ type RoundRobinArchive struct {
 	Start int64
 	// DPs index of the ending slot (not necessarily Start-1).
 	End int64
-}
-
-// Subset of serde.SerDe that we need here
-type rrdSerDe interface {
-	FetchDataSource(id int64) (*DataSource, error)
-	FetchDataSourceByName(name string) (*DataSource, error)
-	FetchDataSources() ([]*DataSource, error)
 }
 
 // GetByName rlocks and gets a DS pointer.
@@ -238,22 +229,6 @@ func (dss *DataSources) Delete(ds *DataSource) {
 
 	delete(dss.byName, ds.Name)
 	delete(dss.byId, ds.Id)
-}
-
-func (dss *DataSources) Reload(serde rrdSerDe, id int64) error {
-	newDs, err := serde.FetchDataSource(id)
-	if err != nil {
-		return err
-	}
-
-	if dss.l != nil {
-		dss.l.Lock()
-		defer dss.l.Unlock()
-	}
-	dss.byName[newDs.Name] = newDs
-	dss.byId[newDs.Id] = newDs
-
-	return nil
 }
 
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
