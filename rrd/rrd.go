@@ -112,9 +112,32 @@ type DataSource struct {
 // A collection of data sources kept by an integer id as well as a
 // string name.
 type DataSources struct {
-	sync.RWMutex
+	l      rwLocker
 	byName map[string]*DataSource
 	byId   map[int64]*DataSource
+	db     rrdSerDe
+}
+
+type rwLocker interface {
+	sync.Locker
+	RLock()
+	RUnlock()
+}
+
+// Returns a new DataSources object. If locking is true, the resulting
+// DataSources will maintain a lock, otherwise there is no locking,
+// but the caller needs to ensure that it is never used concurrently
+// (e.g. always in the same goroutine).
+func NewDataSources(db rrdSerDe, locking bool) *DataSources {
+	dss := &DataSources{
+		db:     db,
+		byId:   make(map[int64]*DataSource),
+		byName: make(map[string]*DataSource),
+	}
+	if locking {
+		dss.l = &sync.RWMutex{}
+	}
+	return dss
 }
 
 // RoundRobinArchive and all its parameters.
@@ -157,35 +180,44 @@ type RoundRobinArchive struct {
 // Subset of serde.SerDe that we need here
 type rrdSerDe interface {
 	FetchDataSource(id int64) (*DataSource, error)
+	FetchDataSourceByName(name string) (*DataSource, error)
 	FetchDataSources() ([]*DataSource, error)
 }
 
 // GetByName rlocks and gets a DS pointer.
 func (dss *DataSources) GetByName(name string) *DataSource {
-	dss.RLock()
-	defer dss.RUnlock()
+	if dss.l != nil {
+		dss.l.RLock()
+		defer dss.l.RUnlock()
+	}
 	return dss.byName[name]
 }
 
 // GetById rlocks and gets a DS pointer.
 func (dss *DataSources) GetById(id int64) *DataSource {
-	dss.RLock()
-	defer dss.RUnlock()
+	if dss.l != nil {
+		dss.l.RLock()
+		defer dss.l.RUnlock()
+	}
 	return dss.byId[id]
 }
 
 // Insert locks and inserts a DS.
 func (dss *DataSources) Insert(ds *DataSource) {
-	dss.Lock()
-	defer dss.Unlock()
+	if dss.l != nil {
+		dss.l.Lock()
+		defer dss.l.Unlock()
+	}
 	dss.byName[ds.Name] = ds
 	dss.byId[ds.Id] = ds
 }
 
 // List rlocks, then returns a slice of *DS
 func (dss *DataSources) List() []*DataSource {
-	dss.RLock()
-	defer dss.RUnlock()
+	if dss.l != nil {
+		dss.l.RLock()
+		defer dss.l.RUnlock()
+	}
 
 	result := make([]*DataSource, len(dss.byId))
 	n := 0
@@ -199,41 +231,13 @@ func (dss *DataSources) List() []*DataSource {
 // This only deletes it from memory, it is still in
 // the database.
 func (dss *DataSources) Delete(ds *DataSource) {
-	dss.Lock()
-	defer dss.Unlock()
+	if dss.l != nil {
+		dss.l.Lock()
+		defer dss.l.Unlock()
+	}
 
 	delete(dss.byName, ds.Name)
 	delete(dss.byId, ds.Id)
-}
-
-func (dss *DataSources) ReloadAll(serde rrdSerDe) error {
-	dsList, err := serde.FetchDataSources()
-	if err != nil {
-		return err
-	}
-
-	dss.Lock()
-	currentDss := dss.byId
-	dss.byName = make(map[string]*DataSource)
-	dss.byId = make(map[int64]*DataSource)
-	for _, newDs := range dsList {
-		if currentDs, ok := currentDss[newDs.Id]; ok {
-			if currentDs.LastUpdate.After(newDs.LastUpdate) {
-				// Our cached data is more recent, keep it
-				newDs.LastUpdate = currentDs.LastUpdate
-				newDs.LastDs = currentDs.LastDs
-				newDs.Value = currentDs.Value
-				newDs.UnknownMs = currentDs.UnknownMs
-				newDs.RRAs = currentDs.RRAs
-				newDs.LastFlushRT = currentDs.LastFlushRT
-			}
-		}
-		dss.byName[newDs.Name] = newDs
-		dss.byId[newDs.Id] = newDs
-	}
-	dss.Unlock()
-
-	return nil
 }
 
 func (dss *DataSources) Reload(serde rrdSerDe, id int64) error {
@@ -242,10 +246,12 @@ func (dss *DataSources) Reload(serde rrdSerDe, id int64) error {
 		return err
 	}
 
-	dss.Lock()
+	if dss.l != nil {
+		dss.l.Lock()
+		defer dss.l.Unlock()
+	}
 	dss.byName[newDs.Name] = newDs
 	dss.byId[newDs.Id] = newDs
-	dss.Unlock()
 
 	return nil
 }

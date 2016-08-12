@@ -59,9 +59,9 @@ import (
 )
 
 type pgSerDe struct {
-	dbConn                                   *sql.DB
-	sql1, sql2, sql3, sql4, sql5, sql6, sql7 *sql.Stmt
-	prefix                                   string
+	dbConn                                               *sql.DB
+	sql1, sql2, sql3, sql4, sql5, sql6, sql7, sql8, sql9 *sql.Stmt
+	prefix                                               string
 }
 
 func sqlOpen(a, b string) (*sql.DB, error) {
@@ -165,6 +165,14 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5", p.prefix)); err != nil {
+		return err
+	}
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE id = $1",
+		p.prefix)); err != nil {
+		return err
+	}
+	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE name = $1",
+		p.prefix)); err != nil {
 		return err
 	}
 
@@ -569,9 +577,7 @@ func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
 
 func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 
-	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE id = $1`
-
-	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), id)
+	rows, err := p.sql8.Query(id)
 	if err != nil {
 		log.Printf("FetchDataSource(): error querying database: %v", err)
 		return nil, err
@@ -582,7 +588,31 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds.Id)
 		if err != nil {
-			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
+			log.Printf("FetchDataSource(): error fetching RRAs: %v", err)
+			return nil, err
+		} else {
+			ds.RRAs = rras
+		}
+		return ds, nil
+	}
+
+	return nil, nil
+}
+
+func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
+
+	rows, err := p.sql9.Query(name)
+	if err != nil {
+		log.Printf("FetchDataSourceByName(): error querying database: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		ds, err := dataSourceFromRow(rows)
+		rras, err := p.fetchRoundRobinArchives(ds.Id)
+		if err != nil {
+			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
 			ds.RRAs = rras

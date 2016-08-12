@@ -49,7 +49,7 @@ type Transceiver struct {
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	workerWg                           sync.WaitGroup
 	flusherWg                          sync.WaitGroup
-	statWg                             sync.WaitGroup
+	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
 }
@@ -106,7 +106,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
-		dss:               &rrd.DataSources{},
+		dss:               rrd.NewDataSources(serde, false),
 		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
@@ -114,32 +114,11 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
 }
 
 func (t *Transceiver) Start() error {
-
-	log.Printf("Transceiver: Loading data from serde.")
-	if err := t.dss.ReloadAll(t.serde); err != nil {
-		log.Printf("transceiver.Start(): dss.ReloadAll() error: %v", err)
-		return err
-	}
-
-	// ZZZ - remove me?
-	if err := t.Rcache.Reload(); err != nil {
-		log.Printf("transceiver.Start(): dss.Reload() error: %v", err)
-		return err
-	}
-
-	// Let the cluster know about our data
-	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-		dss := t.dss.List()
-		result := make([]cluster.DistDatum, len(dss))
-		for n, ds := range t.dss.List() {
-			result[n] = &distDatumDataSource{t, ds}
-		}
-		return result, nil
-	})
+	log.Printf("Transceiver: starting...")
 
 	t.startWorkers()
 	t.startFlushers()
-	t.startStatWorker()
+	t.startAggWorker()
 
 	// Wait for workers/flushers to start correctly
 	t.startWg.Wait()
@@ -202,18 +181,18 @@ func (t *Transceiver) stopFlushers() {
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
-func (t *Transceiver) stopStatWorker() {
+func (t *Transceiver) stopAggWorker() {
 
-	log.Printf("stopStatWorker(): waiting for stat channel to empty...")
+	log.Printf("stopAggWorker(): waiting for stat channel to empty...")
 	for len(t.aggCh) > 0 {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	log.Printf("stopStatWorker(): closing stat channel...")
+	log.Printf("stopAggWorker(): closing stat channel...")
 	close(t.aggCh)
-	log.Printf("stopStatWorker(): waiting for stat worker to finish...")
-	t.statWg.Wait()
-	log.Printf("stopStatWorker(): stat worker finished.")
+	log.Printf("stopAggWorker(): waiting for stat worker to finish...")
+	t.aggWg.Wait()
+	log.Printf("stopAggWorker(): stat worker finished.")
 }
 
 func (t *Transceiver) createOrLoadDS(dp *rrd.IncomingDP) error {
@@ -284,7 +263,7 @@ func (t *Transceiver) dispatcher() {
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			t.stopStatWorker()
+			t.stopAggWorker()
 			t.stopWorkers()
 			t.stopFlushers()
 			break
@@ -468,7 +447,7 @@ func (t *Transceiver) startFlushers() {
 	}
 }
 
-func (t *Transceiver) startStatWorker() {
+func (t *Transceiver) startAggWorker() {
 	log.Printf("Starting aggWorker...")
 	t.startWg.Add(1)
 	go t.aggWorker()
@@ -476,8 +455,8 @@ func (t *Transceiver) startStatWorker() {
 
 func (t *Transceiver) aggWorker() {
 
-	t.statWg.Add(1)
-	defer t.statWg.Done()
+	t.aggWg.Add(1)
+	defer t.aggWg.Done()
 
 	// Channel for event forwards to other nodes and us
 	snd, rcv := t.cluster.RegisterMsgType()
@@ -529,7 +508,7 @@ func (t *Transceiver) aggWorker() {
 	agg := aggregator.NewAggregator(t)
 	aggDd := &distDatumAggregator{agg}
 	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-		log.Printf("statWorker(): adding the aggregator.Aggregator DistDatum to the cluster")
+		log.Printf("aggWorker(): adding the aggregator.Aggregator DistDatum to the cluster")
 		return []cluster.DistDatum{aggDd}, nil
 	})
 
@@ -548,6 +527,7 @@ func (t *Transceiver) aggWorker() {
 			agg.Flush(now)
 		case ac, ok := <-t.aggCh:
 			if !ok {
+				log.Printf("aggWorker(): channel closed, performing last flush")
 				agg.Flush(time.Now())
 				return
 			}

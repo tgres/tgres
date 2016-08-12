@@ -668,7 +668,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					}
 					log.Printf("Transition(): Calling Relinquish for %s:%d (%s).", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
 					if err = dde.dd.Relinquish(); err != nil {
-						log.Printf("Transition(): Warning: Relinquish() failed for id %s:%d (%s)", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
+						log.Printf("Transition(): Warning: Relinquish() failed for id %s:%d (%s) with: %v", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), err)
 					} else if newNode != nil {
 						// Notify the new node expecting this dd of Relinquish completion
 						body := []byte(fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id()))
@@ -720,8 +720,10 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 			key := string(m.Body)
 			log.Printf("Transition(): Got relinquish message for %s from %s.", key, m.Src.Name())
 			if waitDds[key] != nil {
+				dd := waitDds[key]
+				log.Printf("Transition(): Calling Acquire for %s:%d (%s).", dd.Type(), dd.Id(), dd.GetName())
 				if err := waitDds[key].Acquire(); err != nil {
-					log.Printf("Transition(): Acquire(%d) error: %v", key, err)
+					log.Printf("Transition(): Warning: Acquire() failed for id %s:%d (%s) with: %v", dd.Type(), dd.Id(), dd.GetName(), err)
 				}
 			}
 			delete(waitDds, key)
