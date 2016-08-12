@@ -698,6 +698,7 @@ func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*int64(rra.Width), n*int64(rra.Width)+rra.Width-1)
 			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id, n); err == nil {
+				log.Printf("ZZZ FlushRoundRobinArchive(1): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, 1, end+1, len(dps), n)
 				rows.Close()
 			} else {
 				return err
@@ -714,6 +715,7 @@ func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+				log.Printf("ZZZ FlushRoundRobinArchive(2): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
 				rows.Close()
 			} else {
 				return err
@@ -728,6 +730,7 @@ func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+				log.Printf("ZZZ FlushRoundRobinArchive(3): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
 				rows.Close()
 			} else {
 				return err
@@ -745,6 +748,7 @@ func (p *pgSerDe) FlushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+				log.Printf("ZZZ FlushRoundRobinArchive(4): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
 				rows.Close()
 			} else {
 				return err
