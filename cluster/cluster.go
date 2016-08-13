@@ -228,9 +228,7 @@ func (c *Cluster) LoadDistData(f func() ([]DistDatum, error)) error {
 
 	for _, dd := range dds {
 		key := fmt.Sprintf("%s:%d", dd.Type(), dd.Id())
-		if c.dds[key] == nil {
-			c.dds[key] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(), c.copies)}
-		}
+		c.dds[key] = &ddEntry{dd: dd, nodes: selectNodes(readyNodes, dd.Id(), c.copies)}
 	}
 
 	return nil

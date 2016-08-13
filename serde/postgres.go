@@ -841,7 +841,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		rraRows.Close()
 	}
 
-	log.Printf("ZZZ CreateOrReturnDataSource(): returning ds.id %d: %#v", ds.Id, ds)
+	log.Printf("ZZZ CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id, ds.LastUpdate, ds)
 	return ds, nil
 }
 
