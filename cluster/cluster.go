@@ -74,6 +74,7 @@ type Cluster struct {
 	rpcPort   int
 	rpc       net.Listener
 	joined    bool
+	ncache    map[*memberlist.Node]*Node
 }
 
 // NewCluster creates a new Cluster with reasonable defaults.
@@ -92,7 +93,9 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, rpcport in
 		rcvChs:    make([]chan *Msg, 0),
 		chgNotify: make([]chan bool, 0),
 		dds:       make(map[string]*ddEntry),
-		copies:    1}
+		copies:    1,
+		ncache:    make(map[*memberlist.Node]*Node),
+	}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.PushPullInterval = 15 * time.Second
 	if baddr != "" {
@@ -247,7 +250,14 @@ func (c *Cluster) Join(existing []string) error {
 // LocalNode returns a pointer to the local node.
 func (c *Cluster) LocalNode() *Node {
 	defer func() { recover() }() // there may be a bug in memberlist?
-	return &Node{Node: c.Memberlist.LocalNode()}
+	return c.checkNodeCache(c.Memberlist.LocalNode())
+}
+
+func (c *Cluster) checkNodeCache(mNode *memberlist.Node) *Node {
+	if c.ncache[mNode] == nil {
+		c.ncache[mNode] = &Node{Node: mNode}
+	}
+	return c.ncache[mNode]
 }
 
 // Members lists cluster members (ready or not).
@@ -255,7 +265,7 @@ func (c *Cluster) Members() []*Node {
 	nn := c.Memberlist.Members()
 	result := make([]*Node, len(nn))
 	for i, n := range nn {
-		result[i] = &Node{Node: n}
+		result[i] = c.checkNodeCache(n)
 	}
 	return result
 }
