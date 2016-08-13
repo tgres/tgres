@@ -58,6 +58,12 @@ import (
 	"time"
 )
 
+var debug bool
+
+func init() {
+	debug = os.Getenv("TGRES_SERDE_DEBUG") != ""
+}
+
 type pgSerDe struct {
 	dbConn                                               *sql.DB
 	sql1, sql2, sql3, sql4, sql5, sql6, sql7, sql8, sql9 *sql.Stmt
@@ -698,7 +704,9 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*int64(rra.Width), n*int64(rra.Width)+rra.Width-1)
 			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id, n); err == nil {
-				log.Printf("ZZZ flushRoundRobinArchive(1): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, 1, end+1, len(dps), n)
+				if debug {
+					log.Printf("flushRoundRobinArchive(1): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, 1, end+1, len(dps), n)
+				}
 				rows.Close()
 			} else {
 				return err
@@ -715,7 +723,9 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
-				log.Printf("ZZZ flushRoundRobinArchive(2): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				if debug {
+					log.Printf("flushRoundRobinArchive(2): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				}
 				rows.Close()
 			} else {
 				return err
@@ -730,7 +740,9 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
-				log.Printf("ZZZ flushRoundRobinArchive(3): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				if debug {
+					log.Printf("flushRoundRobinArchive(3): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				}
 				rows.Close()
 			} else {
 				return err
@@ -748,7 +760,9 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			}
 			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
-				log.Printf("ZZZ flushRoundRobinArchive(4): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				if debug {
+					log.Printf("flushRoundRobinArchive(4): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+				}
 				rows.Close()
 			} else {
 				return err
@@ -775,7 +789,9 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 		}
 	}
 
-	log.Printf("ZZZ FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, UnknownMs: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs)
+	if debug {
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, UnknownMs: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs)
+	}
 	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
@@ -841,7 +857,9 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		rraRows.Close()
 	}
 
-	log.Printf("ZZZ CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id, ds.LastUpdate, ds)
+	if debug {
+		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id, ds.LastUpdate, ds)
+	}
 	return ds, nil
 }
 

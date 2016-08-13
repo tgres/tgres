@@ -169,9 +169,12 @@ type RoundRobinArchive struct {
 
 	// In the undelying storage, how many data points are stored in a single (database) row.
 	Width int64
-	// DPs index of the starting slot (important for sparsity).
+	// Index of the first slot for which we have data. (Should be
+	// between 0 and Size-1)
 	Start int64
-	// DPs index of the ending slot (not necessarily Start-1).
+	// Index of the last slot for which we have data. Note that it's
+	// possible for End to be less than Start, which means the RRD
+	// wraps around.
 	End int64
 }
 
