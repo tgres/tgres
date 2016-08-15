@@ -99,6 +99,9 @@ func (a *Aggregator) append(name string, value float64) {
 }
 
 func (a *Aggregator) ProcessCmd(cmd *Command) {
+	if !cmd.ts.IsZero() && cmd.ts.Before(a.lastFlush) {
+		return // this command is too old for this aggregator, ignore it
+	}
 	switch cmd.cmd {
 	case CmdAdd:
 		a.add(cmd.name, cmd.value)
@@ -183,6 +186,7 @@ type Command struct {
 	cmd   AggCmd
 	name  string
 	value float64
+	ts    time.Time
 	Hops  int
 }
 
@@ -198,6 +202,7 @@ func (ac *Command) GobEncode() ([]byte, error) {
 	check(enc.Encode(ac.cmd))
 	check(enc.Encode(ac.name))
 	check(enc.Encode(ac.value))
+	check(enc.Encode(ac.ts))
 	check(enc.Encode(ac.Hops))
 	if err != nil {
 		return nil, err
@@ -216,10 +221,11 @@ func (ac *Command) GobDecode(b []byte) error {
 	check(dec.Decode(&ac.cmd))
 	check(dec.Decode(&ac.name))
 	check(dec.Decode(&ac.value))
+	check(dec.Decode(&ac.ts))
 	check(dec.Decode(&ac.Hops))
 	return err
 }
 
 func NewCommand(cmd AggCmd, name string, value float64) *Command {
-	return &Command{cmd: cmd, name: name, value: value}
+	return &Command{cmd: cmd, name: name, value: value, ts: time.Now()}
 }
