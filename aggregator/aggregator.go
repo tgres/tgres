@@ -166,11 +166,11 @@ func (a *Aggregator) Flush(now time.Time) {
 				}
 			}
 		}
-
-		// clear the map
-		a.m = make(map[string]*aggregation)
-		a.lastFlush = now
 	}
+
+	// clear the map
+	a.m = make(map[string]*aggregation)
+	a.lastFlush = now
 }
 
 type AggCmd int
