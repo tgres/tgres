@@ -24,9 +24,16 @@ import (
 	"github.com/tgres/tgres/statsd"
 	"log"
 	"math/rand"
+	"os"
 	"sync"
 	"time"
 )
+
+var debug bool
+
+func init() {
+	debug = os.Getenv("TGRES_RCVR_DEBUG") != ""
+}
 
 type MatchingDSSpecFinder interface {
 	FindMatchingDSSpec(name string) *rrd.DSSpec
@@ -327,8 +334,12 @@ func (t *Transceiver) worker(id int64) {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
 			i := int(t.MaxCacheDuration.Nanoseconds()-t.MinCacheDuration.Nanoseconds()) / 1000
-			time.Sleep(time.Duration(rand.Intn(i))*time.Millisecond + t.MinCacheDuration)
+			dur := time.Duration(rand.Intn(i))*time.Millisecond + t.MinCacheDuration
+			time.Sleep(dur)
 			periodicFlushCheck <- 1
+			if debug {
+				log.Printf("worker(%d): Periodic flush after sleep: %v", id, dur)
+			}
 		}
 	}()
 
@@ -366,11 +377,17 @@ func (t *Transceiver) worker(id int64) {
 					continue
 				}
 				if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+					if debug {
+						log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id)
+					}
 					t.flushDs(ds, false)
 					delete(recent, ds.Id)
 				}
 			}
 		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+			if debug {
+				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id)
+			}
 			// flush just this one ds
 			t.flushDs(ds, false)
 			delete(recent, ds.Id)
