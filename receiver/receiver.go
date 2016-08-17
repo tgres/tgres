@@ -448,7 +448,7 @@ func (r *Receiver) flusher(id int64) {
 			} else if fr.resp != nil {
 				fr.resp <- true
 			}
-			r.reportStatCount("tgres.serde.datapoints_flushed", float64(fr.ds.PointCount()))
+			r.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
 		} else {
 			log.Printf("flusher(%d): channel closed, exiting", id)
 			break
