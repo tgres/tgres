@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package transceiver
+package receiver
 
 import (
 	"github.com/tgres/tgres/aggregator"
@@ -39,7 +39,7 @@ type MatchingDSSpecFinder interface {
 	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
 
-type Transceiver struct {
+type Receiver struct {
 	cluster                            *cluster.Cluster
 	serde                              serde.SerDe
 	NWorkers                           int
@@ -102,8 +102,8 @@ func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	}
 }
 
-func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
-	return &Transceiver{
+func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
+	return &Receiver{
 		cluster:           clstr,
 		serde:             serde,
 		NWorkers:          4,
@@ -120,8 +120,8 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Transceiver {
 	}
 }
 
-func (t *Transceiver) Start() error {
-	log.Printf("Transceiver: starting...")
+func (t *Receiver) Start() error {
+	log.Printf("Receiver: starting...")
 
 	t.startWorkers()
 	t.startFlushers()
@@ -129,15 +129,15 @@ func (t *Transceiver) Start() error {
 
 	// Wait for workers/flushers to start correctly
 	t.startWg.Wait()
-	log.Printf("Transceiver: All workers running, starting dispatcher.")
+	log.Printf("Receiver: All workers running, starting dispatcher.")
 
 	go t.dispatcher()
-	log.Printf("Transceiver: Ready.")
+	log.Printf("Receiver: Ready.")
 
 	return nil
 }
 
-func (t *Transceiver) Stop() {
+func (t *Receiver) Stop() {
 
 	log.Printf("Closing dispatcher channel...")
 	close(t.dpCh)
@@ -149,11 +149,11 @@ func (t *Transceiver) Stop() {
 	t.cluster.Shutdown()
 }
 
-func (t *Transceiver) ClusterReady(ready bool) {
+func (t *Receiver) ClusterReady(ready bool) {
 	t.cluster.Ready(ready)
 }
 
-func (t *Transceiver) stopWorkers() {
+func (t *Receiver) stopWorkers() {
 	log.Printf("stopWorkers(): waiting for worker channels to empty...")
 	empty := false
 	for !empty {
@@ -178,7 +178,7 @@ func (t *Transceiver) stopWorkers() {
 	log.Printf("stopWorkers(): all workers finished.")
 }
 
-func (t *Transceiver) stopFlushers() {
+func (t *Receiver) stopFlushers() {
 	log.Printf("stopFlushers(): closing all flusher channels...")
 	for _, ch := range t.flusherChs {
 		close(ch)
@@ -188,7 +188,7 @@ func (t *Transceiver) stopFlushers() {
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
-func (t *Transceiver) stopAggWorker() {
+func (t *Receiver) stopAggWorker() {
 
 	log.Printf("stopAggWorker(): waiting for stat channel to empty...")
 	for len(t.aggCh) > 0 {
@@ -202,7 +202,7 @@ func (t *Transceiver) stopAggWorker() {
 	log.Printf("stopAggWorker(): stat worker finished.")
 }
 
-func (t *Transceiver) createOrLoadDS(dp *rrd.IncomingDP) error {
+func (t *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
 	if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
 		if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
 			t.dss.Insert(ds)
@@ -218,7 +218,7 @@ func (t *Transceiver) createOrLoadDS(dp *rrd.IncomingDP) error {
 	return nil
 }
 
-func (t *Transceiver) dispatcher() {
+func (t *Receiver) dispatcher() {
 	t.dispatcherWg.Add(1)
 	defer t.dispatcherWg.Done()
 
@@ -304,7 +304,7 @@ func (t *Transceiver) dispatcher() {
 	}
 }
 
-func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
+func (t *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
 	t.dpCh <- &rrd.IncomingDP{Name: name, TimeStamp: ts, Value: v}
 }
 
@@ -313,17 +313,17 @@ func (t *Transceiver) QueueDataPoint(name string, ts time.Time, v float64) {
 // QueueGaugeDelta()
 // QueueAppendValue()
 // ... but for now QueueAggregatorCommand seems sufficient
-func (t *Transceiver) QueueAggregatorCommand(agg *aggregator.Command) {
+func (t *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 	t.aggCh <- agg
 }
 
-func (t *Transceiver) queueAddValue(name string, f float64) {
+func (t *Receiver) queueAddValue(name string, f float64) {
 	if t != nil {
 		t.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, f))
 	}
 }
 
-func (t *Transceiver) worker(id int64) {
+func (t *Receiver) worker(id int64) {
 	t.workerWg.Add(1)
 	defer t.workerWg.Done()
 
@@ -399,7 +399,7 @@ func (t *Transceiver) worker(id int64) {
 	}
 }
 
-func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
+func (t *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
 	if block {
 		fr.resp = make(chan bool, 1)
@@ -412,7 +412,7 @@ func (t *Transceiver) flushDs(ds *rrd.DataSource, block bool) {
 	ds.ClearRRAs(block) // block = clearLU in this case (see rrd.go)
 }
 
-func (t *Transceiver) startWorkers() {
+func (t *Receiver) startWorkers() {
 
 	t.workerChs = make([]chan *rrd.IncomingDP, t.NWorkers)
 
@@ -426,7 +426,7 @@ func (t *Transceiver) startWorkers() {
 
 }
 
-func (t *Transceiver) flusher(id int64) {
+func (t *Receiver) flusher(id int64) {
 	t.flusherWg.Add(1)
 	defer t.flusherWg.Done()
 
@@ -452,7 +452,7 @@ func (t *Transceiver) flusher(id int64) {
 
 }
 
-func (t *Transceiver) startFlushers() {
+func (t *Receiver) startFlushers() {
 
 	t.flusherChs = make([]chan *dsFlushRequest, t.NWorkers)
 
@@ -464,13 +464,13 @@ func (t *Transceiver) startFlushers() {
 	}
 }
 
-func (t *Transceiver) startAggWorker() {
+func (t *Receiver) startAggWorker() {
 	log.Printf("Starting aggWorker...")
 	t.startWg.Add(1)
 	go t.aggWorker()
 }
 
-func (t *Transceiver) aggWorker() {
+func (t *Receiver) aggWorker() {
 
 	t.aggWg.Add(1)
 	defer t.aggWg.Done()
@@ -571,7 +571,7 @@ func (t *Transceiver) aggWorker() {
 // Implement cluster.DistDatum for data sources
 
 type distDatumDataSource struct {
-	t  *Transceiver
+	t  *Receiver
 	ds *rrd.DataSource
 }
 

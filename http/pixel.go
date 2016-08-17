@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/misc"
-	x "github.com/tgres/tgres/transceiver"
+	"github.com/tgres/tgres/receiver"
 	"log"
 	"net/http"
 	"time"
@@ -38,7 +38,7 @@ func sendPixel(w http.ResponseWriter) {
 	w.Write([]byte("GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;"))
 }
 
-func PixelHandler(t *x.Transceiver) http.HandlerFunc {
+func PixelHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rc := recover(); rc != nil {
@@ -75,38 +75,38 @@ func PixelHandler(t *x.Transceiver) http.HandlerFunc {
 					ts = time.Unix(int64(ut), nsec)
 				}
 
-				t.QueueDataPoint(misc.SanitizeName(name), ts, val)
+				rcvr.QueueDataPoint(misc.SanitizeName(name), ts, val)
 			}
 		}
 
 	}
 }
 
-func PixelAddHandler(t *x.Transceiver) http.HandlerFunc {
+func PixelAddHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pixelAggHandler(r, w, t, aggregator.CmdAdd)
+		pixelAggHandler(r, w, rcvr, aggregator.CmdAdd)
 	}
 }
 
-func PixelAddGaugeHandler(t *x.Transceiver) http.HandlerFunc {
+func PixelAddGaugeHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pixelAggHandler(r, w, t, aggregator.CmdAddGauge)
+		pixelAggHandler(r, w, rcvr, aggregator.CmdAddGauge)
 	}
 }
 
-func PixelSetGaugeHandler(t *x.Transceiver) http.HandlerFunc {
+func PixelSetGaugeHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pixelAggHandler(r, w, t, aggregator.CmdSetGauge)
+		pixelAggHandler(r, w, rcvr, aggregator.CmdSetGauge)
 	}
 }
 
-func PixelAppendHandler(t *x.Transceiver) http.HandlerFunc {
+func PixelAppendHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pixelAggHandler(r, w, t, aggregator.CmdAppend)
+		pixelAggHandler(r, w, rcvr, aggregator.CmdAppend)
 	}
 }
 
-func pixelAggHandler(r *http.Request, w http.ResponseWriter, t *x.Transceiver, cmd aggregator.AggCmd) {
+func pixelAggHandler(r *http.Request, w http.ResponseWriter, rcvr *receiver.Receiver, cmd aggregator.AggCmd) {
 	defer func() {
 		if rc := recover(); rc != nil {
 			log.Printf("pixelAggHandler: Recovered (this request is dropped): %v", rc)
@@ -134,7 +134,7 @@ func pixelAggHandler(r *http.Request, w http.ResponseWriter, t *x.Transceiver, c
 				return
 			}
 
-			t.QueueAggregatorCommand(aggregator.NewCommand(cmd, misc.SanitizeName(name), val))
+			rcvr.QueueAggregatorCommand(aggregator.NewCommand(cmd, misc.SanitizeName(name), val))
 		}
 	}
 

@@ -18,22 +18,22 @@ package daemon
 import (
 	"fmt"
 	h "github.com/tgres/tgres/http"
-	x "github.com/tgres/tgres/transceiver"
+	"github.com/tgres/tgres/receiver"
 	"net"
 	"net/http"
 	"time"
 )
 
-func httpServer(addr string, l net.Listener, t *x.Transceiver) {
+func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver) {
 
-	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(t))
-	http.HandleFunc("/render", h.GraphiteRenderHandler(t))
+	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcvr))
+	http.HandleFunc("/render", h.GraphiteRenderHandler(rcvr))
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
-	http.HandleFunc("/pixel", h.PixelHandler(t))
-	http.HandleFunc("/pixel/add", h.PixelAddHandler(t))
-	http.HandleFunc("/pixel/addgauge", h.PixelAddGaugeHandler(t))
-	http.HandleFunc("/pixel/setgauge", h.PixelSetGaugeHandler(t))
-	http.HandleFunc("/pixel/append", h.PixelAppendHandler(t))
+	http.HandleFunc("/pixel", h.PixelHandler(rcvr))
+	http.HandleFunc("/pixel/add", h.PixelAddHandler(rcvr))
+	http.HandleFunc("/pixel/addgauge", h.PixelAddGaugeHandler(rcvr))
+	http.HandleFunc("/pixel/setgauge", h.PixelSetGaugeHandler(rcvr))
+	http.HandleFunc("/pixel/append", h.PixelAppendHandler(rcvr))
 
 	server := &http.Server{
 		Addr:           addr,

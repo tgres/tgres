@@ -19,8 +19,8 @@ import (
 	"flag"
 	"fmt"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/receiver"
 	"github.com/tgres/tgres/serde"
-	x "github.com/tgres/tgres/transceiver"
 	"log"
 	"os"
 	"os/exec"
@@ -132,18 +132,18 @@ func Init() { // not to be confused with init()
 		return
 	}
 
-	// Create the transceiver
-	t := x.New(c, db)
-	t.NWorkers = Cfg.Workers
-	t.MaxCacheDuration = Cfg.MaxCache.Duration
-	t.MinCacheDuration = Cfg.MinCache.Duration
-	t.MaxCachedPoints = Cfg.MaxCachedPoints
-	t.StatFlushDuration = Cfg.StatFlush.Duration
-	t.StatsNamePrefix = Cfg.StatsNamePrefix
-	t.DSSpecs = x.MatchingDSSpecFinder(Cfg)
+	// Create the receiver
+	rcvr := receiver.New(c, db)
+	rcvr.NWorkers = Cfg.Workers
+	rcvr.MaxCacheDuration = Cfg.MaxCache.Duration
+	rcvr.MinCacheDuration = Cfg.MinCache.Duration
+	rcvr.MaxCachedPoints = Cfg.MaxCachedPoints
+	rcvr.StatFlushDuration = Cfg.StatFlush.Duration
+	rcvr.StatsNamePrefix = Cfg.StatsNamePrefix
+	rcvr.DSSpecs = receiver.MatchingDSSpecFinder(Cfg)
 
 	// Create and run the Service Manager
-	serviceMgr = newServiceManager(t)
+	serviceMgr = newServiceManager(rcvr)
 	if err := serviceMgr.run(gracefulProtos); err != nil {
 		log.Printf("Could not run the service manager: %v", err)
 		return
@@ -153,7 +153,7 @@ func Init() { // not to be confused with init()
 		// Do the graceful dance - tell the parent to die, then
 		// wait for it to signal us back that the data has been
 		// flushed correctly, at which point it is OK for us to
-		// start the transceiver.
+		// start the receiver.
 
 		parent := syscall.Getppid()
 		log.Printf("start(): Killing parent pid: %v", parent)
@@ -165,9 +165,9 @@ func Init() { // not to be confused with init()
 		log.Printf("start(): Received %v, proceeding to load the data", s)
 	}
 
-	// *finally* start the transceiver (because graceful restart, parent must save first)
-	if err := t.Start(); err != nil {
-		log.Printf("Could not start the transceiver: %v", err)
+	// *finally* start the receiver (because graceful restart, parent must save first)
+	if err := rcvr.Start(); err != nil {
+		log.Printf("Could not start the receiver: %v", err)
 		return
 	}
 
@@ -176,7 +176,7 @@ func Init() { // not to be confused with init()
 	//std2DevNull()
 	//os.Chdir("/")
 
-	// TODOthis too could be in the transceiver for consistency?
+	// TODOthis too could be in the receiver for consistency?
 	for {
 		// Wait for a SIGINT or SIGTERM.
 		ch := make(chan os.Signal)
@@ -185,10 +185,10 @@ func Init() { // not to be confused with init()
 		log.Printf("Got signal: %v", s)
 		if s == syscall.SIGHUP {
 			if gracefulChildPid == 0 {
-				gracefulRestart(t, cfgPath)
+				gracefulRestart(rcvr, cfgPath)
 			}
 		} else {
-			gracefulExit(t)
+			gracefulExit(rcvr)
 			break
 		}
 	}
@@ -208,7 +208,7 @@ func Finish() {
 	os.Remove(Cfg.PidPath)
 }
 
-func gracefulRestart(t *x.Transceiver, cfgPath string) {
+func gracefulRestart(rcvr *receiver.Receiver, cfgPath string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
@@ -239,20 +239,20 @@ func gracefulRestart(t *x.Transceiver, cfgPath string) {
 	}
 }
 
-func gracefulExit(t *x.Transceiver) {
+func gracefulExit(rcvr *receiver.Receiver) {
 
 	log.Printf("Gracefully exiting...")
 
 	quitting = true
 
-	t.ClusterReady(false)
+	rcvr.ClusterReady(false)
 
 	log.Printf("Waiting for all TCP connections to finish...")
 	serviceMgr.closeListeners()
 	log.Printf("TCP connections finished.")
 
-	// Stop the transceiver
-	t.Stop()
+	// Stop the receiver
+	rcvr.Stop()
 
 	if gracefulChildPid != 0 {
 		// let the child know the data is flushed

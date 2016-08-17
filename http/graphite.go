@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/misc"
-	x "github.com/tgres/tgres/transceiver"
+	"github.com/tgres/tgres/receiver"
 	"log"
 	"math"
 	"net/http"
@@ -28,10 +28,10 @@ import (
 	"time"
 )
 
-func GraphiteMetricsFindHandler(t *x.Transceiver) http.HandlerFunc {
+func GraphiteMetricsFindHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
-		nodes := t.Rcache.FsFind(r.FormValue("query"))
+		nodes := rcvr.Rcache.FsFind(r.FormValue("query"))
 		for n, node := range nodes {
 			parts := strings.Split(node.Name, ".")
 			if node.Leaf {
@@ -47,7 +47,7 @@ func GraphiteMetricsFindHandler(t *x.Transceiver) http.HandlerFunc {
 	}
 }
 
-func GraphiteRenderHandler(t *x.Transceiver) http.HandlerFunc {
+func GraphiteRenderHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -77,7 +77,7 @@ func GraphiteRenderHandler(t *x.Transceiver) http.HandlerFunc {
 
 		for tn, target := range r.Form["target"] {
 
-			seriesMap, err := processTarget(t, target, from.Unix(), to.Unix(), int64(points))
+			seriesMap, err := processTarget(rcvr, target, from.Unix(), to.Unix(), int64(points))
 
 			if err != nil {
 				log.Printf("RenderHandler(): %v", err)
@@ -150,10 +150,10 @@ func parseTime(s string) (*time.Time, error) {
 	}
 }
 
-func processTarget(t *x.Transceiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
+func processTarget(rcvr *receiver.Receiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	dc := dsl.NewDslCtx(t.Rcache, query, from, to, maxPoints)
+	dc := dsl.NewDslCtx(rcvr.Rcache, query, from, to, maxPoints)
 	result, err := dc.ParseDsl()
 	return result, err
 }
