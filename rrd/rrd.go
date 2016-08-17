@@ -317,13 +317,21 @@ func (ds *DataSource) addValue(value float64, durationMs int64, allowNaNtoValue 
 	}
 	weight := float64(durationMs) / float64(ds.StepMs)
 	ds.Value = ds.Value + weight*value
-	if math.IsNaN(value) {
+	if math.IsNaN(value) { // NB: if ds.Value is NaN, but value is a number, UnknownMs is not incremented
 		ds.UnknownMs = ds.UnknownMs + durationMs
 	}
 	return nil
 }
 
 func (ds *DataSource) finalizeValue() {
+	// If ds.Value is !NaN and there is UnknownMs, which can only happen
+	// if after a NaN value at least two !NaN updates happen in the same
+	// PDP, the final value of the PDP should be reflective of the last
+	// values and not "diluted" by the NaN fraction of the PDP. (Imagine
+	// we are recording km/h and have a PDP of one hour, which is mostly
+	// NaN, but in the last two minutes we received 2 data points @ 100
+	// km/h. The final value should be ~100 km/h and not some really low
+	// value. This is because NaN means "we do not know", NOT "0").
 	ds.Value = ds.Value / (float64(ds.StepMs-ds.UnknownMs) / float64(ds.StepMs))
 }
 
@@ -334,50 +342,80 @@ func (ds *DataSource) reset() {
 
 func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
+	// This range can be less than a PDP or span multiple PDPs. Only
+	// the last PDP is current, the rest are all in the past.
+
+	// Beginning of the last PDP in the range.
 	endPdpBegin := end / ds.StepMs * ds.StepMs
 	if end%ds.StepMs == 0 {
+		// We are exactly at the end, need to move one step back.
 		endPdpBegin -= ds.StepMs
 	}
+	// End of the last PDP.
 	endPdpEnd := endPdpBegin + ds.StepMs
 
-	if begin < endPdpBegin || (end == endPdpEnd) { // RRAs will be updated
+	// If the range begins *before* the last PDP, or ends
+	// *exactly* on the end of a PDP, at last one PDP is now
+	// completed, and updates need to trickle down to RRAs.
+	if begin < endPdpBegin || (end == endPdpEnd) {
 
-		if begin%ds.StepMs != 0 { // begin in the middle of now completed PDP
+		// Range begins in the middle of a now completed PDP
+		// (which may be the last one IFF end == endPdpEnd)
+		if begin%ds.StepMs != 0 {
 
+			// periodBegin and periodEnd mark the PDP beginning just
+			// before the beginning of the range. periodEnd points at
+			// the end of the first PDP or end of the last PDP iff end
+			// == endPdpEnd.
 			periodBegin := begin / ds.StepMs * ds.StepMs
 			periodEnd := periodBegin + ds.StepMs
 			if err := ds.addValue(value, periodEnd-begin, false); err != nil {
 				return err
 			}
-			ds.finalizeValue()
+			ds.finalizeValue() // Read the comment in the func
 
+			// Update the RRAs
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
 				return err
 			}
+
+			// The DS value now becomes zero, it has been "sent" to RRAs.
 			ds.reset()
 
 			begin = periodEnd
 		}
 
-		if begin < endPdpBegin || (begin == endPdpBegin && end == endPdpEnd) { // we have 1+ whole pdps
-			ds.setValue(value)
+		// Note that "begin" has been modified just above and is now
+		// aligned on a PDP boundary. If the (new) range still begins
+		// before the last PDP, or is exactly the last PDP, then we
+		// have 1+ whole PDPs in the range. (Since begin is now
+		// aligned, the only other possibility is begin == endPdpEnd,
+		// thus the code could simply be "if begin != endPdpEnd", but
+		// we go extra expressive for clarity).
+		if begin < endPdpBegin || (begin == endPdpBegin && end == endPdpEnd) {
+
+			ds.setValue(value) // Since begin is aligned, we can bluntly set the value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin
 			if end%ds.StepMs == 0 {
 				periodEnd = end
 			}
-
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
 				return err
 			}
+
+			// The DS value now becomes zero, it has been "sent" to RRAs.
 			ds.reset()
 
+			// Advance begin to the aligned end
 			begin = periodEnd
 		}
 	}
 
-	if begin < end { // Update DS with remaining partial PDP
+	// If there is still a small part of an incomlete PDP between
+	// begin and end, update the PDP value.
+	if begin < end {
 		ds.addValue(value, end-begin, true)
 	}
 

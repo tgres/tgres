@@ -354,7 +354,7 @@ func (r *Receiver) worker(id int64) {
 	go func() {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
-			i := int(r.MaxCacheDuration.Nanoseconds()-r.MinCacheDuration.Nanoseconds()) / 1000
+			i := int(r.MaxCacheDuration.Nanoseconds()-r.MinCacheDuration.Nanoseconds()) / 1000000
 			dur := time.Duration(rand.Intn(i))*time.Millisecond + r.MinCacheDuration
 			time.Sleep(dur)
 			periodicFlushCheck <- 1
