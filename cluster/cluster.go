@@ -722,6 +722,13 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 			case m = <-c.rcv:
 			case <-tmout:
 				log.Printf("Transition(): WARNING: Relinquish wait timeout! Continuing. Some data is likely lost.")
+				// We should still call Acquire on the ones we've been waiting for as we are ultimately taking them over
+				for _, dd := range waitDds {
+					log.Printf("Transition(): Calling Acquire for %s:%d (%s).", dd.Type(), dd.Id(), dd.GetName())
+					if err := dd.Acquire(); err != nil {
+						log.Printf("Transition(): Warning: Acquire() failed for id %s:%d (%s) with: %v", dd.Type(), dd.Id(), dd.GetName(), err)
+					}
+				}
 				return
 			}
 
@@ -730,7 +737,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 			if waitDds[key] != nil {
 				dd := waitDds[key]
 				log.Printf("Transition(): Calling Acquire for %s:%d (%s).", dd.Type(), dd.Id(), dd.GetName())
-				if err := waitDds[key].Acquire(); err != nil {
+				if err := dd.Acquire(); err != nil {
 					log.Printf("Transition(): Warning: Acquire() failed for id %s:%d (%s) with: %v", dd.Type(), dd.Id(), dd.GetName(), err)
 				}
 			}
