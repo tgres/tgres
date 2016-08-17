@@ -59,8 +59,10 @@ type Receiver struct {
 	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
+	pacedSumWg                         sync.WaitGroup
 	ReportStats                        bool
 	ReportStatsPrefix                  string
+	pacedSumCh                         chan *pacedSum
 }
 
 type dsFlushRequest struct {
@@ -121,6 +123,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 		ReportStats:       true,
 		ReportStatsPrefix: "tgres",
+		pacedSumCh:        make(chan *pacedSum, 256),
 	}
 }
 
@@ -130,6 +133,7 @@ func (r *Receiver) Start() error {
 	r.startWorkers()
 	r.startFlushers()
 	r.startAggWorker()
+	r.startPacedSumWorker()
 
 	// Wait for workers/flushers to start correctly
 	r.startWg.Wait()
@@ -194,16 +198,24 @@ func (r *Receiver) stopFlushers() {
 
 func (r *Receiver) stopAggWorker() {
 
-	log.Printf("stopAggWorker(): waiting for stat channel to empty...")
+	log.Printf("stopAggWorker(): waiting for agg channel to empty...")
 	for len(r.aggCh) > 0 {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	log.Printf("stopAggWorker(): closing stat channel...")
+	log.Printf("stopAggWorker(): closing agg channel...")
 	close(r.aggCh)
-	log.Printf("stopAggWorker(): waiting for stat worker to finish...")
+	log.Printf("stopAggWorker(): waiting for agg worker to finish...")
 	r.aggWg.Wait()
-	log.Printf("stopAggWorker(): stat worker finished.")
+	log.Printf("stopAggWorker(): agg worker finished.")
+}
+
+func (r *Receiver) stopPacedSumWorker() {
+	log.Printf("stopPacedSumWorker(): closing paced sum channel...")
+	close(r.pacedSumCh)
+	log.Printf("stopPacedSumWorker(): waiting for paced sum worker to finish...")
+	r.pacedSumWg.Wait()
+	log.Printf("stopPacedSumWorker(): paced sum worker finished.")
 }
 
 func (r *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
@@ -274,6 +286,7 @@ func (r *Receiver) dispatcher() {
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
+			r.stopPacedSumWorker()
 			r.stopAggWorker()
 			r.stopWorkers()
 			r.stopFlushers()
@@ -323,8 +336,12 @@ func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 
 func (r *Receiver) reportStatCount(name string, f float64) {
 	if r != nil && r.ReportStats {
-		r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, r.ReportStatsPrefix+"."+name, f))
+		r.QueueSum(r.ReportStatsPrefix+"."+name, f)
 	}
+}
+
+func (r *Receiver) QueueSum(name string, v float64) {
+	r.pacedSumCh <- &pacedSum{name, v}
 }
 
 func (r *Receiver) worker(id int64) {
@@ -569,6 +586,60 @@ func (r *Receiver) aggWorker() {
 						log.Printf("aggWorker(): dropping command on the floor because no node is Ready!")
 					}
 				}
+			}
+		}
+	}
+}
+
+type pacedSum struct {
+	name  string
+	value float64
+}
+
+func (r *Receiver) startPacedSumWorker() {
+	log.Printf("Starting pacedSumWorker...")
+	r.startWg.Add(1)
+	go r.pacedSumWorker(time.Second)
+}
+
+func (r *Receiver) pacedSumWorker(frequency time.Duration) {
+	r.pacedSumWg.Add(1)
+	defer r.pacedSumWg.Done()
+
+	sums := make(map[string]float64)
+
+	flush := func() {
+		for name, sum := range sums {
+			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
+		}
+		sums = make(map[string]float64)
+	}
+
+	var flushCh = make(chan bool, 1)
+	go func() {
+		for {
+			time.Sleep(frequency)
+			if len(flushCh) == 0 {
+				flushCh <- true
+			} else {
+				log.Printf("pacedSumWorker(): dropping flush timer on the floor - busy system?")
+			}
+		}
+	}()
+
+	log.Printf("pacedSumWorker(): started.")
+	r.startWg.Done()
+
+	for {
+		select {
+		case <-flushCh:
+			flush()
+		case ps, ok := <-r.pacedSumCh:
+			if !ok {
+				flush()
+				return
+			} else {
+				sums[ps.name] += ps.value
 			}
 		}
 	}
