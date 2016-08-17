@@ -294,7 +294,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 	return nil
 }
 
-func (ds *DataSource) pointCount() int {
+func (ds *DataSource) PointCount() int {
 	total := 0
 	for _, rra := range ds.RRAs {
 		total += len(rra.DPs)
@@ -531,7 +531,7 @@ func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache ti
 	if ds.LastUpdate == time.Unix(0, 0) {
 		return false
 	}
-	pc := ds.pointCount()
+	pc := ds.PointCount()
 	if pc > maxCachedPoints {
 		return ds.LastFlushRT.Add(minCache).Before(time.Now())
 	} else if pc > 0 {

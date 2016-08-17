@@ -59,6 +59,7 @@ type Receiver struct {
 	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
+	reportStats                        bool
 }
 
 type dsFlushRequest struct {
@@ -117,48 +118,49 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
+		reportStats:       true,
 	}
 }
 
-func (t *Receiver) Start() error {
+func (r *Receiver) Start() error {
 	log.Printf("Receiver: starting...")
 
-	t.startWorkers()
-	t.startFlushers()
-	t.startAggWorker()
+	r.startWorkers()
+	r.startFlushers()
+	r.startAggWorker()
 
 	// Wait for workers/flushers to start correctly
-	t.startWg.Wait()
+	r.startWg.Wait()
 	log.Printf("Receiver: All workers running, starting dispatcher.")
 
-	go t.dispatcher()
+	go r.dispatcher()
 	log.Printf("Receiver: Ready.")
 
 	return nil
 }
 
-func (t *Receiver) Stop() {
+func (r *Receiver) Stop() {
 
 	log.Printf("Closing dispatcher channel...")
-	close(t.dpCh)
-	t.dispatcherWg.Wait()
+	close(r.dpCh)
+	r.dispatcherWg.Wait()
 	log.Printf("Dispatcher finished.")
 
 	log.Printf("Leaving cluster.")
-	t.cluster.Leave(1 * time.Second)
-	t.cluster.Shutdown()
+	r.cluster.Leave(1 * time.Second)
+	r.cluster.Shutdown()
 }
 
-func (t *Receiver) ClusterReady(ready bool) {
-	t.cluster.Ready(ready)
+func (r *Receiver) ClusterReady(ready bool) {
+	r.cluster.Ready(ready)
 }
 
-func (t *Receiver) stopWorkers() {
+func (r *Receiver) stopWorkers() {
 	log.Printf("stopWorkers(): waiting for worker channels to empty...")
 	empty := false
 	for !empty {
 		empty = true
-		for _, c := range t.workerChs {
+		for _, c := range r.workerChs {
 			if len(c) > 0 {
 				empty = false
 				break
@@ -170,45 +172,45 @@ func (t *Receiver) stopWorkers() {
 	}
 
 	log.Printf("stopWorkers(): closing all worker channels...")
-	for _, ch := range t.workerChs {
+	for _, ch := range r.workerChs {
 		close(ch)
 	}
 	log.Printf("stopWorkers(): waiting for workers to finish...")
-	t.workerWg.Wait()
+	r.workerWg.Wait()
 	log.Printf("stopWorkers(): all workers finished.")
 }
 
-func (t *Receiver) stopFlushers() {
+func (r *Receiver) stopFlushers() {
 	log.Printf("stopFlushers(): closing all flusher channels...")
-	for _, ch := range t.flusherChs {
+	for _, ch := range r.flusherChs {
 		close(ch)
 	}
 	log.Printf("stopFlushers(): waiting for flushers to finish...")
-	t.flusherWg.Wait()
+	r.flusherWg.Wait()
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
-func (t *Receiver) stopAggWorker() {
+func (r *Receiver) stopAggWorker() {
 
 	log.Printf("stopAggWorker(): waiting for stat channel to empty...")
-	for len(t.aggCh) > 0 {
+	for len(r.aggCh) > 0 {
 		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Printf("stopAggWorker(): closing stat channel...")
-	close(t.aggCh)
+	close(r.aggCh)
 	log.Printf("stopAggWorker(): waiting for stat worker to finish...")
-	t.aggWg.Wait()
+	r.aggWg.Wait()
 	log.Printf("stopAggWorker(): stat worker finished.")
 }
 
-func (t *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
-	if dsSpec := t.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
-		if ds, err := t.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
-			t.dss.Insert(ds)
+func (r *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
+	if dsSpec := r.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
+		if ds, err := r.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
+			r.dss.Insert(ds)
 			// tell the cluster about it (TODO should Insert() do this?)
-			t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-				return []cluster.DistDatum{&distDatumDataSource{t, ds}}, nil
+			r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
+				return []cluster.DistDatum{&distDatumDataSource{r, ds}}, nil
 			})
 			dp.DS = ds
 		} else {
@@ -218,15 +220,15 @@ func (t *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
 	return nil
 }
 
-func (t *Receiver) dispatcher() {
-	t.dispatcherWg.Add(1)
-	defer t.dispatcherWg.Done()
+func (r *Receiver) dispatcher() {
+	r.dispatcherWg.Add(1)
+	defer r.dispatcherWg.Done()
 
 	// Monitor Cluster changes
-	clusterChgCh := t.cluster.NotifyClusterChanges()
+	clusterChgCh := r.cluster.NotifyClusterChanges()
 
 	// Channel for event forwards to other nodes and us
-	snd, rcv := t.cluster.RegisterMsgType()
+	snd, rcv := r.cluster.RegisterMsgType()
 	go func() {
 		defer func() { recover() }() // if we're writing to a closed channel below
 
@@ -240,18 +242,18 @@ func (t *Receiver) dispatcher() {
 				continue
 			}
 
-			var maxHops = t.cluster.NumMembers() * 2 // This is kind of arbitrary
+			var maxHops = r.cluster.NumMembers() * 2 // This is kind of arbitrary
 			if dp.Hops > maxHops {
 				log.Printf("dispatcher(): dropping data point, max hops (%d) reached", maxHops)
 				continue
 			}
 
-			t.dpCh <- &dp // See recover above
+			r.dpCh <- &dp // See recover above
 		}
 	}()
 
 	log.Printf("dispatcher(): marking cluster node as Ready.")
-	t.cluster.Ready(true)
+	r.cluster.Ready(true)
 
 	for {
 
@@ -260,52 +262,52 @@ func (t *Receiver) dispatcher() {
 		select {
 		case _, ok = <-clusterChgCh:
 			if ok {
-				if err := t.cluster.Transition(45 * time.Second); err != nil {
+				if err := r.cluster.Transition(45 * time.Second); err != nil {
 					log.Printf("dispatcher(): Transition error: %v", err)
 				}
 			}
 			continue
-		case dp, ok = <-t.dpCh:
+		case dp, ok = <-r.dpCh:
 		}
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			t.stopAggWorker()
-			t.stopWorkers()
-			t.stopFlushers()
+			r.stopAggWorker()
+			r.stopWorkers()
+			r.stopFlushers()
 			break
 		}
 
-		if dp.DS = t.dss.GetByName(dp.Name); dp.DS == nil {
-			if err := t.createOrLoadDS(dp); err != nil {
+		if dp.DS = r.dss.GetByName(dp.Name); dp.DS == nil {
+			if err := r.createOrLoadDS(dp); err != nil {
 				log.Printf("dispatcher(): createDataSource() error: %v", err)
 				continue
 			}
 		}
 
-		for _, node := range t.cluster.NodesForDistDatum(&distDatumDataSource{t, dp.DS}) {
-			if node.Name() == t.cluster.LocalNode().Name() {
-				t.workerChs[dp.DS.Id%int64(t.NWorkers)] <- dp // This dp is for us
+		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, dp.DS}) {
+			if node.Name() == r.cluster.LocalNode().Name() {
+				r.workerChs[dp.DS.Id%int64(r.NWorkers)] <- dp // This dp is for us
 			} else if dp.Hops == 0 { // we do not forward more than once
 				if node.Ready() {
 					dp.Hops++
 					if msg, err := cluster.NewMsg(node, dp); err == nil {
 						snd <- msg
-						t.queueAddValue("tgres.dispatcher_forward", 1)
+						r.queueAddValue("tgres.dispatcher_forward", 1)
 					}
 				} else {
 					// This should be a very rare thing
 					log.Printf("dispatcher(): Returning the data point to dispatcher!")
 					time.Sleep(100 * time.Millisecond)
-					t.dpCh <- dp
+					r.dpCh <- dp
 				}
 			}
 		}
 	}
 }
 
-func (t *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
-	t.dpCh <- &rrd.IncomingDP{Name: name, TimeStamp: ts, Value: v}
+func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
+	r.dpCh <- &rrd.IncomingDP{Name: name, TimeStamp: ts, Value: v}
 }
 
 // TODO we could have shorthands such as:
@@ -313,19 +315,19 @@ func (t *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
 // QueueGaugeDelta()
 // QueueAppendValue()
 // ... but for now QueueAggregatorCommand seems sufficient
-func (t *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
-	t.aggCh <- agg
+func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
+	r.aggCh <- agg
 }
 
-func (t *Receiver) queueAddValue(name string, f float64) {
-	if t != nil {
-		t.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, f))
+func (r *Receiver) queueAddValue(name string, f float64) {
+	if r != nil {
+		r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, f))
 	}
 }
 
-func (t *Receiver) worker(id int64) {
-	t.workerWg.Add(1)
-	defer t.workerWg.Done()
+func (r *Receiver) worker(id int64) {
+	r.workerWg.Add(1)
+	defer r.workerWg.Done()
 
 	recent := make(map[int64]bool)
 
@@ -333,8 +335,8 @@ func (t *Receiver) worker(id int64) {
 	go func() {
 		for {
 			// Sleep randomly between min and max cache durations (is this wise?)
-			i := int(t.MaxCacheDuration.Nanoseconds()-t.MinCacheDuration.Nanoseconds()) / 1000
-			dur := time.Duration(rand.Intn(i))*time.Millisecond + t.MinCacheDuration
+			i := int(r.MaxCacheDuration.Nanoseconds()-r.MinCacheDuration.Nanoseconds()) / 1000
+			dur := time.Duration(rand.Intn(i))*time.Millisecond + r.MinCacheDuration
 			time.Sleep(dur)
 			periodicFlushCheck <- 1
 			if debug {
@@ -344,7 +346,7 @@ func (t *Receiver) worker(id int64) {
 	}()
 
 	log.Printf("  - worker(%d) started.", id)
-	t.startWg.Done()
+	r.startWg.Done()
 
 	for {
 		var (
@@ -355,7 +357,7 @@ func (t *Receiver) worker(id int64) {
 		select {
 		case <-periodicFlushCheck:
 			// Nothing to do here
-		case dp, ok := <-t.workerChs[id]:
+		case dp, ok := <-r.workerChs[id]:
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
 				if err := dp.Process(); err == nil {
@@ -371,25 +373,25 @@ func (t *Receiver) worker(id int64) {
 		if ds == nil {
 			// periodic flush - check recent
 			for dsId, _ := range recent {
-				ds = t.dss.GetById(dsId)
+				ds = r.dss.GetById(dsId)
 				if ds == nil {
 					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
 					continue
 				}
-				if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+				if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 					if debug {
 						log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id)
 					}
-					t.flushDs(ds, false)
+					r.flushDs(ds, false)
 					delete(recent, ds.Id)
 				}
 			}
-		} else if ds.ShouldBeFlushed(t.MaxCachedPoints, t.MinCacheDuration, t.MaxCacheDuration) {
+		} else if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 			if debug {
 				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id)
 			}
 			// flush just this one ds
-			t.flushDs(ds, false)
+			r.flushDs(ds, false)
 			delete(recent, ds.Id)
 		}
 
@@ -399,12 +401,12 @@ func (t *Receiver) worker(id int64) {
 	}
 }
 
-func (t *Receiver) flushDs(ds *rrd.DataSource, block bool) {
+func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
-	t.flusherChs[ds.Id%int64(t.NWorkers)] <- fr
+	r.flusherChs[ds.Id%int64(r.NWorkers)] <- fr
 	if block {
 		<-fr.resp
 	}
@@ -412,37 +414,40 @@ func (t *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 	ds.ClearRRAs(block) // block = clearLU in this case (see rrd.go)
 }
 
-func (t *Receiver) startWorkers() {
+func (r *Receiver) startWorkers() {
 
-	t.workerChs = make([]chan *rrd.IncomingDP, t.NWorkers)
+	r.workerChs = make([]chan *rrd.IncomingDP, r.NWorkers)
 
-	log.Printf("Starting %d workers...", t.NWorkers)
-	t.startWg.Add(t.NWorkers)
-	for i := 0; i < t.NWorkers; i++ {
-		t.workerChs[i] = make(chan *rrd.IncomingDP, 1024)
+	log.Printf("Starting %d workers...", r.NWorkers)
+	r.startWg.Add(r.NWorkers)
+	for i := 0; i < r.NWorkers; i++ {
+		r.workerChs[i] = make(chan *rrd.IncomingDP, 1024)
 
-		go t.worker(int64(i))
+		go r.worker(int64(i))
 	}
 
 }
 
-func (t *Receiver) flusher(id int64) {
-	t.flusherWg.Add(1)
-	defer t.flusherWg.Done()
+func (r *Receiver) flusher(id int64) {
+	r.flusherWg.Add(1)
+	defer r.flusherWg.Done()
 
 	log.Printf("  - flusher(%d) started.", id)
-	t.startWg.Done()
+	r.startWg.Done()
 
 	for {
-		fr, ok := <-t.flusherChs[id]
+		fr, ok := <-r.flusherChs[id]
 		if ok {
-			if err := t.serde.FlushDataSource(fr.ds); err != nil {
+			if err := r.serde.FlushDataSource(fr.ds); err != nil {
 				log.Printf("flusher(%d): error flushing data source %v: %v", id, fr.ds, err)
 				if fr.resp != nil {
 					fr.resp <- false
 				}
 			} else if fr.resp != nil {
 				fr.resp <- true
+			}
+			if r.reportStats {
+				r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, "tgres.internal.datapoints.flushed", float64(fr.ds.PointCount())))
 			}
 		} else {
 			log.Printf("flusher(%d): channel closed, exiting", id)
@@ -452,31 +457,31 @@ func (t *Receiver) flusher(id int64) {
 
 }
 
-func (t *Receiver) startFlushers() {
+func (r *Receiver) startFlushers() {
 
-	t.flusherChs = make([]chan *dsFlushRequest, t.NWorkers)
+	r.flusherChs = make([]chan *dsFlushRequest, r.NWorkers)
 
-	log.Printf("Starting %d flushers...", t.NWorkers)
-	t.startWg.Add(t.NWorkers)
-	for i := 0; i < t.NWorkers; i++ {
-		t.flusherChs[i] = make(chan *dsFlushRequest)
-		go t.flusher(int64(i))
+	log.Printf("Starting %d flushers...", r.NWorkers)
+	r.startWg.Add(r.NWorkers)
+	for i := 0; i < r.NWorkers; i++ {
+		r.flusherChs[i] = make(chan *dsFlushRequest)
+		go r.flusher(int64(i))
 	}
 }
 
-func (t *Receiver) startAggWorker() {
+func (r *Receiver) startAggWorker() {
 	log.Printf("Starting aggWorker...")
-	t.startWg.Add(1)
-	go t.aggWorker()
+	r.startWg.Add(1)
+	go r.aggWorker()
 }
 
-func (t *Receiver) aggWorker() {
+func (r *Receiver) aggWorker() {
 
-	t.aggWg.Add(1)
-	defer t.aggWg.Done()
+	r.aggWg.Add(1)
+	defer r.aggWg.Done()
 
 	// Channel for event forwards to other nodes and us
-	snd, rcv := t.cluster.RegisterMsgType()
+	snd, rcv := r.cluster.RegisterMsgType()
 	go func() {
 		defer func() { recover() }() // if we're writing to a closed channel below
 
@@ -490,13 +495,13 @@ func (t *Receiver) aggWorker() {
 				continue
 			}
 
-			var maxHops = t.cluster.NumMembers() * 2 // This is kind of arbitrary
+			var maxHops = r.cluster.NumMembers() * 2 // This is kind of arbitrary
 			if ac.Hops > maxHops {
 				log.Printf("aggWorker(): dropping command, max hops (%d) reached", maxHops)
 				continue
 			}
 
-			t.aggCh <- &ac // See recover above
+			r.aggCh <- &ac // See recover above
 		}
 	}()
 
@@ -508,7 +513,7 @@ func (t *Receiver) aggWorker() {
 			// multiple of duration if the system clock is
 			// adjusted. This thing will mostly remain aligned.
 			clock := time.Now()
-			time.Sleep(clock.Truncate(t.StatFlushDuration).Add(t.StatFlushDuration).Sub(clock))
+			time.Sleep(clock.Truncate(r.StatFlushDuration).Add(r.StatFlushDuration).Sub(clock))
 			if len(flushCh) == 0 {
 				flushCh <- time.Now()
 			} else {
@@ -518,13 +523,13 @@ func (t *Receiver) aggWorker() {
 	}()
 
 	log.Printf("aggWorker(): started.")
-	t.startWg.Done()
+	r.startWg.Done()
 
-	statsd.Prefix = t.StatsNamePrefix
+	statsd.Prefix = r.StatsNamePrefix
 
-	agg := aggregator.NewAggregator(t)
+	agg := aggregator.NewAggregator(r)
 	aggDd := &distDatumAggregator{agg}
-	t.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
+	r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
 		log.Printf("aggWorker(): adding the aggregator.Aggregator DistDatum to the cluster")
 		return []cluster.DistDatum{aggDd}, nil
 	})
@@ -542,15 +547,15 @@ func (t *Receiver) aggWorker() {
 		select {
 		case now := <-flushCh:
 			agg.Flush(now)
-		case ac, ok := <-t.aggCh:
+		case ac, ok := <-r.aggCh:
 			if !ok {
 				log.Printf("aggWorker(): channel closed, performing last flush")
 				agg.Flush(time.Now())
 				return
 			}
 
-			for _, node := range t.cluster.NodesForDistDatum(aggDd) {
-				if node.Name() == t.cluster.LocalNode().Name() {
+			for _, node := range r.cluster.NodesForDistDatum(aggDd) {
+				if node.Name() == r.cluster.LocalNode().Name() {
 					agg.ProcessCmd(ac)
 				} else if ac.Hops == 0 { // we do not forward more than once
 					if node.Ready() {
@@ -571,20 +576,20 @@ func (t *Receiver) aggWorker() {
 // Implement cluster.DistDatum for data sources
 
 type distDatumDataSource struct {
-	t  *Receiver
+	r  *Receiver
 	ds *rrd.DataSource
 }
 
 func (d *distDatumDataSource) Relinquish() error {
 	if d.ds.LastUpdate != time.Unix(0, 0) {
-		d.t.flushDs(d.ds, true)
-		d.t.dss.Delete(d.ds)
+		d.r.flushDs(d.ds, true)
+		d.r.dss.Delete(d.ds)
 	}
 	return nil
 }
 
 func (d *distDatumDataSource) Acquire() error {
-	d.t.dss.Delete(d.ds) // it will get loaded afresh when needed
+	d.r.dss.Delete(d.ds) // it will get loaded afresh when needed
 	return nil
 }
 
