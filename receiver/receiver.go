@@ -59,7 +59,8 @@ type Receiver struct {
 	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
-	reportStats                        bool
+	ReportStats                        bool
+	ReportStatsPrefix                  string
 }
 
 type dsFlushRequest struct {
@@ -118,7 +119,8 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
-		reportStats:       true,
+		ReportStats:       true,
+		ReportStatsPrefix: "tgres",
 	}
 }
 
@@ -293,7 +295,7 @@ func (r *Receiver) dispatcher() {
 					dp.Hops++
 					if msg, err := cluster.NewMsg(node, dp); err == nil {
 						snd <- msg
-						r.queueAddValue("tgres.dispatcher_forward", 1)
+						r.reportStatCount("receiver.datapoints_forwarded", 1)
 					}
 				} else {
 					// This should be a very rare thing
@@ -319,9 +321,9 @@ func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 	r.aggCh <- agg
 }
 
-func (r *Receiver) queueAddValue(name string, f float64) {
-	if r != nil {
-		r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, f))
+func (r *Receiver) reportStatCount(name string, f float64) {
+	if r != nil && r.ReportStats {
+		r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, r.ReportStatsPrefix+"."+name, f))
 	}
 }
 
@@ -446,9 +448,7 @@ func (r *Receiver) flusher(id int64) {
 			} else if fr.resp != nil {
 				fr.resp <- true
 			}
-			if r.reportStats {
-				r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, "tgres.internal.datapoints.flushed", float64(fr.ds.PointCount())))
-			}
+			r.reportStatCount("tgres.serde.datapoints_flushed", float64(fr.ds.PointCount()))
 		} else {
 			log.Printf("flusher(%d): channel closed, exiting", id)
 			break
@@ -562,6 +562,7 @@ func (r *Receiver) aggWorker() {
 						ac.Hops++
 						if msg, err := cluster.NewMsg(node, ac); err == nil {
 							snd <- msg
+							r.reportStatCount("receiver.aggregationss_forwarded", 1)
 						}
 					} else {
 						// Drop it
