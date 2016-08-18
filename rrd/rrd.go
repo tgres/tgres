@@ -309,32 +309,18 @@ func (ds *DataSource) setValue(value float64) {
 	ds.UnknownMs = 0
 }
 
-func (ds *DataSource) addValue(value float64, durationMs int64, allowNaNtoValue bool) error {
-	if durationMs > ds.StepMs {
-		return fmt.Errorf("ds.addValue(): duration (%v) cannot be greater than ds.StepMs (%v)", durationMs, ds.StepMs)
-	}
+func (ds *DataSource) addValue(value float64, durationMs int64, allowNaNtoValue bool) {
 	// A DS can go from NaN to a value, but only if the previous update was in the same PDP
 	if math.IsNaN(ds.Value) && allowNaNtoValue {
 		ds.Value = 0
 	}
-	weight := float64(durationMs) / float64(ds.StepMs)
-	ds.Value = ds.Value + weight*value
+	// We subtract ds.UnknownMs from the step size so that the value is not
+	// "diluted" by the unknown part, since we cannot assume it is 0.
+	ds.Value += value * float64(durationMs) / float64(ds.StepMs-ds.UnknownMs)
+
 	if math.IsNaN(value) { // NB: if ds.Value is NaN, but value is a number, UnknownMs is not incremented
 		ds.UnknownMs = ds.UnknownMs + durationMs
 	}
-	return nil
-}
-
-func (ds *DataSource) finalizeValue() {
-	// If ds.Value is !NaN and there is UnknownMs, which can only happen
-	// if after a NaN value at least two !NaN updates happen in the same
-	// PDP, the final value of the PDP should be reflective of the last
-	// values and not "diluted" by the NaN fraction of the PDP. (Imagine
-	// we are recording km/h and have a PDP of one hour, which is mostly
-	// NaN, but in the last two minutes we received 2 data points @ 100
-	// km/h. The final value should be ~100 km/h and not some really low
-	// value. This is because NaN means "we do not know", NOT "0").
-	ds.Value = ds.Value / (float64(ds.StepMs-ds.UnknownMs) / float64(ds.StepMs))
 }
 
 func (ds *DataSource) reset() {
@@ -367,14 +353,11 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 			// periodBegin and periodEnd mark the PDP beginning just
 			// before the beginning of the range. periodEnd points at
-			// the end of the first PDP or end of the last PDP iff end
-			// == endPdpEnd.
+			// the end of the first PDP or end of the last PDP if (and
+			// only if) end == endPdpEnd.
 			periodBegin := begin / ds.StepMs * ds.StepMs
 			periodEnd := periodBegin + ds.StepMs
-			if err := ds.addValue(value, periodEnd-begin, false); err != nil {
-				return err
-			}
-			ds.finalizeValue() // Read the comment in the func
+			ds.addValue(value, periodEnd-begin, false)
 
 			// Update the RRAs
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {

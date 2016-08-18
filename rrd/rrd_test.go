@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -132,6 +133,19 @@ func TestDataSources(t *testing.T) {
 	if (len(dss.byName) + len(dss.byId)) != 0 {
 		t.Errorf("(len(dss.byName) + len(dss.byId)) != 0")
 	}
+}
+
+func TestDataSource_setValue(t *testing.T) {
+	ds := &DataSource{Value: 123, UnknownMs: 456}
+	ds.setValue(math.Inf(-1))
+	if ds.UnknownMs != 0 {
+		t.Errorf("ds.UnknownMs != 0")
+	}
+}
+
+func TestDataSource_addValue(t *testing.T) {
+	//ds := &DataSource{Value: 123}
+	// ZZZ NEXT
 }
 
 // TODO

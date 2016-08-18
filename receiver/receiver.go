@@ -625,6 +625,8 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 
 	sums := make(map[string]float64)
 	gauges := make(map[string]float64)
+	gaugeTime := make(map[string]time.Time)
+	lastFlush := time.Now()
 
 	flush := func() {
 		for name, sum := range sums {
@@ -635,6 +637,8 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 		}
 		sums = make(map[string]float64)
 		gauges = make(map[string]float64)
+		gaugeTime = make(map[string]time.Time)
+		lastFlush = time.Now()
 	}
 
 	var flushCh = make(chan bool, 1)
@@ -665,7 +669,16 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 				case pacedSum:
 					sums[ps.name] += ps.value
 				case pacedGauge:
-					gauges[ps.name] = ps.value
+					now, last := time.Now(), gaugeTime[ps.name]
+					if last.IsZero() {
+						gaugeTime[ps.name], last = lastFlush, lastFlush
+					}
+					oldSize := last.Sub(lastFlush).Seconds()
+					newSize := now.Sub(lastFlush).Seconds()
+					if newSize > 0 {
+						curVal, diff := newSize-oldSize, gauges[ps.name]
+						gauges[ps.name] = curVal*oldSize/newSize + ps.value*diff/newSize
+					}
 				}
 			}
 		}
