@@ -362,9 +362,6 @@ func (r *Receiver) worker(id int64) {
 			dur := time.Duration(rand.Intn(i))*time.Millisecond + r.MinCacheDuration
 			time.Sleep(dur)
 			periodicFlushCheck <- 1
-			if debug {
-				log.Printf("worker(%d): Periodic flush after sleep: %v", id, dur)
-			}
 		}
 	}()
 
@@ -393,12 +390,16 @@ func (r *Receiver) worker(id int64) {
 			}
 		}
 
-		if ds == nil {
+		if ds == nil && len(recent) > 0 {
 			// periodic flush - check recent
+			if debug {
+				log.Printf("worker(%d): Periodic flush.", id)
+			}
 			for dsId, _ := range recent {
 				ds = r.dss.GetById(dsId)
 				if ds == nil {
-					log.Printf("worker(%d): WAT? cannot lookup ds id (%d) to flush?", id, dsId)
+					log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
+					delete(recent, ds.Id)
 					continue
 				}
 				if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
