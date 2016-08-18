@@ -676,7 +676,7 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 					oldSize := last.Sub(lastFlush).Seconds()
 					newSize := now.Sub(lastFlush).Seconds()
 					if newSize > 0 {
-						curVal, diff := newSize-oldSize, gauges[ps.name]
+						curVal, diff := gauges[ps.name], newSize-oldSize
 						gauges[ps.name] = curVal*oldSize/newSize + ps.value*diff/newSize
 					}
 				}
