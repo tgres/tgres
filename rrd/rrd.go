@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rrd contains the logic for maintaining in-memory
-// Round-Robin Archives of data points.
+// Package rrd contains the logic for updating in-memory partial
+// Round-Robin Archives of data points. In other words, this is the
+// logic governing how incoming data modifies RRAs only, there is no
+// code here to load an RRA from db and do something with it.
 //
 // Throughout documentation and code the following terms are used
 // (sometimes as abbreviations, listed in parenthesis):

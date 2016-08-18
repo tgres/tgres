@@ -59,10 +59,10 @@ type Receiver struct {
 	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
 	startWg                            sync.WaitGroup
-	pacedSumWg                         sync.WaitGroup
+	pacedMetricWg                      sync.WaitGroup
 	ReportStats                        bool
 	ReportStatsPrefix                  string
-	pacedSumCh                         chan *pacedSum
+	pacedMetricCh                      chan *pacedMetric
 }
 
 type dsFlushRequest struct {
@@ -123,7 +123,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 		ReportStats:       true,
 		ReportStatsPrefix: "tgres",
-		pacedSumCh:        make(chan *pacedSum, 256),
+		pacedMetricCh:     make(chan *pacedMetric, 256),
 	}
 }
 
@@ -133,7 +133,7 @@ func (r *Receiver) Start() error {
 	r.startWorkers()
 	r.startFlushers()
 	r.startAggWorker()
-	r.startPacedSumWorker()
+	r.startPacedMetricWorker()
 
 	// Wait for workers/flushers to start correctly
 	r.startWg.Wait()
@@ -210,12 +210,12 @@ func (r *Receiver) stopAggWorker() {
 	log.Printf("stopAggWorker(): agg worker finished.")
 }
 
-func (r *Receiver) stopPacedSumWorker() {
-	log.Printf("stopPacedSumWorker(): closing paced sum channel...")
-	close(r.pacedSumCh)
-	log.Printf("stopPacedSumWorker(): waiting for paced sum worker to finish...")
-	r.pacedSumWg.Wait()
-	log.Printf("stopPacedSumWorker(): paced sum worker finished.")
+func (r *Receiver) stopPacedMetricWorker() {
+	log.Printf("stopPacedMetricWorker(): closing paced metric channel...")
+	close(r.pacedMetricCh)
+	log.Printf("stopPacedMetricWorker(): waiting for paced metric worker to finish...")
+	r.pacedMetricWg.Wait()
+	log.Printf("stopPacedMetricWorker(): paced metric worker finished.")
 }
 
 func (r *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
@@ -286,7 +286,7 @@ func (r *Receiver) dispatcher() {
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			r.stopPacedSumWorker()
+			r.stopPacedMetricWorker()
 			r.stopAggWorker()
 			r.stopWorkers()
 			r.stopFlushers()
@@ -341,7 +341,11 @@ func (r *Receiver) reportStatCount(name string, f float64) {
 }
 
 func (r *Receiver) QueueSum(name string, v float64) {
-	r.pacedSumCh <- &pacedSum{name, v}
+	r.pacedMetricCh <- &pacedMetric{pacedSum, name, v}
+}
+
+func (r *Receiver) QueueGauge(name string, v float64) {
+	r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
 }
 
 func (r *Receiver) worker(id int64) {
@@ -591,28 +595,41 @@ func (r *Receiver) aggWorker() {
 	}
 }
 
-type pacedSum struct {
+type pacedMetricType int
+
+const (
+	pacedSum pacedMetricType = iota
+	pacedGauge
+)
+
+type pacedMetric struct {
+	kind  pacedMetricType
 	name  string
 	value float64
 }
 
-func (r *Receiver) startPacedSumWorker() {
-	log.Printf("Starting pacedSumWorker...")
+func (r *Receiver) startPacedMetricWorker() {
+	log.Printf("Starting pacedMetricWorker...")
 	r.startWg.Add(1)
-	go r.pacedSumWorker(time.Second)
+	go r.pacedMetricWorker(time.Second)
 }
 
-func (r *Receiver) pacedSumWorker(frequency time.Duration) {
-	r.pacedSumWg.Add(1)
-	defer r.pacedSumWg.Done()
+func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
+	r.pacedMetricWg.Add(1)
+	defer r.pacedMetricWg.Done()
 
 	sums := make(map[string]float64)
+	gauges := make(map[string]float64)
 
 	flush := func() {
 		for name, sum := range sums {
 			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
 		}
+		for name, gauge := range gauges {
+			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdSetGauge, name, gauge))
+		}
 		sums = make(map[string]float64)
+		gauges = make(map[string]float64)
 	}
 
 	var flushCh = make(chan bool, 1)
@@ -622,24 +639,29 @@ func (r *Receiver) pacedSumWorker(frequency time.Duration) {
 			if len(flushCh) == 0 {
 				flushCh <- true
 			} else {
-				log.Printf("pacedSumWorker(): dropping flush timer on the floor - busy system?")
+				log.Printf("pacedMetricWorker(): dropping flush timer on the floor - busy system?")
 			}
 		}
 	}()
 
-	log.Printf("pacedSumWorker(): started.")
+	log.Printf("pacedMetricWorker(): started.")
 	r.startWg.Done()
 
 	for {
 		select {
 		case <-flushCh:
 			flush()
-		case ps, ok := <-r.pacedSumCh:
+		case ps, ok := <-r.pacedMetricCh:
 			if !ok {
 				flush()
 				return
 			} else {
-				sums[ps.name] += ps.value
+				switch ps.kind {
+				case pacedSum:
+					sums[ps.name] += ps.value
+				case pacedGauge:
+					gauges[ps.name] = ps.value
+				}
 			}
 		}
 	}
