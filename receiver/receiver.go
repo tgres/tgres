@@ -390,24 +390,26 @@ func (r *Receiver) worker(id int64) {
 			}
 		}
 
-		if ds == nil && len(recent) > 0 {
-			// periodic flush - check recent
-			if debug {
-				log.Printf("worker(%d): Periodic flush.", id)
-			}
-			for dsId, _ := range recent {
-				ds = r.dss.GetById(dsId)
-				if ds == nil {
-					log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
-					delete(recent, ds.Id)
-					continue
+		if ds == nil {
+			if len(recent) > 0 {
+				// periodic flush - check recent
+				if debug {
+					log.Printf("worker(%d): Periodic flush.", id)
 				}
-				if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
-					if debug {
-						log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id)
+				for dsId, _ := range recent {
+					ds = r.dss.GetById(dsId)
+					if ds == nil {
+						log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
+						delete(recent, ds.Id)
+						continue
 					}
-					r.flushDs(ds, false)
-					delete(recent, ds.Id)
+					if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
+						if debug {
+							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id)
+						}
+						r.flushDs(ds, false)
+						delete(recent, ds.Id)
+					}
 				}
 			}
 		} else if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
