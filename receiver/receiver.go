@@ -293,6 +293,8 @@ func (r *Receiver) dispatcher() {
 			break
 		}
 
+		r.reportStatCount("receiver.dispatcher.datapoints.total", 1)
+
 		if dp.DS = r.dss.GetByName(dp.Name); dp.DS == nil {
 			if err := r.createOrLoadDS(dp); err != nil {
 				log.Printf("dispatcher(): createDataSource() error: %v", err)
@@ -308,7 +310,7 @@ func (r *Receiver) dispatcher() {
 					dp.Hops++
 					if msg, err := cluster.NewMsg(node, dp); err == nil {
 						snd <- msg
-						r.reportStatCount("receiver.datapoints_forwarded", 1)
+						r.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
 					}
 				} else {
 					// This should be a very rare thing
@@ -391,8 +393,8 @@ func (r *Receiver) worker(id int64) {
 		}
 
 		if ds == nil {
+			// periodic flush - check recent
 			if len(recent) > 0 {
-				// periodic flush - check recent
 				if debug {
 					log.Printf("worker(%d): Periodic flush.", id)
 				}
@@ -413,10 +415,10 @@ func (r *Receiver) worker(id int64) {
 				}
 			}
 		} else if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
+			// flush just this one ds
 			if debug {
 				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id)
 			}
-			// flush just this one ds
 			r.flushDs(ds, false)
 			delete(recent, ds.Id)
 		}
