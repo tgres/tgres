@@ -402,7 +402,7 @@ func (r *Receiver) worker(id int64) {
 					ds = r.dss.GetById(dsId)
 					if ds == nil {
 						log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
-						delete(recent, ds.Id)
+						delete(recent, dsId)
 						continue
 					}
 					if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
