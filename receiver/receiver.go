@@ -619,13 +619,37 @@ func (r *Receiver) startPacedMetricWorker() {
 	go r.pacedMetricWorker(time.Second)
 }
 
+type gaugePdp struct {
+	value    float64
+	end      time.Time
+	duration time.Duration
+}
+
+func (pdp *gaugePdp) addValue(value float64) {
+	if pdp.end.IsZero() {
+		pdp.end = time.Now()
+		return
+	}
+	now := time.Now()
+	duration := now.Sub(pdp.end)
+	pdp.value = pdp.value*float64(pdp.duration/(pdp.duration+duration)) + pdp.value*float64(duration/(pdp.duration+duration))
+	pdp.end = now
+	pdp.duration = pdp.duration + duration
+}
+
+func (pdp *gaugePdp) reset() float64 {
+	result := pdp.value
+	pdp.value = 0
+	pdp.duration = 0
+	return result
+}
+
 func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 	r.pacedMetricWg.Add(1)
 	defer r.pacedMetricWg.Done()
 
 	sums := make(map[string]float64)
-	gauges := make(map[string]float64)
-	gaugeTime := make(map[string]time.Time)
+	gauges := make(map[string]*gaugePdp)
 	lastFlush := time.Now()
 
 	flush := func() {
@@ -633,11 +657,10 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
 		}
 		for name, gauge := range gauges {
-			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdSetGauge, name, gauge))
+			r.QueueDataPoint(name, gauge.end, gauge.reset())
 		}
 		sums = make(map[string]float64)
-		gauges = make(map[string]float64)
-		gaugeTime = make(map[string]time.Time)
+		gauges = make(map[string]*gaugePdp)
 		lastFlush = time.Now()
 	}
 
@@ -669,16 +692,10 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 				case pacedSum:
 					sums[ps.name] += ps.value
 				case pacedGauge:
-					now, last := time.Now(), gaugeTime[ps.name]
-					if last.IsZero() {
-						gaugeTime[ps.name], last = lastFlush, lastFlush
+					if _, ok := gauges[ps.name]; !ok {
+						gauges[ps.name] = &gaugePdp{}
 					}
-					oldSize := last.Sub(lastFlush).Seconds()
-					newSize := now.Sub(lastFlush).Seconds()
-					if newSize > 0 {
-						curVal, diff := gauges[ps.name], newSize-oldSize
-						gauges[ps.name] = curVal*oldSize/newSize + ps.value*diff/newSize
-					}
+					gauges[ps.name].addValue(ps.value)
 				}
 			}
 		}
