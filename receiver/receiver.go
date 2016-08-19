@@ -632,7 +632,8 @@ func (pdp *gaugePdp) addValue(value float64) {
 	}
 	now := time.Now()
 	duration := now.Sub(pdp.end)
-	pdp.value = pdp.value*float64(pdp.duration/(pdp.duration+duration)) + pdp.value*float64(duration/(pdp.duration+duration))
+	pdp.value = pdp.value*float64(pdp.duration)/float64(pdp.duration+duration) +
+		value*float64(duration)/float64(pdp.duration+duration)
 	pdp.end = now
 	pdp.duration = pdp.duration + duration
 }
