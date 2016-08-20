@@ -99,14 +99,12 @@ func (dp *IncomingDP) Process() error {
 // DataSource describes a time series and its parameters, RRA and
 // intermediate state (PDP).
 type DataSource struct {
+	pdp
 	Id          int64                // Id
 	Name        string               // Series name
-	StepMs      int64                // Step Size in Ms
 	HeartbeatMs int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
 	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
 	LastDs      float64              // Last final value we saw
-	Value       float64              // Weighted value (e.g. f we are 2/3 way into a step, Value should be 2/3 of the final step value)
-	UnknownMs   int64                // Ms of the data that is "unknown" (e.g. because of exceeded HB)
 	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
 	LastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
@@ -304,30 +302,6 @@ func (ds *DataSource) PointCount() int {
 	return total
 }
 
-func (ds *DataSource) setValue(value float64) {
-	ds.Value = value
-	ds.UnknownMs = 0
-}
-
-func (ds *DataSource) addValue(value float64, durationMs int64, allowNaNtoValue bool) {
-	// A DS can go from NaN to a value, but only if the previous update was in the same PDP
-	if math.IsNaN(ds.Value) && allowNaNtoValue {
-		ds.Value = 0
-	}
-	// We subtract ds.UnknownMs from the step size so that the value is not
-	// "diluted" by the unknown part, since we cannot assume it is 0.
-	ds.Value += value * float64(durationMs) / float64(ds.StepMs-ds.UnknownMs)
-
-	if math.IsNaN(value) { // NB: if ds.Value is NaN, but value is a number, UnknownMs is not incremented
-		ds.UnknownMs = ds.UnknownMs + durationMs
-	}
-}
-
-func (ds *DataSource) reset() {
-	ds.Value = math.NaN()
-	ds.UnknownMs = 0
-}
-
 func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 	// This range can be less than a PDP or span multiple PDPs. Only
@@ -409,8 +383,11 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 
-	if math.IsInf(dp.Value, 0) {
-		return fmt.Errorf("Inf is not a valid data point value: %#v", dp)
+	if math.IsNaN(dp.Value) || math.IsInf(dp.Value, 0) {
+		// NaN is not a valid value because it is meaningless, e.g. "the thermometer
+		// is registering a NaN". Or it means that "for certain it is offline", but
+		// that is not part of our scope. You can only get a NaN by exceeding HB.
+		return fmt.Errorf("NaN or ±Inf is not a valid data point value: %#v", dp)
 	}
 
 	// Do everything in milliseconds
