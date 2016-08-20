@@ -331,7 +331,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 			// only if) end == endPdpEnd.
 			periodBegin := begin / ds.StepMs * ds.StepMs
 			periodEnd := periodBegin + ds.StepMs
-			ds.addValue(value, periodEnd-begin, false)
+			ds.addValue2(value, periodEnd-begin)
 
 			// Update the RRAs
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
@@ -375,7 +375,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 	// If there is still a small part of an incomlete PDP between
 	// begin and end, update the PDP value.
 	if begin < end {
-		ds.addValue(value, end-begin, true)
+		ds.addValue2(value, end-begin)
 	}
 
 	return nil
