@@ -651,7 +651,6 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 
 	sums := make(map[string]float64)
 	gauges := make(map[string]*gaugePdp)
-	lastFlush := time.Now()
 
 	flush := func() {
 		for name, sum := range sums {
@@ -661,8 +660,7 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 			r.QueueDataPoint(name, gauge.end, gauge.reset())
 		}
 		sums = make(map[string]float64)
-		gauges = make(map[string]*gaugePdp)
-		lastFlush = time.Now()
+		// NB: We do not reset gauges, they live on
 	}
 
 	var flushCh = make(chan bool, 1)
