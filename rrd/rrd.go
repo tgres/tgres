@@ -49,6 +49,33 @@
 //
 // DS Heartbeat (HB): Duration of time that can pass without data. A
 // gap in data which exceeds HB is filled with NaNs.
+//
+//
+// On Datapoints:
+//
+//  ||    +--------+    ||
+//  ||    |	     3 +----||
+//  ||----+	       |  2 ||
+//  ||  1 |	       |    ||
+//  ||==================||
+//
+// In the above data point, 0.25 of the value is 1, 0.50 is 3 and 0.25
+// is 2, for a total of 0.25*1 + 0.50*3 + 0.25*2 = 2.25.
+//
+// If a part of the data point is NaN, then that part does not
+// count. Even if NaN is at the end:
+//
+//  ||    +--------+    ||
+//  ||    |	     3 |    ||
+//  ||----+	       | NaN||
+//  ||  1 |	       |    ||
+//  ||==================||
+//
+// In the above datapoint, the datapoint size is what is taken up by 1
+// and 3, without the NaN. Thus 1/3 of the value is 1 and 2/3 of the
+// value is 3, for a total of 1/3*1 + 2/3*3 = 2.33333...
+//
+// A datapoint must be all NaN for its value to be NaN.
 package rrd
 
 import (
@@ -99,7 +126,8 @@ func (dp *IncomingDP) Process() error {
 // DataSource describes a time series and its parameters, RRA and
 // intermediate state (PDP).
 type DataSource struct {
-	pdp
+	dynamicPdp
+	StepMs      int64
 	Id          int64                // Id
 	Name        string               // Series name
 	HeartbeatMs int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
@@ -331,7 +359,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 			// only if) end == endPdpEnd.
 			periodBegin := begin / ds.StepMs * ds.StepMs
 			periodEnd := periodBegin + ds.StepMs
-			ds.addValue2(value, periodEnd-begin)
+			ds.addValue(value, time.Duration(periodEnd-begin)*time.Millisecond)
 
 			// Update the RRAs
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
@@ -353,7 +381,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 		// we go extra expressive for clarity).
 		if begin < endPdpBegin || (begin == endPdpBegin && end == endPdpEnd) {
 
-			ds.setValue(value) // Since begin is aligned, we can bluntly set the value.
+			ds.setValue(value, time.Duration(ds.StepMs)*time.Millisecond) // Since begin is aligned, we can bluntly set the value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin
@@ -375,7 +403,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 	// If there is still a small part of an incomlete PDP between
 	// begin and end, update the PDP value.
 	if begin < end {
-		ds.addValue2(value, end-begin)
+		ds.addValue(value, time.Duration(end-begin)*time.Millisecond)
 	}
 
 	return nil
@@ -449,7 +477,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 				rra.UnknownMs = rra.UnknownMs + ds.StepMs*steps
 			}
 
-			xff := float64(rra.UnknownMs+ds.UnknownMs) / float64(rraStepMs)
+			xff := float64(rra.UnknownMs+ds.StepMs-ds.Duration.Nanoseconds()/1000000) / float64(rraStepMs)
 			if (xff > float64(rra.Xff)) || math.IsNaN(ds.Value) {
 				// So the issue there is that for RRAs that span long
 				// periods of time have a high probability of hitting a
@@ -550,7 +578,7 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	new_ds.LastUpdate = ds.LastUpdate
 	new_ds.LastDs = ds.LastDs
 	new_ds.Value = ds.Value
-	new_ds.UnknownMs = ds.UnknownMs
+	new_ds.Duration = ds.Duration
 	new_ds.RRAs = make([]*RoundRobinArchive, len(ds.RRAs))
 
 	for n, rra := range ds.RRAs {

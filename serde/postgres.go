@@ -386,7 +386,10 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	// TODO: support milliseconds?
 	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
 
-	//log.Printf("sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
+	if debug {
+		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
+			dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
+	}
 	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
@@ -516,8 +519,9 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 		ds         rrd.DataSource
 		last_ds    sql.NullFloat64
 		lastupdate pq.NullTime
+		unknownMs  int64
 	)
-	err := rows.Scan(&ds.Id, &ds.Name, &ds.StepMs, &ds.HeartbeatMs, &lastupdate, &last_ds, &ds.Value, &ds.UnknownMs)
+	err := rows.Scan(&ds.Id, &ds.Name, &ds.StepMs, &ds.HeartbeatMs, &lastupdate, &last_ds, &ds.Value, &unknownMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -532,6 +536,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	} else {
 		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{} !
 	}
+	ds.Duration = time.Duration(ds.StepMs-unknownMs) * time.Millisecond
 	return &ds, err
 }
 
@@ -790,9 +795,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, UnknownMs: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs)
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.Duration)
 	}
-	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, ds.UnknownMs, ds.Id); err != nil {
+	unknownMs := ds.StepMs - ds.Duration.Nanoseconds()/1000000
+	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, unknownMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
