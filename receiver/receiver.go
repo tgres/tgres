@@ -448,7 +448,7 @@ func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 		<-fr.resp
 	}
 	ds.LastFlushRT = time.Now()
-	ds.ClearRRAs(block) // block = clearLU in this case (see rrd.go)
+	ds.ClearRRAs()
 }
 
 func (r *Receiver) startWorkers() {

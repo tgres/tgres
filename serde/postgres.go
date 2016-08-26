@@ -533,8 +533,6 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	}
 	if lastupdate.Valid {
 		ds.LastUpdate = lastupdate.Time
-	} else {
-		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{} !
 	}
 	ds.Duration = time.Duration(stepMs-unknownMs) * time.Millisecond
 	ds.Step = time.Duration(stepMs) * time.Millisecond
@@ -878,7 +876,7 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := time.Unix(rra.GetStartGivenEndMs(ds, rra.Latest.Unix()*1000)/1000, 0)
+	rraEarliest := rra.Begins(rra.Latest, ds.Step*time.Duration(rra.StepsPerRow))
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest

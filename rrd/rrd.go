@@ -336,7 +336,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 
 	// Beginning of the last PDP in the range.
 	endPdpBegin := end.Truncate(ds.Step)
-	if end == endPdpBegin {
+	if end.Equal(endPdpBegin) {
 		// We are exactly at the end, need to move one step back.
 		endPdpBegin.Add(ds.Step * -1)
 	}
@@ -346,7 +346,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 	// If the range begins *before* the last PDP, or ends
 	// *exactly* on the end of a PDP, at last one PDP is now
 	// completed, and updates need to trickle down to RRAs.
-	if begin.Before(endPdpBegin) || (end == endPdpEnd) {
+	if begin.Before(endPdpBegin) || (end.Equal(endPdpEnd)) {
 
 		// If range begins in the middle of a now completed PDP
 		// (which may be the last one IFF end == endPdpEnd)
@@ -362,7 +362,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 			ds.AddValue(value, offset)
 
 			// Update the RRAs
-			if err := ds.updateRRAs(periodBegin.UnixNano()/1000000, periodEnd.UnixNano()/1000000); err != nil {
+			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
 				return err
 			}
 
@@ -379,16 +379,16 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 		// aligned, the only other possibility is begin == endPdpEnd,
 		// thus the code could simply be "if begin != endPdpEnd", but
 		// we go extra expressive for clarity).
-		if begin.Before(endPdpBegin) || (begin == endPdpBegin && end == endPdpEnd) {
+		if begin.Before(endPdpBegin) || (begin.Equal(endPdpBegin) && end.Equal(endPdpEnd)) {
 
 			ds.SetValue(value, ds.Step) // Since begin is aligned, we can bluntly set the value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin
-			if end.Truncate(ds.Step) == end {
+			if end.Equal(end.Truncate(ds.Step)) {
 				periodEnd = end
 			}
-			if err := ds.updateRRAs(periodBegin.UnixNano()/1000000, periodEnd.UnixNano()/1000000); err != nil {
+			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
 				return err
 			}
 
@@ -445,28 +445,26 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 	return nil
 }
 
-func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
+func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 	for _, rra := range ds.RRAs {
 
-		dsStepMs := ds.Step.Nanoseconds() / 1000000
 		rraStep := ds.Step * time.Duration(rra.StepsPerRow)
-		rraStepMs := dsStepMs * int64(rra.StepsPerRow)
 
-		currentBegin := rra.GetStartGivenEndMs(ds, periodBegin)
-		if periodBegin > currentBegin {
+		currentBegin := rra.Begins(periodBegin, rraStep)
+		if periodBegin.After(currentBegin) {
 			currentBegin = periodBegin
 		}
 
-		for currentBegin < periodEnd {
+		for currentBegin.Before(periodEnd) {
 
-			endOfSlot := currentBegin/rraStepMs*rraStepMs + rraStepMs
+			endOfSlot := currentBegin.Truncate(rraStep).Add(rraStep)
 			currentEnd := endOfSlot
-			if currentEnd > periodEnd {
+			if currentEnd.After(periodEnd) {
 				currentEnd = periodEnd
 			}
 
-			steps := (currentEnd - currentBegin) / dsStepMs
+			steps := currentEnd.Sub(currentBegin) / ds.Step
 
 			if math.IsNaN(ds.Value) {
 				rra.Unknown = rra.Unknown + ds.Step*time.Duration(steps)
@@ -506,15 +504,15 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 				}
 			}
 
-			if currentEnd >= endOfSlot {
+			if !currentEnd.Before(endOfSlot) { // currentEnd >= endOfSlot
 
 				if rra.Cf == "AVERAGE" && !math.IsNaN(rra.Value) && rra.Unknown > 0 {
 					// adjust the final value
 					rra.Value = rra.Value / (float64(rraStep-rra.Unknown) / float64(rraStep))
 				}
 
-				slotN := (currentEnd / rraStepMs) % int64(rra.Size)
-				rra.Latest = time.Unix(currentEnd/1000, (currentEnd%1000)*1000000)
+				slotN := ((currentEnd.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.Size)
+				rra.Latest = currentEnd
 				rra.DPs[slotN] = rra.Value
 
 				if len(rra.DPs) == 1 {
@@ -535,23 +533,15 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 	return nil
 }
 
-func (ds *DataSource) ClearRRAs(clearLU bool) {
+func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.RRAs {
 		rra.DPs = make(map[int64]float64)
 		rra.Start, rra.End = 0, 0
 	}
-	if clearLU {
-		// This is so that if we are a cluster node that is no longer
-		// responsible for an event, but then become responsible
-		// again, the new DP doesn't set NaNs all the way to LU. We're
-		// making an assumption that this is done whenever a blocking
-		// flush is requested (i.e. at the Relinquish).
-		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{}
-	}
 }
 
 func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
-	if ds.LastUpdate == time.Unix(0, 0) {
+	if ds.LastUpdate.IsZero() {
 		return false
 	}
 	pc := ds.PointCount()
@@ -615,12 +605,10 @@ func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 	}
 }
 
-func (rra *RoundRobinArchive) GetStartGivenEndMs(ds *DataSource, timeMs int64) int64 {
-	dsStepMs := ds.Step.Nanoseconds() / 1000000
-	rraStepMs := dsStepMs * int64(rra.StepsPerRow)
-	rraStart := (timeMs - rraStepMs*int64(rra.Size)) / rraStepMs * rraStepMs
-	if timeMs%rraStepMs != 0 {
-		rraStart += rraStepMs
+func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.Time {
+	rraStart := now.Add(rraStep * time.Duration(rra.Size) * -1).Truncate(rraStep)
+	if now.Equal(now.Truncate(rraStep)) {
+		rraStart = rraStart.Add(rraStep)
 	}
 	return rraStart
 }
