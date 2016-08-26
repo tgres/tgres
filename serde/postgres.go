@@ -544,10 +544,11 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 
 func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	var (
-		latest pq.NullTime
-		rra    rrd.RoundRobinArchive
+		latest    pq.NullTime
+		rra       rrd.RoundRobinArchive
+		unknownMs int64
 	)
-	err := rows.Scan(&rra.Id, &rra.DsId, &rra.Cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &rra.UnknownMs, &latest)
+	err := rows.Scan(&rra.Id, &rra.DsId, &rra.Cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &unknownMs, &latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -558,6 +559,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		rra.Latest = time.Unix(0, 0)
 	}
 	rra.DPs = make(map[int64]float64)
+	rra.Unknown = time.Duration(unknownMs) * time.Millisecond
 	return &rra, err
 }
 
@@ -777,7 +779,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := p.sql2.Query(rra.Value, rra.UnknownMs, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value, rra.Unknown.Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
 		rows.Close()
 	} else {
 		return err

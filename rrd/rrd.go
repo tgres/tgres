@@ -185,7 +185,7 @@ type RoundRobinArchive struct {
 	// PDP, store for intermediate value during consolidation.
 	Value float64
 	// How much of the PDP is "unknown".
-	UnknownMs int64
+	Unknown time.Duration
 	// Time at which most recent data point and the RRA end.
 	Latest time.Time
 
@@ -424,7 +424,7 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 		for _, rra := range ds.RRAs {
 			dsStepBoundary := dp.TimeStamp.Truncate(ds.Step)
 			rraStepBoundary := dsStepBoundary.Truncate(ds.Step * time.Duration(rra.StepsPerRow))
-			rra.UnknownMs = dsStepBoundary.Sub(rraStepBoundary).Nanoseconds() / 1000000
+			rra.Unknown = dsStepBoundary.Sub(rraStepBoundary)
 		}
 	}
 
@@ -450,6 +450,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 	for _, rra := range ds.RRAs {
 
 		dsStepMs := ds.Step.Nanoseconds() / 1000000
+		rraStep := ds.Step * time.Duration(rra.StepsPerRow)
 		rraStepMs := dsStepMs * int64(rra.StepsPerRow)
 
 		currentBegin := rra.GetStartGivenEndMs(ds, periodBegin)
@@ -468,10 +469,10 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 			steps := (currentEnd - currentBegin) / dsStepMs
 
 			if math.IsNaN(ds.Value) {
-				rra.UnknownMs = rra.UnknownMs + dsStepMs*steps
+				rra.Unknown = rra.Unknown + ds.Step*time.Duration(steps)
 			}
 
-			xff := float64(rra.UnknownMs+dsStepMs-ds.Duration.Nanoseconds()/1000000) / float64(rraStepMs)
+			xff := float64(rra.Unknown+ds.Step-ds.Duration) / float64(rraStep)
 			if (xff > float64(rra.Xff)) || math.IsNaN(ds.Value) {
 				// So the issue there is that for RRAs that span long
 				// periods of time have a high probability of hitting a
@@ -507,9 +508,9 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 
 			if currentEnd >= endOfSlot {
 
-				if rra.Cf == "AVERAGE" && !math.IsNaN(rra.Value) && rra.UnknownMs > 0 {
+				if rra.Cf == "AVERAGE" && !math.IsNaN(rra.Value) && rra.Unknown > 0 {
 					// adjust the final value
-					rra.Value = rra.Value / (float64(rraStepMs-rra.UnknownMs) / float64(rraStepMs))
+					rra.Value = rra.Value / (float64(rraStep-rra.Unknown) / float64(rraStep))
 				}
 
 				slotN := (currentEnd / rraStepMs) % int64(rra.Size)
@@ -523,7 +524,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 
 				// reset
 				rra.Value = 0
-				rra.UnknownMs = 0
+				rra.Unknown = 0
 
 			}
 
@@ -591,7 +592,7 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 	new_rra.StepsPerRow = rra.StepsPerRow
 	new_rra.Size = rra.Size
 	new_rra.Value = rra.Value
-	new_rra.UnknownMs = rra.UnknownMs
+	new_rra.Unknown = rra.Unknown
 	new_rra.Latest = rra.Latest
 	new_rra.Start = rra.Start
 	new_rra.End = rra.End
