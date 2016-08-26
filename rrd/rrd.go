@@ -126,7 +126,7 @@ func (dp *IncomingDP) Process() error {
 // DataSource describes a time series and its parameters, RRA and
 // intermediate state (PDP).
 type DataSource struct {
-	dynamicPdp
+	pdp
 	StepMs      int64
 	Id          int64                // Id
 	Name        string               // Series name
@@ -359,7 +359,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 			// only if) end == endPdpEnd.
 			periodBegin := begin / ds.StepMs * ds.StepMs
 			periodEnd := periodBegin + ds.StepMs
-			ds.addValue(value, time.Duration(periodEnd-begin)*time.Millisecond)
+			ds.AddValue(value, time.Duration(periodEnd-begin)*time.Millisecond)
 
 			// Update the RRAs
 			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
@@ -367,7 +367,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 			}
 
 			// The DS value now becomes zero, it has been "sent" to RRAs.
-			ds.reset()
+			ds.Reset()
 
 			begin = periodEnd
 		}
@@ -381,7 +381,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 		// we go extra expressive for clarity).
 		if begin < endPdpBegin || (begin == endPdpBegin && end == endPdpEnd) {
 
-			ds.setValue(value, time.Duration(ds.StepMs)*time.Millisecond) // Since begin is aligned, we can bluntly set the value.
+			ds.SetValue(value, time.Duration(ds.StepMs)*time.Millisecond) // Since begin is aligned, we can bluntly set the value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin
@@ -393,7 +393,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 			}
 
 			// The DS value now becomes zero, it has been "sent" to RRAs.
-			ds.reset()
+			ds.Reset()
 
 			// Advance begin to the aligned end
 			begin = periodEnd
@@ -403,7 +403,7 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 	// If there is still a small part of an incomlete PDP between
 	// begin and end, update the PDP value.
 	if begin < end {
-		ds.addValue(value, time.Duration(end-begin)*time.Millisecond)
+		ds.AddValue(value, time.Duration(end-begin)*time.Millisecond)
 	}
 
 	return nil

@@ -619,48 +619,22 @@ func (r *Receiver) startPacedMetricWorker() {
 	go r.pacedMetricWorker(time.Second)
 }
 
-type gaugePdp struct {
-	value    float64
-	end      time.Time
-	duration time.Duration
-}
-
-func (pdp *gaugePdp) addValue(value float64) {
-	if pdp.end.IsZero() {
-		pdp.end = time.Now()
-		return
-	}
-	now := time.Now()
-	duration := now.Sub(pdp.end)
-	pdp.value = pdp.value*float64(pdp.duration)/float64(pdp.duration+duration) +
-		value*float64(duration)/float64(pdp.duration+duration)
-	pdp.end = now
-	pdp.duration = pdp.duration + duration
-}
-
-func (pdp *gaugePdp) reset() float64 {
-	result := pdp.value
-	pdp.value = 0
-	pdp.duration = 0
-	return result
-}
-
 func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 	r.pacedMetricWg.Add(1)
 	defer r.pacedMetricWg.Done()
 
 	sums := make(map[string]float64)
-	gauges := make(map[string]*gaugePdp)
+	gauges := make(map[string]*rrd.ClockPdp)
 
 	flush := func() {
 		for name, sum := range sums {
 			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
 		}
 		for name, gauge := range gauges {
-			r.QueueDataPoint(name, gauge.end, gauge.reset())
+			r.QueueDataPoint(name, gauge.End, gauge.Reset())
 		}
 		sums = make(map[string]float64)
-		// NB: We do not reset gauges, they live on
+		// NB: We do not reset gauges, they need to live on
 	}
 
 	var flushCh = make(chan bool, 1)
@@ -692,9 +666,9 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 					sums[ps.name] += ps.value
 				case pacedGauge:
 					if _, ok := gauges[ps.name]; !ok {
-						gauges[ps.name] = &gaugePdp{}
+						gauges[ps.name] = &rrd.ClockPdp{}
 					}
-					gauges[ps.name].addValue(ps.value)
+					gauges[ps.name].AddValue(ps.value)
 				}
 			}
 		}
