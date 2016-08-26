@@ -58,6 +58,8 @@ func (p *ClockPdp) AddValue(value float64) {
 		p.End = time.Now()
 		return
 	}
-	duration := time.Now().Sub(p.End)
+	now := time.Now()
+	duration := now.Sub(p.End)
 	p.pdp.AddValue(value, duration)
+	p.End = now
 }
