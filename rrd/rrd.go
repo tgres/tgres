@@ -127,10 +127,10 @@ func (dp *IncomingDP) Process() error {
 // intermediate state (PDP).
 type DataSource struct {
 	pdp
-	StepMs      int64
+	Step        time.Duration        // Step (PDP) size
 	Id          int64                // Id
 	Name        string               // Series name
-	HeartbeatMs int64                // Heartbeat in Ms (i.e. inactivity period longer than this causes NaN values)
+	Heartbeat   time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
 	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
 	LastDs      float64              // Last final value we saw
 	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
@@ -263,12 +263,12 @@ func (dss *DataSources) Delete(ds *DataSource) {
 }
 
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
-
 	var result []*RoundRobinArchive
 
 	for _, rra := range ds.RRAs {
 		// is start within this RRA's range?
-		rraBegin := rra.Latest.Add(time.Duration(int64(rra.StepsPerRow)*ds.StepMs*int64(rra.Size)) * time.Millisecond * -1)
+		rraBegin := rra.Latest.Add(time.Duration(rra.StepsPerRow) * ds.Step * time.Duration(rra.Size) * -1)
+
 		if start.After(rraBegin) {
 			result = append(result, rra)
 		}
@@ -287,16 +287,14 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 
 	if len(result) > 1 && points > 0 {
 		// select the one with the closest matching resolution
-		expectedStepMs := (end.UnixNano()/1000000 - start.UnixNano()/1000000) / points
+		expectedStep := end.Sub(start) / time.Duration(points)
 		var best *RoundRobinArchive
 		for _, rra := range result {
 			if best == nil {
 				best = rra
 			} else {
-				rraDiff := expectedStepMs - int64(rra.StepsPerRow)*ds.StepMs
-				rraDiff = rraDiff * rraDiff // keep it positive
-				bestDiff := expectedStepMs - int64(best.StepsPerRow)*ds.StepMs
-				bestDiff = bestDiff * bestDiff
+				rraDiff := math.Abs(float64(expectedStep - time.Duration(rra.StepsPerRow)*ds.Step))
+				bestDiff := math.Abs(float64(expectedStep - time.Duration(best.StepsPerRow)*ds.Step))
 				if bestDiff > rraDiff {
 					best = rra
 				}
@@ -319,6 +317,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 		}
 		return best
 	}
+
 	return nil
 }
 
@@ -330,39 +329,40 @@ func (ds *DataSource) PointCount() int {
 	return total
 }
 
-func (ds *DataSource) updateRange(begin, end int64, value float64) error {
+func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 
 	// This range can be less than a PDP or span multiple PDPs. Only
 	// the last PDP is current, the rest are all in the past.
 
 	// Beginning of the last PDP in the range.
-	endPdpBegin := end / ds.StepMs * ds.StepMs
-	if end%ds.StepMs == 0 {
+	endPdpBegin := end.Truncate(ds.Step)
+	if end == endPdpBegin {
 		// We are exactly at the end, need to move one step back.
-		endPdpBegin -= ds.StepMs
+		endPdpBegin.Add(ds.Step * -1)
 	}
 	// End of the last PDP.
-	endPdpEnd := endPdpBegin + ds.StepMs
+	endPdpEnd := endPdpBegin.Add(ds.Step)
 
 	// If the range begins *before* the last PDP, or ends
 	// *exactly* on the end of a PDP, at last one PDP is now
 	// completed, and updates need to trickle down to RRAs.
-	if begin < endPdpBegin || (end == endPdpEnd) {
+	if begin.Before(endPdpBegin) || (end == endPdpEnd) {
 
-		// Range begins in the middle of a now completed PDP
+		// If range begins in the middle of a now completed PDP
 		// (which may be the last one IFF end == endPdpEnd)
-		if begin%ds.StepMs != 0 {
+		if begin.Truncate(ds.Step) != begin {
 
 			// periodBegin and periodEnd mark the PDP beginning just
 			// before the beginning of the range. periodEnd points at
 			// the end of the first PDP or end of the last PDP if (and
 			// only if) end == endPdpEnd.
-			periodBegin := begin / ds.StepMs * ds.StepMs
-			periodEnd := periodBegin + ds.StepMs
-			ds.AddValue(value, time.Duration(periodEnd-begin)*time.Millisecond)
+			periodBegin := begin.Truncate(ds.Step)
+			periodEnd := periodBegin.Add(ds.Step)
+			offset := periodEnd.Sub(begin)
+			ds.AddValue(value, offset)
 
 			// Update the RRAs
-			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
+			if err := ds.updateRRAs(periodBegin.UnixNano()/1000000, periodEnd.UnixNano()/1000000); err != nil {
 				return err
 			}
 
@@ -379,16 +379,16 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 		// aligned, the only other possibility is begin == endPdpEnd,
 		// thus the code could simply be "if begin != endPdpEnd", but
 		// we go extra expressive for clarity).
-		if begin < endPdpBegin || (begin == endPdpBegin && end == endPdpEnd) {
+		if begin.Before(endPdpBegin) || (begin == endPdpBegin && end == endPdpEnd) {
 
-			ds.SetValue(value, time.Duration(ds.StepMs)*time.Millisecond) // Since begin is aligned, we can bluntly set the value.
+			ds.SetValue(value, ds.Step) // Since begin is aligned, we can bluntly set the value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin
-			if end%ds.StepMs == 0 {
+			if end.Truncate(ds.Step) == end {
 				periodEnd = end
 			}
-			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
+			if err := ds.updateRRAs(periodBegin.UnixNano()/1000000, periodEnd.UnixNano()/1000000); err != nil {
 				return err
 			}
 
@@ -402,8 +402,8 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 	// If there is still a small part of an incomlete PDP between
 	// begin and end, update the PDP value.
-	if begin < end {
-		ds.AddValue(value, time.Duration(end-begin)*time.Millisecond)
+	if begin.Before(end) {
+		ds.AddValue(value, end.Sub(begin))
 	}
 
 	return nil
@@ -411,37 +411,30 @@ func (ds *DataSource) updateRange(begin, end int64, value float64) error {
 
 func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 
-	if math.IsNaN(dp.Value) || math.IsInf(dp.Value, 0) {
-		// NaN is not a valid value because it is meaningless, e.g. "the thermometer
-		// is registering a NaN". Or it means that "for certain it is offline", but
-		// that is not part of our scope. You can only get a NaN by exceeding HB.
-		return fmt.Errorf("NaN or ±Inf is not a valid data point value: %#v", dp)
+	if math.IsInf(dp.Value, 0) {
+		return fmt.Errorf("±Inf is not a valid data point value: %#v", dp)
 	}
 
-	// Do everything in milliseconds
-	dpTimeStamp := dp.TimeStamp.UnixNano() / 1000000
-	dsLastUpdate := ds.LastUpdate.UnixNano() / 1000000
-
-	if dpTimeStamp < dsLastUpdate {
-		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, dp.DS.LastUpdate)
+	if dp.TimeStamp.Before(ds.LastUpdate) {
+		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, ds.LastUpdate)
 	}
 
-	if dsLastUpdate == 0 { // never-before updated (or was zeroed out in ClearRRA)
+	if ds.LastUpdate.IsZero() { // never-before updated (or was zeroed out in ClearRRA)
 		// Set UnknownMs to the offset into the PDP for each RRA
 		for _, rra := range ds.RRAs {
-			rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
-			roundedDpEndsOn := dpTimeStamp / ds.StepMs * ds.StepMs
-			slotBegin := roundedDpEndsOn / rraStepMs * rraStepMs
-			rra.UnknownMs = roundedDpEndsOn - slotBegin
+			dsStepBoundary := dp.TimeStamp.Truncate(ds.Step)
+			rraStepBoundary := dsStepBoundary.Truncate(ds.Step * time.Duration(rra.StepsPerRow))
+			rra.UnknownMs = dsStepBoundary.Sub(rraStepBoundary).Nanoseconds() / 1000000
 		}
 	}
 
-	if (dpTimeStamp - dsLastUpdate) > ds.HeartbeatMs {
+	// ds value is NaN if HB is exceeded
+	if dp.TimeStamp.Sub(ds.LastUpdate) > ds.Heartbeat {
 		dp.Value = math.NaN()
 	}
 
-	if dsLastUpdate != 0 {
-		if err := ds.updateRange(dsLastUpdate, dpTimeStamp, dp.Value); err != nil {
+	if !ds.LastUpdate.IsZero() { // Do not update a never-before-updated DS
+		if err := ds.updateRange(ds.LastUpdate, dp.TimeStamp, dp.Value); err != nil {
 			return err
 		}
 	}
@@ -456,7 +449,8 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 
 	for _, rra := range ds.RRAs {
 
-		rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
+		dsStepMs := ds.Step.Nanoseconds() / 1000000
+		rraStepMs := dsStepMs * int64(rra.StepsPerRow)
 
 		currentBegin := rra.GetStartGivenEndMs(ds, periodBegin)
 		if periodBegin > currentBegin {
@@ -471,13 +465,13 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd int64) error {
 				currentEnd = periodEnd
 			}
 
-			steps := (currentEnd - currentBegin) / ds.StepMs
+			steps := (currentEnd - currentBegin) / dsStepMs
 
 			if math.IsNaN(ds.Value) {
-				rra.UnknownMs = rra.UnknownMs + ds.StepMs*steps
+				rra.UnknownMs = rra.UnknownMs + dsStepMs*steps
 			}
 
-			xff := float64(rra.UnknownMs+ds.StepMs-ds.Duration.Nanoseconds()/1000000) / float64(rraStepMs)
+			xff := float64(rra.UnknownMs+dsStepMs-ds.Duration.Nanoseconds()/1000000) / float64(rraStepMs)
 			if (xff > float64(rra.Xff)) || math.IsNaN(ds.Value) {
 				// So the issue there is that for RRAs that span long
 				// periods of time have a high probability of hitting a
@@ -573,8 +567,8 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	// Only copy elements that change or needed for saving/rendering
 	new_ds := new(DataSource)
 	new_ds.Id = ds.Id
-	new_ds.StepMs = ds.StepMs
-	new_ds.HeartbeatMs = ds.HeartbeatMs
+	new_ds.Step = ds.Step
+	new_ds.Heartbeat = ds.Heartbeat
 	new_ds.LastUpdate = ds.LastUpdate
 	new_ds.LastDs = ds.LastDs
 	new_ds.Value = ds.Value
@@ -621,7 +615,8 @@ func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 }
 
 func (rra *RoundRobinArchive) GetStartGivenEndMs(ds *DataSource, timeMs int64) int64 {
-	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
+	dsStepMs := ds.Step.Nanoseconds() / 1000000
+	rraStepMs := dsStepMs * int64(rra.StepsPerRow)
 	rraStart := (timeMs - rraStepMs*int64(rra.Size)) / rraStepMs * rraStepMs
 	if timeMs%rraStepMs != 0 {
 		rraStart += rraStepMs
@@ -632,7 +627,8 @@ func (rra *RoundRobinArchive) GetStartGivenEndMs(ds *DataSource, timeMs int64) i
 func (rra *RoundRobinArchive) SlotTimeStamp(ds *DataSource, slot int64) time.Time {
 	// TODO this is kind of ugly too...
 	slot = slot % int64(rra.Size) // just in case
-	rraStepMs := ds.StepMs * int64(rra.StepsPerRow)
+	dsStepMs := ds.Step.Nanoseconds() / 1000000
+	rraStepMs := dsStepMs * int64(rra.StepsPerRow)
 	latestMs := rra.Latest.UnixNano() / 1000000
 	latestSlotN := (latestMs / rraStepMs) % int64(rra.Size)
 	distance := (int64(rra.Size) + latestSlotN - slot) % int64(rra.Size)

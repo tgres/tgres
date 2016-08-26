@@ -23,6 +23,7 @@ import (
 	"github.com/tgres/tgres/serde"
 	"github.com/tgres/tgres/statsd"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"sync"
@@ -294,6 +295,14 @@ func (r *Receiver) dispatcher() {
 		}
 
 		r.reportStatCount("receiver.dispatcher.datapoints.total", 1)
+
+		if math.IsNaN(dp.Value) {
+			// NaN is meaningless, e.g. "the thermometer is
+			// registering a NaN". Or it means that "for certain it is
+			// offline", but that is not part of our scope. You can
+			// only get a NaN by exceeding HB. Silently ignore it.
+			continue
+		}
 
 		if dp.DS = r.dss.GetByName(dp.Name); dp.DS == nil {
 			if err := r.createOrLoadDS(dp); err != nil {

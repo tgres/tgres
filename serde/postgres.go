@@ -299,7 +299,7 @@ type dbSeries struct {
 }
 
 func (dps *dbSeries) StepMs() int64 {
-	return dps.ds.StepMs * int64(dps.rra.StepsPerRow)
+	return (dps.ds.Step * time.Duration(dps.rra.StepsPerRow)).Nanoseconds() / 1000000
 }
 
 func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
@@ -350,7 +350,7 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		finalGroupByMs int64
-		rraStepMs      = dps.ds.StepMs * int64(dps.rra.StepsPerRow)
+		rraStepMs      = (dps.ds.Step * time.Duration(dps.rra.StepsPerRow)).Nanoseconds() / 1000000
 	)
 
 	if dps.groupByMs != 0 {
@@ -516,12 +516,12 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		ds         rrd.DataSource
-		last_ds    sql.NullFloat64
-		lastupdate pq.NullTime
-		unknownMs  int64
+		ds                      rrd.DataSource
+		last_ds                 sql.NullFloat64
+		lastupdate              pq.NullTime
+		unknownMs, stepMs, hbMs int64
 	)
-	err := rows.Scan(&ds.Id, &ds.Name, &ds.StepMs, &ds.HeartbeatMs, &lastupdate, &last_ds, &ds.Value, &unknownMs)
+	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &ds.Value, &unknownMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -536,7 +536,9 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	} else {
 		ds.LastUpdate = time.Unix(0, 0) // Not to be confused with time.Time{} !
 	}
-	ds.Duration = time.Duration(ds.StepMs-unknownMs) * time.Millisecond
+	ds.Duration = time.Duration(stepMs-unknownMs) * time.Millisecond
+	ds.Step = time.Duration(stepMs) * time.Millisecond
+	ds.Heartbeat = time.Duration(hbMs) * time.Millisecond
 	return &ds, err
 }
 
@@ -797,7 +799,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	if debug {
 		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.Duration)
 	}
-	unknownMs := ds.StepMs - ds.Duration.Nanoseconds()/1000000
+	unknownMs := (ds.Step - ds.Duration).Nanoseconds() / 1000000
 	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, unknownMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
@@ -835,7 +837,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 
 	// RRAs
 	for _, rraSpec := range dsSpec.RRAs {
-		steps := rraSpec.Step.Nanoseconds() / (ds.StepMs * 1000000)
+		steps := int64(rraSpec.Step / ds.Step)
 		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
 
 		rraRows, err := p.sql5.Query(ds.Id, rraSpec.Function, steps, size, rraSpec.Xff)
