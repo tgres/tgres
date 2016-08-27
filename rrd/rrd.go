@@ -94,9 +94,18 @@ type DSSpec struct {
 	RRAs      []*RRASpec
 }
 
+type Consolidation int
+
+const (
+	WMEAN Consolidation = iota // Time-weighted average
+	MAX                        // Max
+	MIN                        // Min
+	LAST                       // Last
+)
+
 // RRASpec is the RRA definition part of DSSpec.
 type RRASpec struct {
-	Function string
+	Function Consolidation
 	Step     time.Duration
 	Size     time.Duration
 	Xff      float64
@@ -173,21 +182,31 @@ type RoundRobinArchive struct {
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution
 	// one. Must be MAX, MIN, LAST or AVERAGE.
-	Cf string
+	Cf Consolidation
 	// A single "row" (i.e. a single value) span in DS steps.
 	StepsPerRow int32
 	// Number of data points in the RRA.
 	Size int32
-	// XFiles Factor (XFF). When consolidating, how much of the
-	// higher-resolution RRA (as a value between 0 and 1) is allowed
-	// to be NaN before the consolidated data becomes NaN as well.
-	Xff float32
 	// PDP, store for intermediate value during consolidation.
 	Value float64
 	// How much of the PDP is "unknown".
 	Unknown time.Duration
+
 	// Time at which most recent data point and the RRA end.
 	Latest time.Time
+	// X-Files Factor (XFF). When consolidating, how much of the
+	// higher-resolution RRA (as a value between 0 and 1) must be
+	// known for the consolidated data not to be considered unknown.
+	// Note that this is inverse of the RRDTool definition of
+	// XFF. (This is because the Go zero-value works out as a nice
+	// default, meaning we don't consider NaNs when consolidating).
+	// NB: The name "X-Files Factor" comes from RRDTool where it was
+	// named for being "unscientific", as it contracticts the rule
+	// that any operation on a NaN is a NaN. We are not in complete
+	// agreement with this, as the weighted consolidation logic gives
+	// then NaN a 0 weight, and thus simply ignores it, not
+	// contradicting any rules.
+	Xff float32
 
 	// The slice of data points (as a map so that its sparse). Slots
 	// in DPs are time-aligned starting at the "beginning of the
@@ -447,38 +466,42 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 
 func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
+	// for each of this DS's RRAs
 	for _, rra := range ds.RRAs {
 
+		// The RRA step (TODO should this be a method?)
 		rraStep := ds.Step * time.Duration(rra.StepsPerRow)
 
+		// currentBegin is a cursor pointing at the beginning of the
+		// current slot, currentEnd points at its end
 		currentBegin := rra.Begins(periodBegin, rraStep)
+
+		// move the cursor up to at least the periodBegin
 		if periodBegin.After(currentBegin) {
 			currentBegin = periodBegin
 		}
 
+		// for each RRA slot before periodEnd
 		for currentBegin.Before(periodEnd) {
 
 			endOfSlot := currentBegin.Truncate(rraStep).Add(rraStep)
+
 			currentEnd := endOfSlot
 			if currentEnd.After(periodEnd) {
-				currentEnd = periodEnd
+				currentEnd = periodEnd // i.e. currentEnd < endOfSlot
 			}
 
 			steps := currentEnd.Sub(currentBegin) / ds.Step
-
 			if math.IsNaN(ds.Value) {
 				rra.Unknown = rra.Unknown + ds.Step*time.Duration(steps)
 			}
 
-			xff := float64(rra.Unknown+ds.Step-ds.Duration) / float64(rraStep)
-			if (xff > float64(rra.Xff)) || math.IsNaN(ds.Value) {
-				// So the issue there is that for RRAs that span long
-				// periods of time have a high probability of hitting a
-				// NaN and thus NaN-ing the whole thing... For now the
-				// solution is a hack where xff of 1 will ignore NaNs
-				if rra.Xff != 1 {
+			xff := float64(rraStep-rra.Unknown+ds.Duration) / float64(rraStep)
+			if (xff < float64(rra.Xff)) || math.IsNaN(ds.Value) {
+				if rra.Xff != 00 { // TODO This is not entirely correct
 					rra.Value = math.NaN()
 				}
+
 			} else {
 				// aggregations
 				if math.IsNaN(rra.Value) {
@@ -486,17 +509,17 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 				}
 
 				switch rra.Cf {
-				case "MAX":
+				case MAX:
 					if ds.Value > rra.Value {
 						rra.Value = ds.Value
 					}
-				case "MIN":
+				case MIN:
 					if ds.Value < rra.Value {
 						rra.Value = ds.Value
 					}
-				case "LAST":
+				case LAST:
 					rra.Value = ds.Value
-				case "AVERAGE":
+				case WMEAN:
 					rra_weight := 1.0 / float64(rra.StepsPerRow) * float64(steps)
 					rra.Value = rra.Value + ds.Value*rra_weight
 				default:
@@ -504,9 +527,10 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 				}
 			}
 
+			// if period ends within a slot
 			if !currentEnd.Before(endOfSlot) { // currentEnd >= endOfSlot
 
-				if rra.Cf == "AVERAGE" && !math.IsNaN(rra.Value) && rra.Unknown > 0 {
+				if rra.Cf == WMEAN && !math.IsNaN(rra.Value) && rra.Unknown > 0 {
 					// adjust the final value
 					rra.Value = rra.Value / (float64(rraStep-rra.Unknown) / float64(rraStep))
 				}
@@ -526,8 +550,9 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 			}
 
+			// move up the cursor
 			currentBegin = currentEnd
-		} // currentEnd <= periodEnd
+		}
 	}
 
 	return nil

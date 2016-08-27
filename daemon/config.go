@@ -73,7 +73,7 @@ type DSSpec struct {
 	RRAs      []RRASpec
 }
 type RRASpec struct {
-	Function string
+	Function rrd.Consolidation
 	Step     time.Duration
 	Size     time.Duration
 	Xff      float64
@@ -86,15 +86,25 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 		return fmt.Errorf("Invalid RRA specification (not enough or too many elements): %q", string(text))
 	}
 
-	// If the first character of the first part is a digit, assume we're skipping CF and defaulting to
-	// AVERAGE.
+	// If first character of first part is a digit, assume we're
+	// skipping CF and default to WMEAN.
 	if len(parts[0]) > 0 && strings.Contains("0123456789", string(parts[0][0])) {
-		parts = append([]string{"AVERAGE"}, parts...)
+		parts = append([]string{"WMEAN"}, parts...)
 	}
 
-	r.Function = strings.ToUpper(parts[0])
-	if r.Function != "AVERAGE" && r.Function != "MIN" && r.Function != "MAX" && r.Function != "LAST" {
-		return fmt.Errorf("Invalid function: %q (valid funcs: average, min, max, last)", r.Function)
+	switch strings.ToUpper(parts[0]) {
+	case "AVERAGE": // TODO remove me
+		fallthrough
+	case "WMEAN":
+		r.Function = rrd.WMEAN
+	case "MIN":
+		r.Function = rrd.MIN
+	case "MAX":
+		r.Function = rrd.MAX
+	case "LAST":
+		r.Function = rrd.LAST
+	default:
+		return fmt.Errorf("Invalid consolidation: %q (valid funcs: wmean, min, max, last)", parts[0])
 	}
 
 	var err error

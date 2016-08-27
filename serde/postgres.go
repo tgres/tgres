@@ -211,7 +211,7 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        unknown_ms BIGINT NOT NULL DEFAULT 0,
        latest TIMESTAMPTZ DEFAULT NULL);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra_ds_id ON %[1]srra (ds_id, cf, steps_per_row, size, xff);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra ON %[1]srra (ds_id, cf, steps_per_row, size, xff);
 
        CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_id INT NOT NULL,
@@ -545,8 +545,9 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		latest    pq.NullTime
 		rra       rrd.RoundRobinArchive
 		unknownMs int64
+		cf        string
 	)
-	err := rows.Scan(&rra.Id, &rra.DsId, &rra.Cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &unknownMs, &latest)
+	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &unknownMs, &latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -558,6 +559,20 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	}
 	rra.DPs = make(map[int64]float64)
 	rra.Unknown = time.Duration(unknownMs) * time.Millisecond
+	switch cf {
+	case "AVERAGE": // TODO remove me
+		fallthrough
+	case "WMEAN":
+		rra.Cf = rrd.WMEAN
+	case "MIN":
+		rra.Cf = rrd.MIN
+	case "MAX":
+		rra.Cf = rrd.MAX
+	case "LAST":
+		rra.Cf = rrd.LAST
+	default:
+		return nil, fmt.Errorf("Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
+	}
 	return &rra, err
 }
 
@@ -839,8 +854,21 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 	for _, rraSpec := range dsSpec.RRAs {
 		steps := int64(rraSpec.Step / ds.Step)
 		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
-
-		rraRows, err := p.sql5.Query(ds.Id, rraSpec.Function, steps, size, rraSpec.Xff)
+		var cf string
+		switch rraSpec.Function {
+		case rrd.WMEAN:
+			cf = "WMEAN"
+		case rrd.MIN:
+			cf = "MIN"
+		case rrd.MAX:
+			cf = "MAX"
+		case rrd.LAST:
+			cf = "LAST"
+		}
+		rraRows, err := p.sql5.Query(ds.Id, cf, steps, size, rraSpec.Xff)
+		if err != nil && cf == "WMEAN" { // TODO Remove me
+			rraRows, err = p.sql5.Query(ds.Id, "AVERAGE", steps, size, rraSpec.Xff)
+		}
 		if err != nil {
 			log.Printf("CreateOrReturnDataSource(): error creating RRAs: %v", err)
 			return nil, err
