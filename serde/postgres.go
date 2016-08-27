@@ -857,7 +857,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		var cf string
 		switch rraSpec.Function {
 		case rrd.WMEAN:
-			cf = "WMEAN"
+			cf = "AVERAGE"
 		case rrd.MIN:
 			cf = "MIN"
 		case rrd.MAX:
@@ -866,9 +866,6 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 			cf = "LAST"
 		}
 		rraRows, err := p.sql5.Query(ds.Id, cf, steps, size, rraSpec.Xff)
-		if err != nil && cf == "WMEAN" { // TODO Remove me
-			rraRows, err = p.sql5.Query(ds.Id, "AVERAGE", steps, size, rraSpec.Xff)
-		}
 		if err != nil {
 			log.Printf("CreateOrReturnDataSource(): error creating RRAs: %v", err)
 			return nil, err
