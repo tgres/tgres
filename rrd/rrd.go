@@ -177,6 +177,7 @@ func NewDataSources(locking bool) *DataSources {
 
 // RoundRobinArchive and all its parameters.
 type RoundRobinArchive struct {
+	pdp
 	Id   int64 // Id
 	DsId int64 // DS id
 	// Consolidation function (CF). How data points from a
@@ -187,11 +188,6 @@ type RoundRobinArchive struct {
 	StepsPerRow int32
 	// Number of data points in the RRA.
 	Size int32
-	// PDP, store for intermediate value during consolidation.
-	Value float64
-	// How much of the PDP is "unknown".
-	Unknown time.Duration
-
 	// Time at which most recent data point and the RRA end.
 	Latest time.Time
 	// X-Files Factor (XFF). When consolidating, how much of the
@@ -438,15 +434,6 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, ds.LastUpdate)
 	}
 
-	if ds.LastUpdate.IsZero() { // never-before updated (or was zeroed out in ClearRRA)
-		// Set UnknownMs to the offset into the PDP for each RRA
-		for _, rra := range ds.RRAs {
-			dsStepBoundary := dp.TimeStamp.Truncate(ds.Step)
-			rraStepBoundary := dsStepBoundary.Truncate(ds.Step * time.Duration(rra.StepsPerRow))
-			rra.Unknown = dsStepBoundary.Sub(rraStepBoundary)
-		}
-	}
-
 	// ds value is NaN if HB is exceeded
 	if dp.TimeStamp.Sub(ds.LastUpdate) > ds.Heartbeat {
 		dp.Value = math.NaN()
@@ -491,52 +478,28 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 				currentEnd = periodEnd // i.e. currentEnd < endOfSlot
 			}
 
-			steps := currentEnd.Sub(currentBegin) / ds.Step
-			if math.IsNaN(ds.Value) {
-				rra.Unknown = rra.Unknown + ds.Step*time.Duration(steps)
+			switch rra.Cf {
+			case MAX:
+				rra.AddValueMax(ds.Value, ds.Duration)
+			case MIN:
+				rra.AddValueMin(ds.Value, ds.Duration)
+			case LAST:
+				rra.AddValueLast(ds.Value, ds.Duration)
+			case WMEAN:
+				rra.AddValue(ds.Value, ds.Duration)
 			}
 
-			xff := float64(rraStep-rra.Unknown+ds.Duration) / float64(rraStep)
-			if (xff < float64(rra.Xff)) || math.IsNaN(ds.Value) {
-				if rra.Xff != 00 { // TODO This is not entirely correct
+			// if end of slot
+			if currentEnd.Equal(endOfSlot) {
+
+				// Check XFF
+				known := float64(rra.Duration) / float64(rraStep)
+				if known < float64(rra.Xff) {
 					rra.Value = math.NaN()
 				}
 
-			} else {
-				// aggregations
-				if math.IsNaN(rra.Value) {
-					rra.Value = 0
-				}
-
-				switch rra.Cf {
-				case MAX:
-					if ds.Value > rra.Value {
-						rra.Value = ds.Value
-					}
-				case MIN:
-					if ds.Value < rra.Value {
-						rra.Value = ds.Value
-					}
-				case LAST:
-					rra.Value = ds.Value
-				case WMEAN:
-					rra_weight := 1.0 / float64(rra.StepsPerRow) * float64(steps)
-					rra.Value = rra.Value + ds.Value*rra_weight
-				default:
-					return fmt.Errorf("Invalid consolidation function: %q", rra.Cf)
-				}
-			}
-
-			// if period ends within a slot
-			if !currentEnd.Before(endOfSlot) { // currentEnd >= endOfSlot
-
-				if rra.Cf == WMEAN && !math.IsNaN(rra.Value) && rra.Unknown > 0 {
-					// adjust the final value
-					rra.Value = rra.Value / (float64(rraStep-rra.Unknown) / float64(rraStep))
-				}
-
-				slotN := ((currentEnd.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.Size)
-				rra.Latest = currentEnd
+				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.Size)
+				rra.Latest = endOfSlot
 				rra.DPs[slotN] = rra.Value
 
 				if len(rra.DPs) == 1 {
@@ -545,9 +508,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 				rra.End = slotN
 
 				// reset
-				rra.Value = 0
-				rra.Unknown = 0
-
+				rra.Reset()
 			}
 
 			// move up the cursor
@@ -607,7 +568,7 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 	new_rra.StepsPerRow = rra.StepsPerRow
 	new_rra.Size = rra.Size
 	new_rra.Value = rra.Value
-	new_rra.Unknown = rra.Unknown
+	new_rra.Duration = rra.Duration
 	new_rra.Latest = rra.Latest
 	new_rra.Start = rra.Start
 	new_rra.End = rra.End

@@ -146,7 +146,7 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sts ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, unknown_ms = $2, latest = $3 WHERE id = $4", p.prefix)); err != nil {
+	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2, latest = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql3, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
@@ -158,26 +158,26 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
 		// PG 9.5 required. NB: DO NOTHING causes RETURNING to return nothing, so we're using this dummy UPDATE to work around.
 		"ON CONFLICT (name) DO UPDATE SET step_ms = ds.step_ms "+
-		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms", p.prefix)); err != nil {
+		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
 		"ON CONFLICT (ds_id, cf, steps_per_row, size) DO UPDATE SET ds_id = rra.ds_id "+
-		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest", p.prefix)); err != nil {
+		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2) ON CONFLICT(rra_id, n) DO NOTHING",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, unknown_ms = $4 WHERE id = $5", p.prefix)); err != nil {
+	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, duration_ms = $4 WHERE id = $5", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE id = $1",
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds AS ds WHERE name = $1",
+	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds AS ds WHERE name = $1",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -195,9 +195,9 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        lastupdate TIMESTAMPTZ,
        last_ds NUMERIC DEFAULT NULL,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
-       unknown_ms BIGINT NOT NULL DEFAULT 0);
+       duration_ms BIGINT NOT NULL DEFAULT 0);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_ds_name ON %[1]sds (name);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_name ON %[1]sds (name);
 
        CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
@@ -208,10 +208,10 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        width INT NOT NULL DEFAULT 768,
        xff REAL NOT NULL,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
-       unknown_ms BIGINT NOT NULL DEFAULT 0,
+       duration_ms BIGINT NOT NULL DEFAULT 0,
        latest TIMESTAMPTZ DEFAULT NULL);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rraspec ON %[1]srra (ds_id, cf, steps_per_row, size);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_spec ON %[1]srra (ds_id, cf, steps_per_row, size);
 
        CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_id INT NOT NULL,
@@ -516,12 +516,12 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		ds                      rrd.DataSource
-		last_ds                 sql.NullFloat64
-		lastupdate              pq.NullTime
-		unknownMs, stepMs, hbMs int64
+		ds                       rrd.DataSource
+		last_ds                  sql.NullFloat64
+		lastupdate               pq.NullTime
+		durationMs, stepMs, hbMs int64
 	)
-	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &ds.Value, &unknownMs)
+	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &ds.Value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -534,7 +534,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	if lastupdate.Valid {
 		ds.LastUpdate = lastupdate.Time
 	}
-	ds.Duration = time.Duration(stepMs-unknownMs) * time.Millisecond
+	ds.Duration = time.Duration(durationMs) * time.Millisecond
 	ds.Step = time.Duration(stepMs) * time.Millisecond
 	ds.Heartbeat = time.Duration(hbMs) * time.Millisecond
 	return &ds, err
@@ -542,12 +542,12 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 
 func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	var (
-		latest    pq.NullTime
-		rra       rrd.RoundRobinArchive
-		unknownMs int64
-		cf        string
+		latest     pq.NullTime
+		rra        rrd.RoundRobinArchive
+		durationMs int64
+		cf         string
 	)
-	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &unknownMs, &latest)
+	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &durationMs, &latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -558,7 +558,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		rra.Latest = time.Unix(0, 0)
 	}
 	rra.DPs = make(map[int64]float64)
-	rra.Unknown = time.Duration(unknownMs) * time.Millisecond
+	rra.Duration = time.Duration(durationMs) * time.Millisecond
 	switch cf {
 	case "WMEAN":
 		rra.Cf = rrd.WMEAN
@@ -651,7 +651,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 
 func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 
-	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, unknown_ms FROM %[1]sds ds`
+	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
@@ -678,7 +678,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 
 func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive, error) {
 
-	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
+	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), ds_id)
 	if err != nil {
@@ -790,7 +790,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := p.sql2.Query(rra.Value, rra.Unknown.Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value, rra.Duration.Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
 		rows.Close()
 	} else {
 		return err
@@ -812,8 +812,8 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	if debug {
 		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.Duration)
 	}
-	unknownMs := (ds.Step - ds.Duration).Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, unknownMs, ds.Id); err != nil {
+	durationMs := ds.Duration.Nanoseconds() / 1000000
+	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, durationMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {

@@ -41,6 +41,40 @@ func (p *pdp) AddValue(value float64, duration time.Duration) {
 	}
 }
 
+func (p *pdp) AddValueMax(value float64, duration time.Duration) {
+	if !math.IsNaN(value) && duration > 0 {
+		if math.IsNaN(p.Value) {
+			p.Value = 0
+		}
+		if p.Value < value {
+			p.Value = value
+		}
+		p.Duration = p.Duration + duration
+	}
+}
+
+func (p *pdp) AddValueMin(value float64, duration time.Duration) {
+	if !math.IsNaN(value) && duration > 0 {
+		if math.IsNaN(p.Value) {
+			p.Value = 0
+		}
+		if p.Value > value {
+			p.Value = value
+		}
+		p.Duration = p.Duration + duration
+	}
+}
+
+func (p *pdp) AddValueLast(value float64, duration time.Duration) {
+	if !math.IsNaN(value) && duration > 0 {
+		if math.IsNaN(p.Value) {
+			p.Value = 0
+		}
+		p.Value = value
+		p.Duration = p.Duration + duration
+	}
+}
+
 func (p *pdp) Reset() float64 {
 	result := p.Value
 	p.Value = math.NaN()
