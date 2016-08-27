@@ -93,8 +93,6 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 	}
 
 	switch strings.ToUpper(parts[0]) {
-	case "AVERAGE": // TODO remove me
-		fallthrough
 	case "WMEAN":
 		r.Function = rrd.WMEAN
 	case "MIN":

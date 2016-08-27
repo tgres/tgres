@@ -181,7 +181,7 @@ type RoundRobinArchive struct {
 	DsId int64 // DS id
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution
-	// one. Must be MAX, MIN, LAST or AVERAGE.
+	// one. Must be WMEAN, MAX, MIN, LAST.
 	Cf Consolidation
 	// A single "row" (i.e. a single value) span in DS steps.
 	StepsPerRow int32

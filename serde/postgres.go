@@ -162,7 +162,7 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
-		"ON CONFLICT (ds_id, cf, steps_per_row, size, xff) DO UPDATE SET ds_id = rra.ds_id "+
+		"ON CONFLICT (ds_id, cf, steps_per_row, size) DO UPDATE SET ds_id = rra.ds_id "+
 		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, unknown_ms, latest", p.prefix)); err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        unknown_ms BIGINT NOT NULL DEFAULT 0,
        latest TIMESTAMPTZ DEFAULT NULL);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rra ON %[1]srra (ds_id, cf, steps_per_row, size, xff);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_idx_rraspec ON %[1]srra (ds_id, cf, steps_per_row, size);
 
        CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_id INT NOT NULL,
@@ -560,8 +560,6 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	rra.DPs = make(map[int64]float64)
 	rra.Unknown = time.Duration(unknownMs) * time.Millisecond
 	switch cf {
-	case "AVERAGE": // TODO remove me
-		fallthrough
 	case "WMEAN":
 		rra.Cf = rrd.WMEAN
 	case "MIN":
@@ -857,7 +855,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		var cf string
 		switch rraSpec.Function {
 		case rrd.WMEAN:
-			cf = "AVERAGE"
+			cf = "WMEAN"
 		case rrd.MIN:
 			cf = "MIN"
 		case rrd.MAX:
