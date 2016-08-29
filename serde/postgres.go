@@ -792,7 +792,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := p.sql2.Query(rra.Value, rra.Duration().Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value(), rra.Duration().Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
 		rows.Close()
 	} else {
 		return err
@@ -812,10 +812,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.Duration)
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, durationMs, ds.Id); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value(), durationMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
