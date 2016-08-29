@@ -443,7 +443,6 @@ func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 	if block {
 		<-fr.resp
 	}
-	ds.LastFlushRT = time.Now()
 	ds.ClearRRAs()
 }
 

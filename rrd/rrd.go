@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,23 +25,13 @@
 // package and an instance of the data it maintains is referred to as
 // an RRD.
 //
-// Data Sourse (DS): Data Source is all there is to know about a time
-// series, its name, resolution and other parameters, as well as the
-// data. A DS has at least one, but usually several RRAs. DS is also
-// the structure which stores the PDP state.
-//
 // Data Point (DP): There actually isn't a data structure representing
 // a data point (except for an incoming data point IncomingDP). A
 // datapoint is just a float64.
 //
-// Round-Robin Archive (RRA): An array of data points at a specific
-// resolutoin and going back a pre-defined duration of time.
-//
-// Primary Data Point (PDP): A conceptual data point which represents
-// the most current and not-yet-complete time slot. There is one PDP
-// per DS and per each RRA. When the PDP is complete its content is
-// saved into one or more RRAs. The PDP state is part of the DS
-// structure.
+// Data Sourse (DS): Data Source is all there is to know about a time
+// series, its name, resolution and other parameters, as well as the
+// data. A DS has at least one, but usually several RRAs.
 //
 // DS Step: Step is the smallest unit of time for the DS in
 // milliseconds. RRA resolutions and sizes must be multiples of the DS
@@ -50,8 +40,18 @@
 // DS Heartbeat (HB): Duration of time that can pass without data. A
 // gap in data which exceeds HB is filled with NaNs.
 //
+// Round-Robin Archive (RRA): An array of data points at a specific
+// resolutoin and going back a pre-defined duration of time.
 //
-// On Datapoints:
+// Primary Data Point (PDP): A conceptual data point which represents
+// a time slot. Many actual data points can come in and fall into the
+// current (not-yet-complete) PDP. There is one PDP per DS and one per
+// each RRA. When the DS PDP is complete its content is saved into one
+// or more RRA PDPs.
+//
+// How Datapoints build. The DS PDP always uses weighted mean (WMEAN)
+// as its consolidation, while RRAs have a choice of WMEAN, MIN, MAX
+// and LAST. The default for everything is WMEAN.
 //
 //  ||    +--------+    ||
 //  ||    |	     3 +----||
@@ -74,6 +74,15 @@
 // In the above datapoint, the datapoint size is what is taken up by 1
 // and 3, without the NaN. Thus 1/3 of the value is 1 and 2/3 of the
 // value is 3, for a total of 1/3*1 + 2/3*3 = 2.33333...
+//
+// An alternative way of looking at the above data point is that it is
+// simply shorter or has a shorter duration:
+//
+//  ||    +--------||
+//  ||    |      3 ||
+//  ||----+        ||
+//  ||  1 |        ||
+//  ||=============||
 //
 // A datapoint must be all NaN for its value to be NaN.
 package rrd
@@ -143,7 +152,7 @@ type DataSource struct {
 	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
 	LastDs      float64              // Last final value we saw
 	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
-	LastFlushRT time.Time            // Last time this DS was flushed (actual real time).
+	lastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
 
 // A collection of data sources kept by an integer id as well as a
@@ -480,27 +489,27 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 			switch rra.Cf {
 			case MAX:
-				rra.AddValueMax(ds.Value, ds.Duration)
+				rra.AddValueMax(ds.value, ds.duration)
 			case MIN:
-				rra.AddValueMin(ds.Value, ds.Duration)
+				rra.AddValueMin(ds.value, ds.duration)
 			case LAST:
-				rra.AddValueLast(ds.Value, ds.Duration)
+				rra.AddValueLast(ds.value, ds.duration)
 			case WMEAN:
-				rra.AddValue(ds.Value, ds.Duration)
+				rra.AddValue(ds.value, ds.duration)
 			}
 
 			// if end of slot
 			if currentEnd.Equal(endOfSlot) {
 
 				// Check XFF
-				known := float64(rra.Duration) / float64(rraStep)
+				known := float64(rra.duration) / float64(rraStep)
 				if known < float64(rra.Xff) {
-					rra.Value = math.NaN()
+					rra.SetValue(math.NaN(), 0)
 				}
 
 				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.Size)
 				rra.Latest = endOfSlot
-				rra.DPs[slotN] = rra.Value
+				rra.DPs[slotN] = rra.value
 
 				if len(rra.DPs) == 1 {
 					rra.Start = slotN
@@ -524,6 +533,7 @@ func (ds *DataSource) ClearRRAs() {
 		rra.DPs = make(map[int64]float64)
 		rra.Start, rra.End = 0, 0
 	}
+	ds.lastFlushRT = time.Now()
 }
 
 func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
@@ -532,9 +542,9 @@ func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache ti
 	}
 	pc := ds.PointCount()
 	if pc > maxCachedPoints {
-		return ds.LastFlushRT.Add(minCache).Before(time.Now())
+		return ds.lastFlushRT.Add(minCache).Before(time.Now())
 	} else if pc > 0 {
-		return ds.LastFlushRT.Add(maxCache).Before(time.Now())
+		return ds.lastFlushRT.Add(maxCache).Before(time.Now())
 	}
 	return false
 }
@@ -548,8 +558,8 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	new_ds.Heartbeat = ds.Heartbeat
 	new_ds.LastUpdate = ds.LastUpdate
 	new_ds.LastDs = ds.LastDs
-	new_ds.Value = ds.Value
-	new_ds.Duration = ds.Duration
+	new_ds.value = ds.value
+	new_ds.duration = ds.duration
 	new_ds.RRAs = make([]*RoundRobinArchive, len(ds.RRAs))
 
 	for n, rra := range ds.RRAs {
@@ -567,8 +577,8 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 	new_rra.DsId = rra.DsId
 	new_rra.StepsPerRow = rra.StepsPerRow
 	new_rra.Size = rra.Size
-	new_rra.Value = rra.Value
-	new_rra.Duration = rra.Duration
+	new_rra.value = rra.value
+	new_rra.duration = rra.duration
 	new_rra.Latest = rra.Latest
 	new_rra.Start = rra.Start
 	new_rra.End = rra.End

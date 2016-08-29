@@ -520,8 +520,9 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 		last_ds                  sql.NullFloat64
 		lastupdate               pq.NullTime
 		durationMs, stepMs, hbMs int64
+		value                    float64
 	)
-	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &ds.Value, &durationMs)
+	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -534,7 +535,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	if lastupdate.Valid {
 		ds.LastUpdate = lastupdate.Time
 	}
-	ds.Duration = time.Duration(durationMs) * time.Millisecond
+	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	ds.Step = time.Duration(stepMs) * time.Millisecond
 	ds.Heartbeat = time.Duration(hbMs) * time.Millisecond
 	return &ds, err
@@ -546,8 +547,9 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		rra        rrd.RoundRobinArchive
 		durationMs int64
 		cf         string
+		value      float64
 	)
-	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &rra.Value, &durationMs, &latest)
+	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &value, &durationMs, &latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -558,7 +560,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		rra.Latest = time.Unix(0, 0)
 	}
 	rra.DPs = make(map[int64]float64)
-	rra.Duration = time.Duration(durationMs) * time.Millisecond
+	rra.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	switch cf {
 	case "WMEAN":
 		rra.Cf = rrd.WMEAN
@@ -790,7 +792,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := p.sql2.Query(rra.Value, rra.Duration.Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value, rra.Duration().Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
 		rows.Close()
 	} else {
 		return err
@@ -812,7 +814,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	if debug {
 		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value, ds.Duration)
 	}
-	durationMs := ds.Duration.Nanoseconds() / 1000000
+	durationMs := ds.Duration().Nanoseconds() / 1000000
 	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value, durationMs, ds.Id); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
