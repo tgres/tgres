@@ -187,18 +187,18 @@ func NewDataSources(locking bool) *DataSources {
 // RoundRobinArchive and all its parameters.
 type RoundRobinArchive struct {
 	pdp
-	Id   int64 // Id
-	DsId int64 // DS id
+	id   int64 // Id
+	dsId int64 // DS id
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution
 	// one. Must be WMEAN, MAX, MIN, LAST.
-	Cf Consolidation
+	cf Consolidation
 	// A single "row" (i.e. a single value) span in DS steps.
-	StepsPerRow int32
+	stepsPerRow int64
 	// Number of data points in the RRA.
-	Size int32
+	size int64
 	// Time at which most recent data point and the RRA end.
-	Latest time.Time
+	latest time.Time
 	// X-Files Factor (XFF). When consolidating, how much of the
 	// higher-resolution RRA (as a value between 0 and 1) must be
 	// known for the consolidated data not to be considered unknown.
@@ -211,7 +211,7 @@ type RoundRobinArchive struct {
 	// agreement with this, as the weighted consolidation logic gives
 	// then NaN a 0 weight, and thus simply ignores it, not
 	// contradicting any rules.
-	Xff float32
+	xff float32
 
 	// The slice of data points (as a map so that its sparse). Slots
 	// in DPs are time-aligned starting at the "beginning of the
@@ -220,14 +220,39 @@ type RoundRobinArchive struct {
 	DPs map[int64]float64
 
 	// In the undelying storage, how many data points are stored in a single (database) row.
-	Width int64
+	width int64
 	// Index of the first slot for which we have data. (Should be
 	// between 0 and Size-1)
-	Start int64
+	start int64
 	// Index of the last slot for which we have data. Note that it's
 	// possible for End to be less than Start, which means the RRD
 	// wraps around.
-	End int64
+	end int64
+}
+
+func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
+	rra := &RoundRobinArchive{
+		id:          id,
+		dsId:        dsId,
+		stepsPerRow: stepsPerRow,
+		size:        size,
+		width:       width,
+		xff:         xff,
+		latest:      latest,
+	}
+	switch cf {
+	case "WMEAN":
+		rra.cf = WMEAN
+	case "MIN":
+		rra.cf = MIN
+	case "MAX":
+		rra.cf = MAX
+	case "LAST":
+		rra.cf = LAST
+	default:
+		return nil, fmt.Errorf("Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
+	}
+	return rra, nil
 }
 
 // GetByName rlocks and gets a DS pointer.
@@ -291,7 +316,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 
 	for _, rra := range ds.RRAs {
 		// is start within this RRA's range?
-		rraBegin := rra.Latest.Add(time.Duration(rra.StepsPerRow) * ds.Step * time.Duration(rra.Size) * -1)
+		rraBegin := rra.latest.Add(time.Duration(rra.stepsPerRow) * ds.Step * time.Duration(rra.size) * -1)
 
 		if start.After(rraBegin) {
 			result = append(result, rra)
@@ -302,7 +327,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 		// if we found nothing above, simply select the longest RRA
 		var longest *RoundRobinArchive
 		for _, rra := range ds.RRAs {
-			if longest == nil || longest.Size*longest.StepsPerRow < rra.Size*rra.StepsPerRow {
+			if longest == nil || longest.size*longest.stepsPerRow < rra.size*rra.stepsPerRow {
 				longest = rra
 			}
 		}
@@ -317,8 +342,8 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 			if best == nil {
 				best = rra
 			} else {
-				rraDiff := math.Abs(float64(expectedStep - time.Duration(rra.StepsPerRow)*ds.Step))
-				bestDiff := math.Abs(float64(expectedStep - time.Duration(best.StepsPerRow)*ds.Step))
+				rraDiff := math.Abs(float64(expectedStep - time.Duration(rra.stepsPerRow)*ds.Step))
+				bestDiff := math.Abs(float64(expectedStep - time.Duration(best.stepsPerRow)*ds.Step))
 				if bestDiff > rraDiff {
 					best = rra
 				}
@@ -334,7 +359,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 			if best == nil {
 				best = rra
 			} else {
-				if best.StepsPerRow > rra.StepsPerRow {
+				if best.stepsPerRow > rra.stepsPerRow {
 					best = rra
 				}
 			}
@@ -465,8 +490,8 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 	// for each of this DS's RRAs
 	for _, rra := range ds.RRAs {
 
-		// The RRA step (TODO should this be a method?)
-		rraStep := ds.Step * time.Duration(rra.StepsPerRow)
+		// The RRA step
+		rraStep := rra.Step(ds.Step)
 
 		// currentBegin is a cursor pointing at the beginning of the
 		// current slot, currentEnd points at its end
@@ -487,7 +512,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 				currentEnd = periodEnd // i.e. currentEnd < endOfSlot
 			}
 
-			switch rra.Cf {
+			switch rra.cf {
 			case MAX:
 				rra.AddValueMax(ds.value, ds.duration)
 			case MIN:
@@ -503,18 +528,18 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 				// Check XFF
 				known := float64(rra.duration) / float64(rraStep)
-				if known < float64(rra.Xff) {
+				if known < float64(rra.xff) {
 					rra.SetValue(math.NaN(), 0)
 				}
 
-				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.Size)
-				rra.Latest = endOfSlot
+				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.size)
+				rra.latest = endOfSlot
 				rra.DPs[slotN] = rra.value
 
 				if len(rra.DPs) == 1 {
-					rra.Start = slotN
+					rra.start = slotN
 				}
-				rra.End = slotN
+				rra.end = slotN
 
 				// reset
 				rra.Reset()
@@ -531,7 +556,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.RRAs {
 		rra.DPs = make(map[int64]float64)
-		rra.Start, rra.End = 0, 0
+		rra.start, rra.end = 0, 0
 	}
 	ds.lastFlushRT = time.Now()
 }
@@ -573,17 +598,17 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 
 	// Only copy elements that change or needed for saving/rendering
 	new_rra := new(RoundRobinArchive)
-	new_rra.Id = rra.Id
-	new_rra.DsId = rra.DsId
-	new_rra.StepsPerRow = rra.StepsPerRow
-	new_rra.Size = rra.Size
+	new_rra.id = rra.id
+	new_rra.dsId = rra.dsId
+	new_rra.stepsPerRow = rra.stepsPerRow
+	new_rra.size = rra.size
 	new_rra.value = rra.value
 	new_rra.duration = rra.duration
-	new_rra.Latest = rra.Latest
-	new_rra.Start = rra.Start
-	new_rra.End = rra.End
-	new_rra.Size = rra.Size
-	new_rra.Width = rra.Width
+	new_rra.latest = rra.latest
+	new_rra.start = rra.start
+	new_rra.end = rra.end
+	new_rra.size = rra.size
+	new_rra.width = rra.width
 	new_rra.DPs = make(map[int64]float64)
 
 	for k, v := range rra.DPs {
@@ -594,15 +619,15 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 }
 
 func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
-	if slot%rra.Width == 0 {
-		return slot / rra.Width
+	if slot%rra.width == 0 {
+		return slot / rra.width
 	} else {
-		return (slot / rra.Width) + 1
+		return (slot / rra.width) + 1
 	}
 }
 
 func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.Time {
-	rraStart := now.Add(rraStep * time.Duration(rra.Size) * -1).Truncate(rraStep)
+	rraStart := now.Add(rraStep * time.Duration(rra.size) * -1).Truncate(rraStep)
 	if now.Equal(now.Truncate(rraStep)) {
 		rraStart = rraStart.Add(rraStep)
 	}
@@ -611,11 +636,22 @@ func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.
 
 func (rra *RoundRobinArchive) SlotTimeStamp(ds *DataSource, slot int64) time.Time {
 	// TODO this is kind of ugly too...
-	slot = slot % int64(rra.Size) // just in case
+	slot = slot % int64(rra.size) // just in case
 	dsStepMs := ds.Step.Nanoseconds() / 1000000
-	rraStepMs := dsStepMs * int64(rra.StepsPerRow)
-	latestMs := rra.Latest.UnixNano() / 1000000
-	latestSlotN := (latestMs / rraStepMs) % int64(rra.Size)
-	distance := (int64(rra.Size) + latestSlotN - slot) % int64(rra.Size)
-	return rra.Latest.Add(time.Duration(rraStepMs*distance) * time.Millisecond * -1)
+	rraStepMs := dsStepMs * int64(rra.stepsPerRow)
+	latestMs := rra.latest.UnixNano() / 1000000
+	latestSlotN := (latestMs / rraStepMs) % int64(rra.size)
+	distance := (int64(rra.size) + latestSlotN - slot) % int64(rra.size)
+	return rra.latest.Add(time.Duration(rraStepMs*distance) * time.Millisecond * -1)
 }
+
+func (rra *RoundRobinArchive) Step(dsStep time.Duration) time.Duration {
+	return dsStep * time.Duration(rra.stepsPerRow)
+}
+
+func (rra *RoundRobinArchive) Id() int64         { return rra.id }
+func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
+func (rra *RoundRobinArchive) Size() int64       { return rra.size }
+func (rra *RoundRobinArchive) Width() int64      { return rra.size }
+func (rra *RoundRobinArchive) Start() int64      { return rra.start }
+func (rra *RoundRobinArchive) End() int64        { return rra.end }

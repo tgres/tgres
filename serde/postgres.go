@@ -299,7 +299,7 @@ type dbSeries struct {
 }
 
 func (dps *dbSeries) StepMs() int64 {
-	return (dps.ds.Step * time.Duration(dps.rra.StepsPerRow)).Nanoseconds() / 1000000
+	return dps.rra.Step(dps.ds.Step).Nanoseconds() / 1000000
 }
 
 func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
@@ -350,7 +350,7 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		finalGroupByMs int64
-		rraStepMs      = (dps.ds.Step * time.Duration(dps.rra.StepsPerRow)).Nanoseconds() / 1000000
+		rraStepMs      = dps.rra.Step(dps.ds.Step).Nanoseconds() / 1000000
 	)
 
 	if dps.groupByMs != 0 {
@@ -388,9 +388,9 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	if debug {
 		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
-			dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
+			dps.ds.Id, dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 	}
-	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id, dps.from, dps.to, finalGroupByMs)
+	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
 		log.Printf("seriesQuery(): error %v", err)
@@ -425,7 +425,7 @@ func (dps *dbSeries) Next() bool {
 		return true
 	} else {
 		// See if we have data points that haven't been synced yet
-		if len(dps.rra.DPs) > 0 && dps.latest.Before(dps.rra.Latest) {
+		if len(dps.rra.DPs) > 0 && dps.latest.Before(dps.rra.Latest()) {
 			// TODO this is kinda ugly?
 			// Should RRA's implement Series interface perhaps?
 
@@ -439,7 +439,7 @@ func (dps *dbSeries) Next() bool {
 
 			for len(dps.rra.DPs) > 0 {
 
-				earliest := dps.rra.Latest.Add(time.Millisecond)
+				earliest := dps.rra.Latest().Add(time.Millisecond)
 				earliestSlotN := int64(-1)
 				for n, _ := range dps.rra.DPs {
 					ts := dps.rra.SlotTimeStamp(dps.ds, n)
@@ -464,7 +464,7 @@ func (dps *dbSeries) Next() bool {
 						from = dps.from
 					}
 					if dps.to.IsZero() {
-						to = dps.rra.Latest.Add(time.Millisecond)
+						to = dps.rra.Latest().Add(time.Millisecond)
 					} else {
 						to = dps.to
 					}
@@ -543,37 +543,31 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 
 func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	var (
-		latest     pq.NullTime
-		rra        rrd.RoundRobinArchive
-		durationMs int64
-		cf         string
-		value      float64
+		latest *time.Time
+		cf     string
+		value  float64
+		xff    float32
+
+		id, dsId, durationMs, width, stepsPerRow, size int64
 	)
-	err := rows.Scan(&rra.Id, &rra.DsId, &cf, &rra.StepsPerRow, &rra.Size, &rra.Width, &rra.Xff, &value, &durationMs, &latest)
+	err := rows.Scan(&id, &dsId, &cf, &stepsPerRow, &size, &width, &xff, &value, &durationMs, &latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error scanning row: %v", err)
 		return nil, err
 	}
-	if latest.Valid {
-		rra.Latest = latest.Time
-	} else {
-		rra.Latest = time.Unix(0, 0)
+
+	if latest == nil {
+		latest = &time.Time{}
 	}
+	rra, err := rrd.NewRoundRobinArchive(id, dsId, cf, stepsPerRow, size, width, xff, *latest)
+	if err != nil {
+		log.Printf("roundRoundRobinArchiveFromRow(): error creating rra: %v", err)
+		return nil, err
+	}
+
 	rra.DPs = make(map[int64]float64)
 	rra.SetValue(value, time.Duration(durationMs)*time.Millisecond)
-	switch cf {
-	case "WMEAN":
-		rra.Cf = rrd.WMEAN
-	case "MIN":
-		rra.Cf = rrd.MIN
-	case "MAX":
-		rra.Cf = rrd.MAX
-	case "LAST":
-		rra.Cf = rrd.LAST
-	default:
-		return nil, fmt.Errorf("Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
-	}
-	return &rra, err
+	return rra, err
 }
 
 func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
@@ -717,36 +711,37 @@ func dpsAsString(dps map[int64]float64, start, end int64) string {
 
 func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 	var n int64
-	rraSize := int64(rra.Size)
-	if int32(len(rra.DPs)) == rra.Size { // The whole thing
+	rraSize, rraWidth := rra.Size(), rra.Width()
+	rraStart, rraEnd := rra.Start(), rra.End()
+	if int64(len(rra.DPs)) == rraSize { // The whole thing
 		for n = 0; n < rra.SlotRow(rraSize); n++ {
-			end := rra.Width - 1
-			if n == rraSize/int64(rra.Width) {
-				end = (rraSize - 1) % rra.Width
+			end := rraWidth - 1
+			if n == rraSize/rraWidth {
+				end = (rraSize - 1) % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*int64(rra.Width), n*int64(rra.Width)+rra.Width-1)
-			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id, n); err == nil {
+			dps := dpsAsString(rra.DPs, n*rraWidth, n*rraWidth+rraWidth-1)
+			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
-					log.Printf("flushRoundRobinArchive(1): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, 1, end+1, len(dps), n)
+					log.Printf("flushRoundRobinArchive(1): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, 1, end+1, len(dps), n)
 				}
 				rows.Close()
 			} else {
 				return err
 			}
 		}
-	} else if rra.Start <= rra.End { // Single range
-		for n = rra.Start / int64(rra.Width); n < rra.SlotRow(rra.End); n++ {
-			start, end := int64(0), rra.Width-1
-			if n == rra.Start/rra.Width {
-				start = rra.Start % rra.Width
+	} else if rraStart <= rraEnd { // Single range
+		for n = rraStart / rraWidth; n < rra.SlotRow(rraEnd); n++ {
+			start, end := int64(0), rraWidth-1
+			if n == rraStart/rraWidth {
+				start = rraStart % rraWidth
 			}
-			if n == rra.End/rra.Width {
-				end = rra.End % rra.Width
+			if n == rraEnd/rraWidth {
+				end = rraEnd % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
-					log.Printf("flushRoundRobinArchive(2): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+					log.Printf("flushRoundRobinArchive(2): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)
 				}
 				rows.Close()
 			} else {
@@ -755,15 +750,15 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	} else { // Double range (wrap-around, end < start)
 		// range 1: 0 -> end
-		for n = 0; n < rra.SlotRow(rra.End); n++ {
-			start, end := int64(0), rra.Width-1
-			if n == rra.End/rra.Width {
-				end = rra.End % rra.Width
+		for n = 0; n < rra.SlotRow(rraEnd); n++ {
+			start, end := int64(0), rraWidth-1
+			if n == rraEnd/rraWidth {
+				end = rraEnd % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
-					log.Printf("flushRoundRobinArchive(3): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+					log.Printf("flushRoundRobinArchive(3): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rraStart, rraEnd, start+1, end+1, len(dps), n)
 				}
 				rows.Close()
 			} else {
@@ -772,18 +767,18 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 
 		// range 2: start -> Size
-		for n = rra.Start / rra.Width; n < rra.SlotRow(rraSize); n++ {
-			start, end := int64(0), rra.Width-1
-			if n == rra.Start/rra.Width {
-				start = rra.Start % rra.Width
+		for n = rraStart / rraWidth; n < rra.SlotRow(rraSize); n++ {
+			start, end := int64(0), rraWidth-1
+			if n == rraStart/rraWidth {
+				start = rraStart % rraWidth
 			}
-			if n == rraSize/rra.Width {
-				end = (rraSize - 1) % rra.Width
+			if n == rraSize/rraWidth {
+				end = (rraSize - 1) % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rra.Width+start, n*rra.Width+end)
-			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id, n); err == nil {
+			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
-					log.Printf("flushRoundRobinArchive(4): rra.Id: %d rra.Start: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rra.Start, rra.End, start+1, end+1, len(dps), n)
+					log.Printf("flushRoundRobinArchive(4): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)
 				}
 				rows.Close()
 			} else {
@@ -792,7 +787,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 		}
 	}
 
-	if rows, err := p.sql2.Query(rra.Value(), rra.Duration().Nanoseconds()/1000000, rra.Latest, rra.Id); err == nil {
+	if rows, err := p.sql2.Query(rra.Value(), rra.Duration().Nanoseconds()/1000000, rra.Latest(), rra.Id()); err == nil {
 		rows.Close()
 	} else {
 		return err
@@ -878,8 +873,9 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		}
 		ds.RRAs = append(ds.RRAs, rra)
 
-		for n := int64(0); n <= (int64(rra.Size)/rra.Width + int64(rra.Size)%rra.Width/rra.Width); n++ {
-			r, err := p.sql6.Query(rra.Id, n)
+		rraSize, rraWidth := rra.Size(), rra.Width()
+		for n := int64(0); n <= (rraSize/rraWidth + rraSize%rraWidth/rraWidth); n++ {
+			r, err := p.sql6.Query(rra.Id(), n)
 			if err != nil {
 				log.Printf("CreateOrReturnDataSource(): error creating TSs: %v", err)
 				return nil, err
@@ -901,7 +897,7 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := rra.Begins(rra.Latest, ds.Step*time.Duration(rra.StepsPerRow))
+	rraEarliest := rra.Begins(rra.Latest(), rra.Step(ds.Step))
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
