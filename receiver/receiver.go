@@ -689,7 +689,7 @@ type distDatumDataSource struct {
 }
 
 func (d *distDatumDataSource) Relinquish() error {
-	if d.ds.LastUpdate != time.Unix(0, 0) {
+	if !d.ds.LastUpdate().IsZero() {
 		d.r.flushDs(d.ds, true)
 		d.r.dss.Delete(d.ds)
 	}

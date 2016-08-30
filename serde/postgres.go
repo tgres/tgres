@@ -45,7 +45,7 @@ package serde
 import (
 	"database/sql"
 	"fmt"
-	"github.com/lib/pq"
+	_ "github.com/lib/pq"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/rrd"
 	"log"
@@ -297,7 +297,7 @@ type dbSeries struct {
 }
 
 func (dps *dbSeries) StepMs() int64 {
-	return dps.rra.Step(dps.ds.Step).Nanoseconds() / 1000000
+	return dps.rra.Step(dps.ds.Step()).Nanoseconds() / 1000000
 }
 
 func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
@@ -320,7 +320,7 @@ func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 }
 
 func (dps *dbSeries) LastUpdate() time.Time {
-	return dps.ds.LastUpdate
+	return dps.ds.LastUpdate()
 }
 
 func (dps *dbSeries) MaxPoints(n ...int64) int64 {
@@ -348,7 +348,7 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		finalGroupByMs int64
-		rraStepMs      = dps.rra.Step(dps.ds.Step).Nanoseconds() / 1000000
+		rraStepMs      = dps.rra.Step(dps.ds.Step()).Nanoseconds() / 1000000
 	)
 
 	if dps.groupByMs != 0 {
@@ -463,7 +463,7 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
 		last_ds                  sql.NullFloat64
-		lastupdate               pq.NullTime
+		lastupdate               *time.Time
 		durationMs, stepMs, hbMs int64
 		value                    float64
 		id                       int64
@@ -475,19 +475,21 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 		return nil, err
 	}
 
-	ds := rrd.NewDataSource(id, name)
+	if lastupdate == nil {
+		lastupdate = &time.Time{}
+	}
+
+	ds := rrd.NewDataSource(id, name,
+		time.Duration(stepMs)*time.Millisecond,
+		time.Duration(hbMs)*time.Millisecond,
+		*lastupdate)
 
 	if last_ds.Valid {
 		ds.LastDs = last_ds.Float64
 	} else {
 		ds.LastDs = math.NaN()
 	}
-	if lastupdate.Valid {
-		ds.LastUpdate = lastupdate.Time
-	}
 	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
-	ds.Step = time.Duration(stepMs) * time.Millisecond
-	ds.Heartbeat = time.Duration(hbMs) * time.Millisecond
 	return ds, err
 }
 
@@ -743,10 +745,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate, ds.LastDs, ds.Value(), ds.Duration())
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.LastDs, ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value(), durationMs, ds.Id()); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.LastDs, ds.Value(), durationMs, ds.Id()); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
@@ -783,7 +785,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 
 	// RRAs
 	for _, rraSpec := range dsSpec.RRAs {
-		steps := int64(rraSpec.Step / ds.Step)
+		steps := int64(rraSpec.Step / ds.Step())
 		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
 		var cf string
 		switch rraSpec.Function {
@@ -823,7 +825,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 	}
 
 	if debug {
-		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate, ds)
+		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate(), ds)
 	}
 	return ds, nil
 }
@@ -833,7 +835,7 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := rra.Begins(rra.Latest(), rra.Step(ds.Step))
+	rraEarliest := rra.Begins(rra.Latest(), rra.Step(ds.Step()))
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
