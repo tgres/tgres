@@ -161,7 +161,7 @@ func (rpc *ClusterRPC) Message(msg Msg, reply *Msg) error {
 		log.Printf("Cluster.Message() (via RPC): unknown msg Id: %d, dropping message.", msg.Id)
 	}
 
-	*reply = Msg{Id: 495, Body: []byte("HELLO")}
+	//*reply = Msg{Id: 495, Body: []byte("HELLO")}
 	return nil
 }
 

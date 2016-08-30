@@ -316,6 +316,8 @@ func (r *Receiver) dispatcher() {
 					if msg, err := cluster.NewMsg(node, dp); err == nil {
 						snd <- msg
 						r.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
+					} else {
+						log.Printf("dispatcher(): Encoding error forwarding a data point: %v", err)
 					}
 				} else {
 					// This should be a very rare thing

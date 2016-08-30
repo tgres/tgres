@@ -89,6 +89,7 @@ package rrd
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"math"
 	"strconv"
@@ -131,6 +132,41 @@ type IncomingDP struct {
 	TimeStamp time.Time
 	Value     float64
 	Hops      int
+}
+
+// Implement GobEncoder (or else we get a "has no exported fields")
+func (dp *IncomingDP) GobEncode() ([]byte, error) {
+	buf := bytes.Buffer{}
+	enc := gob.NewEncoder(&buf)
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	check(enc.Encode(dp.Name))
+	check(enc.Encode(dp.TimeStamp))
+	check(enc.Encode(dp.Value))
+	check(enc.Encode(dp.Hops))
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (dp *IncomingDP) GobDecode(b []byte) error {
+	dec := gob.NewDecoder(bytes.NewBuffer(b))
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	check(dec.Decode(&dp.Name))
+	check(dec.Decode(&dp.TimeStamp))
+	check(dec.Decode(&dp.Value))
+	check(dec.Decode(&dp.Hops))
+	return err
 }
 
 // Process will append the data point to the the DS's archive(s). Once
