@@ -43,7 +43,6 @@
 package serde
 
 import (
-	"bytes"
 	"database/sql"
 	"fmt"
 	"github.com/lib/pq"
@@ -53,7 +52,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -423,60 +421,8 @@ func (dps *dbSeries) Next() bool {
 			dps.latest = dps.posEnd
 		}
 		return true
-	} else {
-		// See if we have data points that haven't been synced yet
-		if len(dps.rra.DPs) > 0 && dps.latest.Before(dps.rra.Latest()) {
-			// TODO this is kinda ugly?
-			// Should RRA's implement Series interface perhaps?
-
-			// because rra.DPs is a map there is no quick way to find the
-			// earliest entry, we have to traverse the map. It seems
-			// tempting to come with an alternative solution, but it's not
-			// as simple as it seems, and given that this is mostly about
-			// the tip of the series, this is good enough.
-
-			// we do not provide averaging points here for the same reason
-
-			for len(dps.rra.DPs) > 0 {
-
-				earliest := dps.rra.Latest().Add(time.Millisecond)
-				earliestSlotN := int64(-1)
-				for n, _ := range dps.rra.DPs {
-					ts := dps.rra.SlotTimeStamp(dps.ds, n)
-					if ts.Before(earliest) && ts.After(dps.latest) {
-						earliest, earliestSlotN = ts, n
-					}
-				}
-				if earliestSlotN != -1 {
-
-					dps.posBegin = dps.latest
-					dps.posEnd = earliest
-					dps.value = dps.rra.DPs[earliestSlotN]
-					dps.latest = earliest
-
-					delete(dps.rra.DPs, earliestSlotN)
-
-					var from, to time.Time
-
-					if dps.from.IsZero() {
-						from = time.Unix(0, 0)
-					} else {
-						from = dps.from
-					}
-					if dps.to.IsZero() {
-						to = dps.rra.Latest().Add(time.Millisecond)
-					} else {
-						to = dps.to
-					}
-					if earliest.Add(time.Millisecond).After(from) && earliest.Before(to.Add(time.Millisecond)) {
-						return true
-					}
-				} else {
-					return false
-				}
-			}
-		}
 	}
+
 	return false
 }
 
@@ -565,7 +511,6 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 		return nil, err
 	}
 
-	rra.DPs = make(map[int64]float64)
 	rra.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	return rra, err
 }
@@ -696,30 +641,17 @@ func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive
 	return rras, nil
 }
 
-func dpsAsString(dps map[int64]float64, start, end int64) string {
-	var b bytes.Buffer
-	b.WriteString("{")
-	for i := start; i <= end; i++ {
-		b.WriteString(strconv.FormatFloat(dps[int64(i)], 'f', -1, 64))
-		if i != end {
-			b.WriteString(",")
-		}
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
 func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 	var n int64
 	rraSize, rraWidth := rra.Size(), rra.Width()
 	rraStart, rraEnd := rra.Start(), rra.End()
-	if int64(len(rra.DPs)) == rraSize { // The whole thing
+	if int64(rra.PointCount()) == rraSize { // The whole thing
 		for n = 0; n < rra.SlotRow(rraSize); n++ {
 			end := rraWidth - 1
 			if n == rraSize/rraWidth {
 				end = (rraSize - 1) % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rraWidth, n*rraWidth+rraWidth-1)
+			dps := rra.DpsAsPGString(n*rraWidth, n*rraWidth+rraWidth-1)
 			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(1): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, 1, end+1, len(dps), n)
@@ -738,7 +670,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			if n == rraEnd/rraWidth {
 				end = rraEnd % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(2): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)
@@ -755,7 +687,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			if n == rraEnd/rraWidth {
 				end = rraEnd % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(3): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rraStart, rraEnd, start+1, end+1, len(dps), n)
@@ -775,7 +707,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 			if n == rraSize/rraWidth {
 				end = (rraSize - 1) % rraWidth
 			}
-			dps := dpsAsString(rra.DPs, n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(4): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)
@@ -798,7 +730,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 
 func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	for _, rra := range ds.RRAs {
-		if len(rra.DPs) > 0 {
+		if rra.PointCount() > 0 {
 			if err := p.flushRoundRobinArchive(rra); err != nil {
 				log.Printf("FlushDataSource(): error flushing RRA, probable data loss: %v", err)
 				return err

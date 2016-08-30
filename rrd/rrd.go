@@ -88,8 +88,10 @@
 package rrd
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -213,19 +215,20 @@ type RoundRobinArchive struct {
 	// contradicting any rules.
 	xff float32
 
-	// The slice of data points (as a map so that its sparse). Slots
-	// in DPs are time-aligned starting at the "beginning of the
-	// epoch" (Jan 1 1971 UTC). This means that if Latest is defined,
-	// we can compute any slot's timestamp without having to store it.
-	DPs map[int64]float64
+	// The list of data points (as a map so that its sparse). Slots in
+	// dps are time-aligned starting at zero time. This means that if
+	// Latest is defined, we can compute any slot's timestamp without
+	// having to store it.
+	dps map[int64]float64
 
-	// In the undelying storage, how many data points are stored in a single (database) row.
+	// In the undelying storage, how many data points are stored in a
+	// single (database) row.
 	width int64
 	// Index of the first slot for which we have data. (Should be
 	// between 0 and Size-1)
 	start int64
 	// Index of the last slot for which we have data. Note that it's
-	// possible for End to be less than Start, which means the RRD
+	// possible for end to be less than start, which means the RRD
 	// wraps around.
 	end int64
 }
@@ -239,6 +242,7 @@ func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width in
 		width:       width,
 		xff:         xff,
 		latest:      latest,
+		dps:         make(map[int64]float64),
 	}
 	switch cf {
 	case "WMEAN":
@@ -373,7 +377,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 func (ds *DataSource) PointCount() int {
 	total := 0
 	for _, rra := range ds.RRAs {
-		total += len(rra.DPs)
+		total += rra.PointCount()
 	}
 	return total
 }
@@ -534,9 +538,9 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.size)
 				rra.latest = endOfSlot
-				rra.DPs[slotN] = rra.value
+				rra.dps[slotN] = rra.value
 
-				if len(rra.DPs) == 1 {
+				if len(rra.dps) == 1 {
 					rra.start = slotN
 				}
 				rra.end = slotN
@@ -555,7 +559,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.RRAs {
-		rra.DPs = make(map[int64]float64)
+		rra.dps = make(map[int64]float64)
 		rra.start, rra.end = 0, 0
 	}
 	ds.lastFlushRT = time.Now()
@@ -609,10 +613,10 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 	new_rra.end = rra.end
 	new_rra.size = rra.size
 	new_rra.width = rra.width
-	new_rra.DPs = make(map[int64]float64)
+	new_rra.dps = make(map[int64]float64)
 
-	for k, v := range rra.DPs {
-		new_rra.DPs[k] = v
+	for k, v := range rra.dps {
+		new_rra.dps[k] = v
 	}
 
 	return new_rra
@@ -655,3 +659,21 @@ func (rra *RoundRobinArchive) Size() int64       { return rra.size }
 func (rra *RoundRobinArchive) Width() int64      { return rra.width }
 func (rra *RoundRobinArchive) Start() int64      { return rra.start }
 func (rra *RoundRobinArchive) End() int64        { return rra.end }
+
+// DpsAsPGString returns data points as a PG-compatible array string
+func (rra *RoundRobinArchive) DpsAsPGString(start, end int64) string {
+	var b bytes.Buffer
+	b.WriteString("{")
+	for i := start; i <= end; i++ {
+		b.WriteString(strconv.FormatFloat(rra.dps[int64(i)], 'f', -1, 64))
+		if i != end {
+			b.WriteString(",")
+		}
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func (rra *RoundRobinArchive) PointCount() int {
+	return len(rra.dps)
+}
