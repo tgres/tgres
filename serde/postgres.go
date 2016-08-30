@@ -462,7 +462,7 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		last_ds                  sql.NullFloat64
+		last_ds                  *float64
 		lastupdate               *time.Time
 		durationMs, stepMs, hbMs int64
 		value                    float64
@@ -478,17 +478,16 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	if lastupdate == nil {
 		lastupdate = &time.Time{}
 	}
+	if last_ds == nil {
+		last_ds = new(float64)
+	}
 
 	ds := rrd.NewDataSource(id, name,
 		time.Duration(stepMs)*time.Millisecond,
 		time.Duration(hbMs)*time.Millisecond,
-		*lastupdate)
+		*lastupdate,
+		*last_ds)
 
-	if last_ds.Valid {
-		ds.LastDs = last_ds.Float64
-	} else {
-		ds.LastDs = math.NaN()
-	}
 	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	return ds, err
 }
@@ -564,7 +563,7 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 			log.Printf("FetchDataSource(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
-			ds.RRAs = rras
+			ds.SetRRAs(rras)
 		}
 		return ds, nil
 	}
@@ -588,7 +587,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
-			ds.RRAs = rras
+			ds.SetRRAs(rras)
 		}
 		return ds, nil
 	}
@@ -615,7 +614,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
-			ds.RRAs = rras
+			ds.SetRRAs(rras)
 		}
 		result = append(result, ds)
 	}
@@ -735,7 +734,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 }
 
 func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
-	for _, rra := range ds.RRAs {
+	for _, rra := range ds.RRAs() {
 		if rra.PointCount() > 0 {
 			if err := p.flushRoundRobinArchive(rra); err != nil {
 				log.Printf("FlushDataSource(): error flushing RRA, probable data loss: %v", err)
@@ -745,10 +744,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.LastDs, ds.Value(), ds.Duration())
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.LastDs(), ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.LastDs, ds.Value(), durationMs, ds.Id()); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.LastDs(), ds.Value(), durationMs, ds.Id()); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
@@ -784,6 +783,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 	}
 
 	// RRAs
+	var rras []*rrd.RoundRobinArchive
 	for _, rraSpec := range dsSpec.RRAs {
 		steps := int64(rraSpec.Step / ds.Step())
 		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
@@ -809,7 +809,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 			log.Printf("CreateOrReturnDataSource(): error2: %v", err)
 			return nil, err
 		}
-		ds.RRAs = append(ds.RRAs, rra)
+		rras = append(rras, rra)
 
 		rraSize, rraWidth := rra.Size(), rra.Width()
 		for n := int64(0); n <= (rraSize/rraWidth + rraSize%rraWidth/rraWidth); n++ {
@@ -823,6 +823,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 
 		rraRows.Close()
 	}
+	ds.SetRRAs(rras)
 
 	if debug {
 		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate(), ds)

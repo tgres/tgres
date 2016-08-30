@@ -188,26 +188,30 @@ type DataSource struct {
 	step        time.Duration        // Step (PDP) size
 	heartbeat   time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
 	lastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
-	LastDs      float64              // Last final value we saw
-	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
+	lastDs      float64              // Last final value we saw
+	rras        []*RoundRobinArchive // Array of Round Robin Archives
 	lastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
 
-func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time) *DataSource {
+func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time, lds float64) *DataSource {
 	return &DataSource{
 		id:         id,
 		name:       name,
 		step:       step,
 		heartbeat:  hb,
 		lastUpdate: lu,
+		lastDs:     lds,
 	}
 }
 
-func (ds *DataSource) Name() string             { return ds.name }
-func (ds *DataSource) Id() int64                { return ds.id }
-func (ds *DataSource) Step() time.Duration      { return ds.step }
-func (ds *DataSource) Heartbeat() time.Duration { return ds.heartbeat }
-func (ds *DataSource) LastUpdate() time.Time    { return ds.lastUpdate }
+func (ds *DataSource) Name() string                      { return ds.name }
+func (ds *DataSource) Id() int64                         { return ds.id }
+func (ds *DataSource) Step() time.Duration               { return ds.step }
+func (ds *DataSource) Heartbeat() time.Duration          { return ds.heartbeat }
+func (ds *DataSource) LastUpdate() time.Time             { return ds.lastUpdate }
+func (ds *DataSource) LastDs() float64                   { return ds.lastDs }
+func (ds *DataSource) RRAs() []*RoundRobinArchive        { return ds.rras }
+func (ds *DataSource) SetRRAs(rras []*RoundRobinArchive) { ds.rras = rras }
 
 // A collection of data sources kept by an integer id as well as a
 // string name.
@@ -370,7 +374,7 @@ func (dss *DataSources) Delete(ds *DataSource) {
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
 	var result []*RoundRobinArchive
 
-	for _, rra := range ds.RRAs {
+	for _, rra := range ds.rras {
 		// is start within this RRA's range?
 		rraBegin := rra.latest.Add(time.Duration(rra.stepsPerRow) * ds.step * time.Duration(rra.size) * -1)
 
@@ -382,7 +386,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 	if len(result) == 0 {
 		// if we found nothing above, simply select the longest RRA
 		var longest *RoundRobinArchive
-		for _, rra := range ds.RRAs {
+		for _, rra := range ds.rras {
 			if longest == nil || longest.size*longest.stepsPerRow < rra.size*rra.stepsPerRow {
 				longest = rra
 			}
@@ -428,7 +432,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 
 func (ds *DataSource) PointCount() int {
 	total := 0
-	for _, rra := range ds.RRAs {
+	for _, rra := range ds.rras {
 		total += rra.PointCount()
 	}
 	return total
@@ -536,7 +540,7 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 	}
 
 	ds.lastUpdate = dp.TimeStamp
-	ds.LastDs = dp.Value
+	ds.lastDs = dp.Value
 
 	return nil
 }
@@ -544,7 +548,7 @@ func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
 func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 
 	// for each of this DS's RRAs
-	for _, rra := range ds.RRAs {
+	for _, rra := range ds.rras {
 
 		// The RRA step
 		rraStep := rra.Step(ds.step)
@@ -610,7 +614,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 }
 
 func (ds *DataSource) ClearRRAs() {
-	for _, rra := range ds.RRAs {
+	for _, rra := range ds.rras {
 		rra.dps = make(map[int64]float64)
 		rra.start, rra.end = 0, 0
 	}
@@ -639,13 +643,13 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	new_ds.step = ds.step
 	new_ds.heartbeat = ds.heartbeat
 	new_ds.lastUpdate = ds.lastUpdate
-	new_ds.LastDs = ds.LastDs
+	new_ds.lastDs = ds.lastDs
 	new_ds.value = ds.value
 	new_ds.duration = ds.duration
-	new_ds.RRAs = make([]*RoundRobinArchive, len(ds.RRAs))
+	new_ds.rras = make([]*RoundRobinArchive, len(ds.rras))
 
-	for n, rra := range ds.RRAs {
-		new_ds.RRAs[n] = rra.mostlyCopy()
+	for n, rra := range ds.rras {
+		new_ds.rras[n] = rra.mostlyCopy()
 	}
 
 	return new_ds
