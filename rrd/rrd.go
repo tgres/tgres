@@ -652,6 +652,6 @@ func (rra *RoundRobinArchive) Step(dsStep time.Duration) time.Duration {
 func (rra *RoundRobinArchive) Id() int64         { return rra.id }
 func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
 func (rra *RoundRobinArchive) Size() int64       { return rra.size }
-func (rra *RoundRobinArchive) Width() int64      { return rra.size }
+func (rra *RoundRobinArchive) Width() int64      { return rra.width }
 func (rra *RoundRobinArchive) Start() int64      { return rra.start }
 func (rra *RoundRobinArchive) End() int64        { return rra.end }
