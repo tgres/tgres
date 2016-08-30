@@ -183,15 +183,25 @@ func (dp *IncomingDP) Process() error {
 // intermediate state (PDP).
 type DataSource struct {
 	pdp
+	id          int64                // Id
+	name        string               // Series name
 	Step        time.Duration        // Step (PDP) size
-	Id          int64                // Id
-	Name        string               // Series name
 	Heartbeat   time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
 	LastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
 	LastDs      float64              // Last final value we saw
 	RRAs        []*RoundRobinArchive // Array of Round Robin Archives
 	lastFlushRT time.Time            // Last time this DS was flushed (actual real time).
 }
+
+func NewDataSource(id int64, name string) *DataSource {
+	return &DataSource{
+		id:   id,
+		name: name,
+	}
+}
+
+func (ds *DataSource) Name() string { return ds.name }
+func (ds *DataSource) Id() int64    { return ds.id }
 
 // A collection of data sources kept by an integer id as well as a
 // string name.
@@ -319,8 +329,8 @@ func (dss *DataSources) Insert(ds *DataSource) {
 		dss.l.Lock()
 		defer dss.l.Unlock()
 	}
-	dss.byName[ds.Name] = ds
-	dss.byId[ds.Id] = ds
+	dss.byName[ds.name] = ds
+	dss.byId[ds.id] = ds
 }
 
 // List rlocks, then returns a slice of *DS
@@ -347,8 +357,8 @@ func (dss *DataSources) Delete(ds *DataSource) {
 		defer dss.l.Unlock()
 	}
 
-	delete(dss.byName, ds.Name)
-	delete(dss.byId, ds.Id)
+	delete(dss.byName, ds.name)
+	delete(dss.byId, ds.id)
 }
 
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
@@ -618,7 +628,8 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 
 	// Only copy elements that change or needed for saving/rendering
 	new_ds := new(DataSource)
-	new_ds.Id = ds.Id
+	new_ds.id = ds.id
+	new_ds.name = ds.name
 	new_ds.Step = ds.Step
 	new_ds.Heartbeat = ds.Heartbeat
 	new_ds.LastUpdate = ds.LastUpdate

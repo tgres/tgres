@@ -386,9 +386,9 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	if debug {
 		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
-			dps.ds.Id, dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
+			dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 	}
-	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id, dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
+	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
 		log.Printf("seriesQuery(): error %v", err)
@@ -462,17 +462,21 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		ds                       rrd.DataSource
 		last_ds                  sql.NullFloat64
 		lastupdate               pq.NullTime
 		durationMs, stepMs, hbMs int64
 		value                    float64
+		id                       int64
+		name                     string
 	)
-	err := rows.Scan(&ds.Id, &ds.Name, &stepMs, &hbMs, &lastupdate, &last_ds, &value, &durationMs)
+	err := rows.Scan(&id, &name, &stepMs, &hbMs, &lastupdate, &last_ds, &value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
 	}
+
+	ds := rrd.NewDataSource(id, name)
+
 	if last_ds.Valid {
 		ds.LastDs = last_ds.Float64
 	} else {
@@ -484,7 +488,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	ds.Step = time.Duration(stepMs) * time.Millisecond
 	ds.Heartbeat = time.Duration(hbMs) * time.Millisecond
-	return &ds, err
+	return ds, err
 }
 
 func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
@@ -553,7 +557,7 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id)
+		rras, err := p.fetchRoundRobinArchives(ds.Id())
 		if err != nil {
 			log.Printf("FetchDataSource(): error fetching RRAs: %v", err)
 			return nil, err
@@ -577,7 +581,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id)
+		rras, err := p.fetchRoundRobinArchives(ds.Id())
 		if err != nil {
 			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
 			return nil, err
@@ -604,7 +608,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 	result := make([]*rrd.DataSource, 0)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id)
+		rras, err := p.fetchRoundRobinArchives(ds.Id())
 		if err != nil {
 			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
 			return nil, err
@@ -739,10 +743,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id, ds.LastUpdate, ds.LastDs, ds.Value(), ds.Duration())
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate, ds.LastDs, ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value(), durationMs, ds.Id); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate, ds.LastDs, ds.Value(), durationMs, ds.Id()); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
@@ -792,7 +796,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 		case rrd.LAST:
 			cf = "LAST"
 		}
-		rraRows, err := p.sql5.Query(ds.Id, cf, steps, size, rraSpec.Xff)
+		rraRows, err := p.sql5.Query(ds.Id(), cf, steps, size, rraSpec.Xff)
 		if err != nil {
 			log.Printf("CreateOrReturnDataSource(): error creating RRAs: %v", err)
 			return nil, err
@@ -819,7 +823,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rr
 	}
 
 	if debug {
-		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id, ds.LastUpdate, ds)
+		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate, ds)
 	}
 	return ds, nil
 }

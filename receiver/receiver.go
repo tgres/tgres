@@ -309,7 +309,7 @@ func (r *Receiver) dispatcher() {
 
 		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, dp.DS}) {
 			if node.Name() == r.cluster.LocalNode().Name() {
-				r.workerChs[dp.DS.Id%int64(r.NWorkers)] <- dp // This dp is for us
+				r.workerChs[dp.DS.Id()%int64(r.NWorkers)] <- dp // This dp is for us
 			} else if dp.Hops == 0 { // we do not forward more than once
 				if node.Ready() {
 					dp.Hops++
@@ -390,9 +390,9 @@ func (r *Receiver) worker(id int64) {
 			if ok {
 				ds = dp.DS // at this point dp.ds has to be already set
 				if err := dp.Process(); err == nil {
-					recent[ds.Id] = true
+					recent[ds.Id()] = true
 				} else {
-					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name, err)
+					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name(), err)
 				}
 			} else {
 				channelClosed = true
@@ -414,20 +414,20 @@ func (r *Receiver) worker(id int64) {
 					}
 					if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 						if debug {
-							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id)
+							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id())
 						}
 						r.flushDs(ds, false)
-						delete(recent, ds.Id)
+						delete(recent, ds.Id())
 					}
 				}
 			}
 		} else if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 			// flush just this one ds
 			if debug {
-				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id)
+				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id())
 			}
 			r.flushDs(ds, false)
-			delete(recent, ds.Id)
+			delete(recent, ds.Id())
 		}
 
 		if channelClosed {
@@ -441,7 +441,7 @@ func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
-	r.flusherChs[ds.Id%int64(r.NWorkers)] <- fr
+	r.flusherChs[ds.Id()%int64(r.NWorkers)] <- fr
 	if block {
 		<-fr.resp
 	}
@@ -701,13 +701,9 @@ func (d *distDatumDataSource) Acquire() error {
 	return nil
 }
 
-func (d *distDatumDataSource) Id() int64 { return d.ds.Id }
-
-func (d *distDatumDataSource) Type() string { return "DataSource" }
-
-func (d *distDatumDataSource) GetName() string {
-	return d.ds.Name
-}
+func (d *distDatumDataSource) Id() int64       { return d.ds.Id() }
+func (d *distDatumDataSource) Type() string    { return "DataSource" }
+func (d *distDatumDataSource) GetName() string { return d.ds.Name() }
 
 // Implement cluster.DistDatum for stats
 
