@@ -768,7 +768,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 // functionally overlapping and should probably be re-worked,
 // e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
 // pre-inserting rows in ts here.
-func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error) {
+func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error) {
 	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("CreateOrReturnDataSource(): error querying database: %v", err)

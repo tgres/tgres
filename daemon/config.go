@@ -21,6 +21,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 	"log"
 	"os"
 	"path/filepath"
@@ -270,7 +271,7 @@ func (c *Config) processDSSpec() error {
 	return nil
 }
 
-func (c *Config) FindMatchingDSSpec(name string) *rrd.DSSpec {
+func (c *Config) FindMatchingDSSpec(name string) *serde.DSSpec {
 	for _, dsSpec := range c.DSs {
 		if dsSpec.Regexp.Regexp.MatchString(name) {
 			return convertDSSpec(&dsSpec)
@@ -279,17 +280,17 @@ func (c *Config) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	return nil
 }
 
-func convertDSSpec(dsSpec *DSSpec) *rrd.DSSpec {
-	rrdDSSpec := &rrd.DSSpec{
+func convertDSSpec(dsSpec *DSSpec) *serde.DSSpec {
+	serdeDSSpec := &serde.DSSpec{
 		Step:      dsSpec.Step.Duration,
 		Heartbeat: dsSpec.Heartbeat.Duration,
-		RRAs:      make([]*rrd.RRASpec, len(dsSpec.RRAs)),
+		RRAs:      make([]*serde.RRASpec, len(dsSpec.RRAs)),
 	}
 	for i, r := range dsSpec.RRAs {
-		rr := rrd.RRASpec(r)
-		rrdDSSpec.RRAs[i] = &rr
+		rr := serde.RRASpec(r)
+		serdeDSSpec.RRAs[i] = &rr
 	}
-	return rrdDSSpec
+	return serdeDSSpec
 }
 
 type configer interface {

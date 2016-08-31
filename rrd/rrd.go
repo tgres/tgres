@@ -49,33 +49,3 @@
 // each RRA. When the DS PDP is complete its content is saved into one
 // or more RRA PDPs.
 package rrd
-
-import (
-	"time"
-)
-
-// DSSpec describes a DataSource. DSSpec is a schema that is used to
-// create the DataSource. This is necessary so that DS's can be crated
-// on-the-fly.
-type DSSpec struct {
-	Step      time.Duration
-	Heartbeat time.Duration
-	RRAs      []*RRASpec
-}
-
-type Consolidation int
-
-const (
-	WMEAN Consolidation = iota // Time-weighted average
-	MAX                        // Max
-	MIN                        // Min
-	LAST                       // Last
-)
-
-// RRASpec is the RRA definition part of DSSpec.
-type RRASpec struct {
-	Function Consolidation
-	Step     time.Duration
-	Size     time.Duration
-	Xff      float64
-}

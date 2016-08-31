@@ -16,60 +16,21 @@
 package rrd
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
-	"math"
-	"reflect"
+	//	"math"
 	"testing"
 	"time"
 )
 
-// IncomingDP must be gob encodable
-func TestIncomingDP_gobEncodable(t *testing.T) {
-	now := time.Now()
-	dp1 := &IncomingDP{
-		Name:      "foo.bar",
-		TimeStamp: now,
-		Value:     1.2345,
-		Hops:      7,
-	}
-
-	var bb bytes.Buffer
-	enc := gob.NewEncoder(&bb)
-	dec := gob.NewDecoder(&bb)
-
-	err := enc.Encode(dp1)
-	if err != nil {
-		t.Errorf("gob encode error:", err)
-	}
-
-	var dp2 *IncomingDP
-	dec.Decode(&dp2)
-
-	if !reflect.DeepEqual(dp1, dp2) {
-		t.Errorf("dp1 != dp2 after gob encode/decode")
-	}
-}
-
-// IncomingDP.Process()
-func TestIncomingDP_Process(t *testing.T) {
-	dp := &IncomingDP{}
-	if dp.Process() == nil {
-		t.Errorf("dp.Process() == nil (should be error because DS is nil)")
-	}
-}
-
-func makeRRA(id, dsId int64, perRow, size int32) *RoundRobinArchive {
+func makeRRA(id, dsId, perRow, size int64) *RoundRobinArchive {
 	return &RoundRobinArchive{
-		Id:          id,
-		DsId:        dsId,
-		Cf:          "AVERAGE",
-		StepsPerRow: perRow,
-		Size:        size,
-		Width:       768,
-		Xff:         1,
-		Latest:      time.Unix(0, 0),
+		id:          id,
+		dsId:        dsId,
+		cf:          WMEAN,
+		stepsPerRow: perRow,
+		size:        size,
+		width:       768,
+		xff:         1,
 	}
 }
 
@@ -83,65 +44,64 @@ func makeRRAs(startId, dsId int64) []*RoundRobinArchive {
 
 func makeDS(id int64) *DataSource {
 	return &DataSource{
-		Id:          id,
-		Name:        fmt.Sprintf("foo.bar%d", id),
-		StepMs:      10000,
-		HeartbeatMs: 7200000,
-		LastUpdate:  time.Unix(0, 0),
-		RRAs:        makeRRAs(id*100, id),
+		id:        id,
+		name:      fmt.Sprintf("foo.bar%d", id),
+		step:      time.Duration(10) * time.Second,
+		heartbeat: time.Duration(7200) * time.Second,
+		rras:      makeRRAs(id*100, id),
 	}
 }
 
-func makeDSs() *DataSources {
-	dsSlice := []*DataSource{
-		makeDS(1),
-		makeDS(2),
-		makeDS(3),
-	}
+// func makeDSs() *DataSources {
+// 	dsSlice := []*DataSource{
+// 		makeDS(1),
+// 		makeDS(2),
+// 		makeDS(3),
+// 	}
 
-	dss := &DataSources{
-		byName: make(map[string]*DataSource),
-		byId:   make(map[int64]*DataSource),
-	}
+// 	dss := &DataSources{
+// 		byName: make(map[string]*DataSource),
+// 		byId:   make(map[int64]*DataSource),
+// 	}
 
-	for _, ds := range dsSlice {
-		dss.byName[ds.Name] = ds
-		dss.byId[ds.Id] = ds
-	}
+// 	for _, ds := range dsSlice {
+// 		dss.byName[ds.Name] = ds
+// 		dss.byId[ds.Id] = ds
+// 	}
 
-	return dss
-}
+// 	return dss
+// }
 
-func TestDataSources(t *testing.T) {
-	dss := makeDSs()
-	for _, ds1 := range dss.byId {
-		if ds2 := dss.GetByName(ds1.Name); ds1 != ds2 {
-			t.Errorf("dss.GetByName: ds1 != ds2 for name: %s", ds1.Name)
-		}
-		if ds2 := dss.GetById(ds1.Id); ds1 != ds2 {
-			t.Errorf("dss.GetById: ds1 != ds2 for id: %s", ds1.Id)
-		}
-	}
+// func TestDataSources(t *testing.T) {
+// 	dss := makeDSs()
+// 	for _, ds1 := range dss.byId {
+// 		if ds2 := dss.GetByName(ds1.Name); ds1 != ds2 {
+// 			t.Errorf("dss.GetByName: ds1 != ds2 for name: %s", ds1.Name)
+// 		}
+// 		if ds2 := dss.GetById(ds1.Id); ds1 != ds2 {
+// 			t.Errorf("dss.GetById: ds1 != ds2 for id: %s", ds1.Id)
+// 		}
+// 	}
 
-	if len(dss.byName) != len(dss.List()) {
-		t.Errorf("len(dss.byName) != len(dss.List())")
-	}
+// 	if len(dss.byName) != len(dss.List()) {
+// 		t.Errorf("len(dss.byName) != len(dss.List())")
+// 	}
 
-	for _, ds := range dss.List() {
-		dss.Delete(ds)
-	}
-	if (len(dss.byName) + len(dss.byId)) != 0 {
-		t.Errorf("(len(dss.byName) + len(dss.byId)) != 0")
-	}
-}
+// 	for _, ds := range dss.List() {
+// 		dss.Delete(ds)
+// 	}
+// 	if (len(dss.byName) + len(dss.byId)) != 0 {
+// 		t.Errorf("(len(dss.byName) + len(dss.byId)) != 0")
+// 	}
+// }
 
-func TestDataSource_setValue(t *testing.T) {
-	ds := &DataSource{Value: 123, UnknownMs: 456}
-	ds.setValue(math.Inf(-1))
-	if ds.UnknownMs != 0 {
-		t.Errorf("ds.UnknownMs != 0")
-	}
-}
+// func TestDataSource_setValue(t *testing.T) {
+// 	ds := &DataSource{value: 123, duration: 456}
+// 	ds.SetValue(math.Inf(-1))
+// 	if ds.UnknownMs != 0 {
+// 		t.Errorf("ds.UnknownMs != 0")
+// 	}
+// }
 
 func TestDataSource_addValue(t *testing.T) {
 	//ds := &DataSource{Value: 123}

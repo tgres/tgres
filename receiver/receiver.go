@@ -37,7 +37,7 @@ func init() {
 }
 
 type MatchingDSSpecFinder interface {
-	FindMatchingDSSpec(name string) *rrd.DSSpec
+	FindMatchingDSSpec(name string) *serde.DSSpec
 }
 
 type Receiver struct {
@@ -97,24 +97,24 @@ type dsCopyRequest struct {
 
 type dftDSFinder struct{}
 
-func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
-	return &rrd.DSSpec{
+func (_ *dftDSFinder) FindMatchingDSSpec(name string) *serde.DSSpec {
+	return &serde.DSSpec{
 		Step:      10 * time.Second,
 		Heartbeat: 2 * time.Hour,
-		RRAs: []*rrd.RRASpec{
-			&rrd.RRASpec{Function: rrd.WMEAN,
+		RRAs: []*serde.RRASpec{
+			&serde.RRASpec{Function: rrd.WMEAN,
 				Step: 10 * time.Second,
 				Size: 6 * time.Hour,
 			},
-			&rrd.RRASpec{Function: rrd.WMEAN,
+			&serde.RRASpec{Function: rrd.WMEAN,
 				Step: 1 * time.Minute,
 				Size: 24 * time.Hour,
 			},
-			&rrd.RRASpec{Function: rrd.WMEAN,
+			&serde.RRASpec{Function: rrd.WMEAN,
 				Step: 10 * time.Minute,
 				Size: 93 * 24 * time.Hour,
 			},
-			&rrd.RRASpec{Function: rrd.WMEAN,
+			&serde.RRASpec{Function: rrd.WMEAN,
 				Step: 24 * time.Hour,
 				Size: 1825 * 24 * time.Hour,
 			},

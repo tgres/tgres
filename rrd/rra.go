@@ -22,6 +22,15 @@ import (
 	"time"
 )
 
+type Consolidation int
+
+const (
+	WMEAN Consolidation = iota // Time-weighted average
+	MAX                        // Max
+	MIN                        // Min
+	LAST                       // Last
+)
+
 // RoundRobinArchive and all its parameters.
 type RoundRobinArchive struct {
 	Pdp

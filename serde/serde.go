@@ -24,7 +24,7 @@ import (
 // This thing knows how to load/save series in some storage
 type SerDe interface {
 	// Create a DS with name, and/or return it
-	CreateOrReturnDataSource(name string, dsSpec *rrd.DSSpec) (*rrd.DataSource, error)
+	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
 
 	FetchDataSource(id int64) (*rrd.DataSource, error)
 	FetchDataSourceByName(name string) (*rrd.DataSource, error)
@@ -39,4 +39,21 @@ type SerDe interface {
 	// Use the database to infer outside IPs of other connected clients
 	ListDbClientIps() ([]string, error)
 	MyDbAddr() (*string, error)
+}
+
+// DSSpec describes a DataSource. DSSpec is a schema that is used to
+// create the DataSource. This is necessary so that DS's can be crated
+// on-the-fly.
+type DSSpec struct {
+	Step      time.Duration
+	Heartbeat time.Duration
+	RRAs      []*RRASpec
+}
+
+// RRASpec is the RRA definition part of DSSpec.
+type RRASpec struct {
+	Function rrd.Consolidation
+	Step     time.Duration
+	Size     time.Duration
+	Xff      float64
 }
