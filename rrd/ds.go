@@ -117,6 +117,8 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 	return nil
 }
 
+// PointCount returns the sum of all point counts of every RRA in this
+// DS.
 func (ds *DataSource) PointCount() int {
 	total := 0
 	for _, rra := range ds.rras {
@@ -300,10 +302,8 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 	return nil
 }
 
-// ClearRRAs clears the data in all RRAs and sets the internal "last
-// flush" timestamp to current time (for the ShouldBeFlushed
-// funciton). It is meant to be called immedately after flushing the
-// DS to permanent storage.
+// ClearRRAs clears the data in all RRAs. It is meant to be called
+// immedately after flushing the DS to permanent storage.
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.rras {
 		rra.dps = make(map[int64]float64)
@@ -311,6 +311,10 @@ func (ds *DataSource) ClearRRAs() {
 	}
 }
 
+// MostlyCopy returns a copy of the DataSource that contains all the
+// fields that should be persisted when flushing. The idea is that
+// this copy can then be saved in a separate goroutine without having
+// to lock the DataSource.
 func (ds *DataSource) MostlyCopy() *DataSource {
 
 	// Only copy elements that change or needed for saving/rendering
