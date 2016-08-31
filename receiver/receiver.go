@@ -52,7 +52,7 @@ type Receiver struct {
 	dss                                *rrd.DataSources
 	Rcache                             *dsl.ReadCache
 	dpCh                               chan *rrd.IncomingDP     // incoming data point
-	workerChs                          []chan *rrd.IncomingDP   // incoming data point with ds
+	workerChs                          []chan *incomingDpWithDs // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest   // ds to flush
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	workerWg                           sync.WaitGroup
@@ -64,6 +64,11 @@ type Receiver struct {
 	ReportStats                        bool
 	ReportStatsPrefix                  string
 	pacedMetricCh                      chan *pacedMetric
+}
+
+type incomingDpWithDs struct {
+	dp *rrd.IncomingDP
+	ds *rrd.DataSource
 }
 
 type dsFlushRequest struct {
@@ -215,20 +220,19 @@ func (r *Receiver) stopPacedMetricWorker() {
 	log.Printf("stopPacedMetricWorker(): paced metric worker finished.")
 }
 
-func (r *Receiver) createOrLoadDS(dp *rrd.IncomingDP) error {
-	if dsSpec := r.DSSpecs.FindMatchingDSSpec(dp.Name); dsSpec != nil {
-		if ds, err := r.serde.CreateOrReturnDataSource(dp.Name, dsSpec); err == nil {
+func (r *Receiver) createOrLoadDS(name string) (*rrd.DataSource, error) {
+	if dsSpec := r.DSSpecs.FindMatchingDSSpec(name); dsSpec != nil {
+		ds, err := r.serde.CreateOrReturnDataSource(name, dsSpec)
+		if err == nil {
 			r.dss.Insert(ds)
 			// tell the cluster about it (TODO should Insert() do this?)
 			r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
 				return []cluster.DistDatum{&distDatumDataSource{r, ds}}, nil
 			})
-			dp.DS = ds
-		} else {
-			return err
 		}
+		return ds, err
 	}
-	return nil
+	return nil, nil // We couldn't find anything, which is not an error
 }
 
 func (r *Receiver) dispatcher() {
@@ -300,16 +304,22 @@ func (r *Receiver) dispatcher() {
 			continue
 		}
 
-		if dp.DS = r.dss.GetByName(dp.Name); dp.DS == nil {
-			if err := r.createOrLoadDS(dp); err != nil {
-				log.Printf("dispatcher(): createDataSource() error: %v", err)
+		var ds *rrd.DataSource = r.dss.GetByName(dp.Name)
+		if ds == nil {
+			var err error
+			if ds, err = r.createOrLoadDS(dp.Name); err != nil {
+				log.Printf("dispatcher(): createOrLoadDS() error: %v", err)
+				continue
+			}
+			if ds == nil {
+				log.Printf("dispatcher(): No spec matched name: %q, ignoring data point", dp.Name)
 				continue
 			}
 		}
 
-		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, dp.DS}) {
+		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, ds}) {
 			if node.Name() == r.cluster.LocalNode().Name() {
-				r.workerChs[dp.DS.Id()%int64(r.NWorkers)] <- dp // This dp is for us
+				r.workerChs[ds.Id()%int64(r.NWorkers)] <- &incomingDpWithDs{dp, ds} // This dp is for us
 			} else if dp.Hops == 0 { // we do not forward more than once
 				if node.Ready() {
 					dp.Hops++
@@ -386,13 +396,13 @@ func (r *Receiver) worker(id int64) {
 		select {
 		case <-periodicFlushCheck:
 			// Nothing to do here
-		case dp, ok := <-r.workerChs[id]:
+		case dpds, ok := <-r.workerChs[id]:
 			if ok {
-				ds = dp.DS // at this point dp.ds has to be already set
-				if err := dp.Process(); err == nil {
+				ds = dpds.ds // at this point ds has to be already set
+				if err := dpds.dp.Process(ds); err == nil {
 					recent[ds.Id()] = true
 				} else {
-					log.Printf("worker(%d): dp.process(%s) error: %v", id, dp.DS.Name(), err)
+					log.Printf("worker(%d): dp.process(%s) error: %v", id, ds.Name(), err)
 				}
 			} else {
 				channelClosed = true
@@ -450,12 +460,12 @@ func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
 
 func (r *Receiver) startWorkers() {
 
-	r.workerChs = make([]chan *rrd.IncomingDP, r.NWorkers)
+	r.workerChs = make([]chan *incomingDpWithDs, r.NWorkers)
 
 	log.Printf("Starting %d workers...", r.NWorkers)
 	r.startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
-		r.workerChs[i] = make(chan *rrd.IncomingDP, 1024)
+		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
 
 		go r.worker(int64(i))
 	}
