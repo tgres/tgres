@@ -25,16 +25,17 @@ import (
 // intermediate state (PDP).
 type DataSource struct {
 	Pdp
-	id          int64                // Id
-	name        string               // Series name
-	step        time.Duration        // Step (PDP) size
-	heartbeat   time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
-	lastUpdate  time.Time            // Last time we received an update (series time - can be in the past or future)
-	lastDs      float64              // Last final value we saw
-	rras        []*RoundRobinArchive // Array of Round Robin Archives
-	lastFlushRT time.Time            // Last time this DS was flushed (actual real time).
+	id         int64                // Id
+	name       string               // Series name
+	step       time.Duration        // Step (PDP) size
+	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
+	lastUpdate time.Time            // Last time we received an update (series time - can be in the past or future)
+	lastDs     float64              // Last final value we saw
+	rras       []*RoundRobinArchive // Array of Round Robin Archives
 }
 
+// NewDataSource returns a pointer to a new DataSource. This function
+// is meant primarily for internal use such as serde implementations.
 func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time, lds float64) *DataSource {
 	return &DataSource{
 		id:         id,
@@ -55,6 +56,8 @@ func (ds *DataSource) LastDs() float64                   { return ds.lastDs }
 func (ds *DataSource) RRAs() []*RoundRobinArchive        { return ds.rras }
 func (ds *DataSource) SetRRAs(rras []*RoundRobinArchive) { ds.rras = rras }
 
+// BestRRA examines the RRAs and returns the one that best matches the
+// given start, end and resolution (as number of points).
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
 	var result []*RoundRobinArchive
 
@@ -297,25 +300,15 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 	return nil
 }
 
+// ClearRRAs clears the data in all RRAs and sets the internal "last
+// flush" timestamp to current time (for the ShouldBeFlushed
+// funciton). It is meant to be called immedately after flushing the
+// DS to permanent storage.
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.rras {
 		rra.dps = make(map[int64]float64)
 		rra.start, rra.end = 0, 0
 	}
-	ds.lastFlushRT = time.Now()
-}
-
-func (ds *DataSource) ShouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
-	if ds.lastUpdate.IsZero() {
-		return false
-	}
-	pc := ds.PointCount()
-	if pc > maxCachedPoints {
-		return ds.lastFlushRT.Add(minCache).Before(time.Now())
-	} else if pc > 0 {
-		return ds.lastFlushRT.Add(maxCache).Before(time.Now())
-	}
-	return false
 }
 
 func (ds *DataSource) MostlyCopy() *DataSource {

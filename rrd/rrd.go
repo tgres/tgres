@@ -54,7 +54,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -141,89 +140,4 @@ func (dp *IncomingDP) Process(ds *DataSource) error {
 		return fmt.Errorf("Cannot process data point with nil DS.")
 	}
 	return ds.processIncomingDP(dp)
-}
-
-// A collection of data sources kept by an integer id as well as a
-// string name.
-type DataSources struct {
-	l      rwLocker
-	byName map[string]*DataSource
-	byId   map[int64]*DataSource
-}
-
-type rwLocker interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-}
-
-// Returns a new DataSources object. If locking is true, the resulting
-// DataSources will maintain a lock, otherwise there is no locking,
-// but the caller needs to ensure that it is never used concurrently
-// (e.g. always in the same goroutine).
-func NewDataSources(locking bool) *DataSources {
-	dss := &DataSources{
-		byId:   make(map[int64]*DataSource),
-		byName: make(map[string]*DataSource),
-	}
-	if locking {
-		dss.l = &sync.RWMutex{}
-	}
-	return dss
-}
-
-// GetByName rlocks and gets a DS pointer.
-func (dss *DataSources) GetByName(name string) *DataSource {
-	if dss.l != nil {
-		dss.l.RLock()
-		defer dss.l.RUnlock()
-	}
-	return dss.byName[name]
-}
-
-// GetById rlocks and gets a DS pointer.
-func (dss *DataSources) GetById(id int64) *DataSource {
-	if dss.l != nil {
-		dss.l.RLock()
-		defer dss.l.RUnlock()
-	}
-	return dss.byId[id]
-}
-
-// Insert locks and inserts a DS.
-func (dss *DataSources) Insert(ds *DataSource) {
-	if dss.l != nil {
-		dss.l.Lock()
-		defer dss.l.Unlock()
-	}
-	dss.byName[ds.name] = ds
-	dss.byId[ds.id] = ds
-}
-
-// List rlocks, then returns a slice of *DS
-func (dss *DataSources) List() []*DataSource {
-	if dss.l != nil {
-		dss.l.RLock()
-		defer dss.l.RUnlock()
-	}
-
-	result := make([]*DataSource, len(dss.byId))
-	n := 0
-	for _, ds := range dss.byId {
-		result[n] = ds
-		n++
-	}
-	return result
-}
-
-// This only deletes it from memory, it is still in
-// the database.
-func (dss *DataSources) Delete(ds *DataSource) {
-	if dss.l != nil {
-		dss.l.Lock()
-		defer dss.l.Unlock()
-	}
-
-	delete(dss.byName, ds.name)
-	delete(dss.byId, ds.id)
 }

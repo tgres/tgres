@@ -49,7 +49,7 @@ type Receiver struct {
 	StatFlushDuration                  time.Duration
 	StatsNamePrefix                    string
 	DSSpecs                            MatchingDSSpecFinder
-	dss                                *rrd.DataSources
+	dss                                *dataSources
 	Rcache                             *dsl.ReadCache
 	dpCh                               chan *rrd.IncomingDP     // incoming data point
 	workerChs                          []chan *incomingDpWithDs // incoming data point with ds
@@ -67,8 +67,8 @@ type Receiver struct {
 }
 
 type incomingDpWithDs struct {
-	dp *rrd.IncomingDP
-	ds *rrd.DataSource
+	dp  *rrd.IncomingDP
+	rds *receiverDs
 }
 
 type dsFlushRequest struct {
@@ -119,7 +119,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
 		DSSpecs:           &dftDSFinder{},
-		dss:               rrd.NewDataSources(false),
+		dss:               newDataSources(false),
 		Rcache:            dsl.NewReadCache(serde),
 		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
@@ -220,17 +220,18 @@ func (r *Receiver) stopPacedMetricWorker() {
 	log.Printf("stopPacedMetricWorker(): paced metric worker finished.")
 }
 
-func (r *Receiver) createOrLoadDS(name string) (*rrd.DataSource, error) {
+func (r *Receiver) createOrLoadDS(name string) (*receiverDs, error) {
 	if dsSpec := r.DSSpecs.FindMatchingDSSpec(name); dsSpec != nil {
 		ds, err := r.serde.CreateOrReturnDataSource(name, dsSpec)
+		var rds *receiverDs
 		if err == nil {
-			r.dss.Insert(ds)
+			rds = r.dss.Insert(ds)
 			// tell the cluster about it (TODO should Insert() do this?)
 			r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-				return []cluster.DistDatum{&distDatumDataSource{r, ds}}, nil
+				return []cluster.DistDatum{&distDatumDataSource{r, rds}}, nil
 			})
 		}
-		return ds, err
+		return rds, err
 	}
 	return nil, nil // We couldn't find anything, which is not an error
 }
@@ -304,22 +305,22 @@ func (r *Receiver) dispatcher() {
 			continue
 		}
 
-		var ds *rrd.DataSource = r.dss.GetByName(dp.Name)
-		if ds == nil {
+		var rds *receiverDs = r.dss.GetByName(dp.Name)
+		if rds == nil {
 			var err error
-			if ds, err = r.createOrLoadDS(dp.Name); err != nil {
+			if rds, err = r.createOrLoadDS(dp.Name); err != nil {
 				log.Printf("dispatcher(): createOrLoadDS() error: %v", err)
 				continue
 			}
-			if ds == nil {
+			if rds == nil {
 				log.Printf("dispatcher(): No spec matched name: %q, ignoring data point", dp.Name)
 				continue
 			}
 		}
 
-		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, ds}) {
+		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, rds}) {
 			if node.Name() == r.cluster.LocalNode().Name() {
-				r.workerChs[ds.Id()%int64(r.NWorkers)] <- &incomingDpWithDs{dp, ds} // This dp is for us
+				r.workerChs[rds.ds.Id()%int64(r.NWorkers)] <- &incomingDpWithDs{dp, rds} // This dp is for us
 			} else if dp.Hops == 0 { // we do not forward more than once
 				if node.Ready() {
 					dp.Hops++
@@ -389,7 +390,7 @@ func (r *Receiver) worker(id int64) {
 
 	for {
 		var (
-			ds            *rrd.DataSource
+			rds           *receiverDs
 			channelClosed bool
 		)
 
@@ -398,46 +399,46 @@ func (r *Receiver) worker(id int64) {
 			// Nothing to do here
 		case dpds, ok := <-r.workerChs[id]:
 			if ok {
-				ds = dpds.ds // at this point ds has to be already set
-				if err := dpds.dp.Process(ds); err == nil {
-					recent[ds.Id()] = true
+				rds = dpds.rds // at this point ds has to be already set
+				if err := dpds.dp.Process(rds.ds); err == nil {
+					recent[rds.ds.Id()] = true
 				} else {
-					log.Printf("worker(%d): dp.process(%s) error: %v", id, ds.Name(), err)
+					log.Printf("worker(%d): dp.process(%s) error: %v", id, rds.ds.Name(), err)
 				}
 			} else {
 				channelClosed = true
 			}
 		}
 
-		if ds == nil {
+		if rds == nil {
 			// periodic flush - check recent
 			if len(recent) > 0 {
 				if debug {
 					log.Printf("worker(%d): Periodic flush.", id)
 				}
 				for dsId, _ := range recent {
-					ds = r.dss.GetById(dsId)
-					if ds == nil {
+					rds = r.dss.GetById(dsId)
+					if rds == nil {
 						log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
 						delete(recent, dsId)
 						continue
 					}
-					if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
+					if rds.shouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 						if debug {
-							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, ds.Id())
+							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, rds.ds.Id())
 						}
-						r.flushDs(ds, false)
-						delete(recent, ds.Id())
+						r.flushDs(rds, false)
+						delete(recent, rds.ds.Id())
 					}
 				}
 			}
-		} else if ds.ShouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
+		} else if rds.shouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
 			// flush just this one ds
 			if debug {
-				log.Printf("worker(%d): Requesting flush of ds id: %d", id, ds.Id())
+				log.Printf("worker(%d): Requesting flush of ds id: %d", id, rds.ds.Id())
 			}
-			r.flushDs(ds, false)
-			delete(recent, ds.Id())
+			r.flushDs(rds, false)
+			delete(recent, rds.ds.Id())
 		}
 
 		if channelClosed {
@@ -446,16 +447,17 @@ func (r *Receiver) worker(id int64) {
 	}
 }
 
-func (r *Receiver) flushDs(ds *rrd.DataSource, block bool) {
-	fr := &dsFlushRequest{ds: ds.MostlyCopy()}
+func (r *Receiver) flushDs(rds *receiverDs, block bool) {
+	fr := &dsFlushRequest{ds: rds.ds.MostlyCopy()}
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
-	r.flusherChs[ds.Id()%int64(r.NWorkers)] <- fr
+	r.flusherChs[rds.ds.Id()%int64(r.NWorkers)] <- fr
 	if block {
 		<-fr.resp
 	}
-	ds.ClearRRAs()
+	rds.ds.ClearRRAs()
+	rds.lastFlushRT = time.Now()
 }
 
 func (r *Receiver) startWorkers() {
@@ -694,26 +696,26 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 // Implement cluster.DistDatum for data sources
 
 type distDatumDataSource struct {
-	r  *Receiver
-	ds *rrd.DataSource
+	r   *Receiver
+	rds *receiverDs
 }
 
 func (d *distDatumDataSource) Relinquish() error {
-	if !d.ds.LastUpdate().IsZero() {
-		d.r.flushDs(d.ds, true)
-		d.r.dss.Delete(d.ds)
+	if !d.rds.ds.LastUpdate().IsZero() {
+		d.r.flushDs(d.rds, true)
+		d.r.dss.Delete(d.rds)
 	}
 	return nil
 }
 
 func (d *distDatumDataSource) Acquire() error {
-	d.r.dss.Delete(d.ds) // it will get loaded afresh when needed
+	d.r.dss.Delete(d.rds) // it will get loaded afresh when needed
 	return nil
 }
 
-func (d *distDatumDataSource) Id() int64       { return d.ds.Id() }
+func (d *distDatumDataSource) Id() int64       { return d.rds.ds.Id() }
 func (d *distDatumDataSource) Type() string    { return "DataSource" }
-func (d *distDatumDataSource) GetName() string { return d.ds.Name() }
+func (d *distDatumDataSource) GetName() string { return d.rds.ds.Name() }
 
 // Implement cluster.DistDatum for stats
 
