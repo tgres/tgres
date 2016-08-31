@@ -20,25 +20,74 @@ import (
 	"time"
 )
 
-type pdp struct {
+// Pdp is a Primary Data Point. It provides intermediate state and
+// logic to interpolate store incoming DP data in a consolidated way,
+// using a choice of consolidations such as Weighted Mean, Min, Max or
+// Last.
+//
+// This is an illustration of how incoming data points are
+// consolidated into a PDP using weighted mean. The PDP below is 4
+// units long (the actual unit is not relevant). It shows a time
+// period during which 3 values (measurements) arrived: 1.0 at 1, 3.0
+// at 3 and 2.0 at 4. The final value of this PDP is 2.25.
+//
+//  ||    +---------+    ||
+//  ||    |	    3.0 +----||
+//  ||----+	        | 2.0||
+//  || 1.0|	        |    ||
+//  ||====+====+====+====||
+//   0    1    2    3     4  ---> time
+//
+// In this PDP 0.25 of the value is 1.0, 0.50 is 3.0 and 0.25 is 2.0,
+// for a total of 0.25*1 + 0.50*3 + 0.25*2 = 2.25.
+//
+// If a part of the data point is NaN, then that part does not
+// count. Even if NaN is at the end:
+//
+//  ||    +---------+    ||
+//  ||    |	     3.0|    ||
+//  ||----+	        | NaN||
+//  || 1.0|	        |    ||
+//  ||====+====+====+====||
+//   0    1    2    3     4  ---> time
+//
+// In the above PDP, the size is what is taken up by 1.0 and 3.0,
+// without the NaN. Thus 1/3 of the value is 1.0 and 2/3 of the value
+// is 3.0, for a total of 1/3*1 + 2/3*3 = 2.33333.
+//
+// An alternative way of looking at the above data point is that it is
+// simply shorter or has a shorter duration:
+//
+//  ||    +---------||
+//  ||    |      3.0||
+//  ||----+         ||
+//  || 1.0|         ||
+//  ||====+====+====||
+//   0    1    2    3     4  ---> time
+//
+// A datapoint must be all NaN for its value to be NaN.
+type Pdp struct {
 	value    float64
 	duration time.Duration
 }
 
-func (p *pdp) Value() float64 {
-	return p.value
+// NewPdp returns a pointer to a new PDP with value of NaN and
+// duration of 0.
+func NewPdp() *Pdp {
+	return &Pdp{value: math.NaN()}
 }
 
-func (p *pdp) Duration() time.Duration {
-	return p.duration
-}
+func (p *Pdp) Value() float64          { return p.value }
+func (p *Pdp) Duration() time.Duration { return p.duration }
 
-func (p *pdp) SetValue(val float64, dur time.Duration) {
+// SetValue sets both value and duration of the PDP
+func (p *Pdp) SetValue(val float64, dur time.Duration) {
 	p.value = val
 	p.duration = dur
 }
 
-func (p *pdp) AddValue(val float64, dur time.Duration) {
+// AddValue adds a value to a PDP using weighted mean.
+func (p *Pdp) AddValue(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
 			p.value = 0
@@ -49,7 +98,8 @@ func (p *pdp) AddValue(val float64, dur time.Duration) {
 	}
 }
 
-func (p *pdp) AddValueMax(val float64, dur time.Duration) {
+// AddValueMax adds a value using max.
+func (p *Pdp) AddValueMax(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
 			p.value = 0
@@ -61,7 +111,8 @@ func (p *pdp) AddValueMax(val float64, dur time.Duration) {
 	}
 }
 
-func (p *pdp) AddValueMin(val float64, dur time.Duration) {
+// AddValueMin adds a value using min.
+func (p *Pdp) AddValueMin(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
 			p.value = 0
@@ -73,7 +124,8 @@ func (p *pdp) AddValueMin(val float64, dur time.Duration) {
 	}
 }
 
-func (p *pdp) AddValueLast(val float64, dur time.Duration) {
+// AddValueLast replaces the current value.
+func (p *Pdp) AddValueLast(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
 			p.value = 0
@@ -83,18 +135,24 @@ func (p *pdp) AddValueLast(val float64, dur time.Duration) {
 	}
 }
 
-func (p *pdp) Reset() float64 {
+// Reset sets the value to NaN, duration to 0 and returns the value of
+// the PDP (before it was set to NaN).
+func (p *Pdp) Reset() float64 {
 	result := p.value
 	p.value = math.NaN()
 	p.duration = 0
 	return result
 }
 
+// ClockPdp is a PDP that uses current time to determine the duration.
 type ClockPdp struct {
-	pdp
+	Pdp
 	End time.Time
 }
 
+// AddValue adds a value using a weighted mean. The first time it is
+// called it only updates the End field and returns a zero value, the
+// second and on will use End to compute the duration.
 func (p *ClockPdp) AddValue(val float64) {
 	if p.End.IsZero() {
 		p.End = time.Now()
@@ -102,6 +160,6 @@ func (p *ClockPdp) AddValue(val float64) {
 	}
 	now := time.Now()
 	dur := now.Sub(p.End)
-	p.pdp.AddValue(val, dur)
+	p.Pdp.AddValue(val, dur)
 	p.End = now
 }
