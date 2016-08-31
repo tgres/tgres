@@ -51,7 +51,7 @@ type Receiver struct {
 	DSSpecs                            MatchingDSSpecFinder
 	dss                                *dataSources
 	Rcache                             *dsl.ReadCache
-	dpCh                               chan *rrd.IncomingDP     // incoming data point
+	dpCh                               chan *IncomingDP         // incoming data point
 	workerChs                          []chan *incomingDpWithDs // incoming data point with ds
 	flusherChs                         []chan *dsFlushRequest   // ds to flush
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
@@ -66,8 +66,22 @@ type Receiver struct {
 	pacedMetricCh                      chan *pacedMetric
 }
 
+// IncomingDP is incoming data, i.e. this is the form in which input
+// data is expected. This is not an internal representation of a data
+// point, it's the format in which they are expected to arrive and is
+// easy to convert to from most ant data point representation out
+// there. This data point representation has no notion of duration and
+// therefore must rely on some kind of an externally stored "last
+// update" time.
+type IncomingDP struct {
+	Name      string
+	TimeStamp time.Time
+	Value     float64
+	Hops      int
+}
+
 type incomingDpWithDs struct {
-	dp  *rrd.IncomingDP
+	dp  *IncomingDP
 	rds *receiverDs
 }
 
@@ -121,7 +135,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 		DSSpecs:           &dftDSFinder{},
 		dss:               newDataSources(false),
 		Rcache:            dsl.NewReadCache(serde),
-		dpCh:              make(chan *rrd.IncomingDP, 65536),     // so we can survive a graceful restart
+		dpCh:              make(chan *IncomingDP, 65536),         // so we can survive a graceful restart
 		aggCh:             make(chan *aggregator.Command, 65536), // ditto
 		ReportStats:       true,
 		ReportStatsPrefix: "tgres",
@@ -252,7 +266,7 @@ func (r *Receiver) dispatcher() {
 			m := <-rcv
 
 			// To get an event back:
-			var dp rrd.IncomingDP
+			var dp IncomingDP
 			if err := m.Decode(&dp); err != nil {
 				log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
 				continue
@@ -273,7 +287,7 @@ func (r *Receiver) dispatcher() {
 
 	for {
 
-		var dp *rrd.IncomingDP
+		var dp *IncomingDP
 		var ok bool
 		select {
 		case _, ok = <-clusterChgCh:
@@ -342,7 +356,7 @@ func (r *Receiver) dispatcher() {
 }
 
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
-	r.dpCh <- &rrd.IncomingDP{Name: name, TimeStamp: ts, Value: v}
+	r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
 }
 
 // TODO we could have shorthands such as:
@@ -400,7 +414,7 @@ func (r *Receiver) worker(id int64) {
 		case dpds, ok := <-r.workerChs[id]:
 			if ok {
 				rds = dpds.rds // at this point ds has to be already set
-				if err := dpds.dp.Process(rds.ds); err == nil {
+				if err := rds.ds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
 					recent[rds.ds.Id()] = true
 				} else {
 					log.Printf("worker(%d): dp.process(%s) error: %v", id, rds.ds.Name(), err)

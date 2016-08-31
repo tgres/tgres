@@ -51,7 +51,6 @@
 package rrd
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -79,28 +78,4 @@ type RRASpec struct {
 	Step     time.Duration
 	Size     time.Duration
 	Xff      float64
-}
-
-// IncomingDP is incoming data, i.e. this is the form in which input
-// data is expected. This is not an internal representation of a data
-// point, it's the format in which they are expected to arrive and is
-// easy to convert to from most ant data point representation out
-// there. This data point representation has no notion of duration and
-// therefore must rely on some kind of an externally stored "last
-// update" time.
-type IncomingDP struct {
-	Name      string
-	TimeStamp time.Time
-	Value     float64
-	Hops      int
-}
-
-// Process will append the data point to the the DS's archive(s). Once
-// an incoming data point is processed, it can be discarded, it's not
-// very useful for anything.
-func (dp *IncomingDP) Process(ds *DataSource) error {
-	if ds == nil {
-		return fmt.Errorf("Cannot process data point with nil DS.")
-	}
-	return ds.processIncomingDP(dp)
 }

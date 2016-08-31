@@ -76,6 +76,8 @@ func (rra *RoundRobinArchive) Width() int64      { return rra.width }
 func (rra *RoundRobinArchive) Start() int64      { return rra.start }
 func (rra *RoundRobinArchive) End() int64        { return rra.end }
 
+// NewRoundRobinArchive returns a pointer to a new RRAs. It is mostly
+// useful for serde implementations.
 func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
 	rra := &RoundRobinArchive{
 		id:          id,
@@ -102,6 +104,8 @@ func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width in
 	return rra, nil
 }
 
+// Step returns the RRA step as time.Duration given the DS step as
+// argument. (RRA itself only knows its step as a number of DS steps).
 func (rra *RoundRobinArchive) Step(dsStep time.Duration) time.Duration {
 	return dsStep * time.Duration(rra.stepsPerRow)
 }
@@ -130,6 +134,8 @@ func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
 	return new_rra
 }
 
+// SlotRow returns the row number given a slot number. This is mostly
+// useful in serde implementations.
 func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 	if slot%rra.width == 0 {
 		return slot / rra.width
@@ -138,23 +144,16 @@ func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 	}
 }
 
+// Begins returns the timestamp of the beginning of this RRA assuming
+// that that the argument "now" is within it. This will be a time
+// approximately but not exactly the RRA length ago, because it is
+// aligned on the RRA step boundary.
 func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.Time {
 	rraStart := now.Add(rraStep * time.Duration(rra.size) * -1).Truncate(rraStep)
 	if now.Equal(now.Truncate(rraStep)) {
 		rraStart = rraStart.Add(rraStep)
 	}
 	return rraStart
-}
-
-func (rra *RoundRobinArchive) SlotTimeStamp(ds *DataSource, slot int64) time.Time {
-	// TODO this is kind of ugly too...
-	slot = slot % int64(rra.size) // just in case
-	dsStepMs := ds.step.Nanoseconds() / 1000000
-	rraStepMs := dsStepMs * int64(rra.stepsPerRow)
-	latestMs := rra.latest.UnixNano() / 1000000
-	latestSlotN := (latestMs / rraStepMs) % int64(rra.size)
-	distance := (int64(rra.size) + latestSlotN - slot) % int64(rra.size)
-	return rra.latest.Add(time.Duration(rraStepMs*distance) * time.Millisecond * -1)
 }
 
 // DpsAsPGString returns data points as a PG-compatible array string
@@ -171,6 +170,7 @@ func (rra *RoundRobinArchive) DpsAsPGString(start, end int64) string {
 	return b.String()
 }
 
+// PointCount returns the number of points in this RRA.
 func (rra *RoundRobinArchive) PointCount() int {
 	return len(rra.dps)
 }

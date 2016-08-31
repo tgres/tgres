@@ -207,29 +207,29 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 	return nil
 }
 
-func (ds *DataSource) processIncomingDP(dp *IncomingDP) error {
+func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) error {
 
-	if math.IsInf(dp.Value, 0) {
-		return fmt.Errorf("±Inf is not a valid data point value: %#v", dp)
+	if math.IsInf(value, 0) {
+		return fmt.Errorf("±Inf is not a valid data point value: %v", value)
 	}
 
-	if dp.TimeStamp.Before(ds.lastUpdate) {
-		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", dp.TimeStamp, ds.lastUpdate)
+	if ts.Before(ds.lastUpdate) {
+		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", ts, ds.lastUpdate)
 	}
 
 	// ds value is NaN if HB is exceeded
-	if dp.TimeStamp.Sub(ds.lastUpdate) > ds.heartbeat {
-		dp.Value = math.NaN()
+	if ts.Sub(ds.lastUpdate) > ds.heartbeat {
+		value = math.NaN()
 	}
 
 	if !ds.lastUpdate.IsZero() { // Do not update a never-before-updated DS
-		if err := ds.updateRange(ds.lastUpdate, dp.TimeStamp, dp.Value); err != nil {
+		if err := ds.updateRange(ds.lastUpdate, ts, value); err != nil {
 			return err
 		}
 	}
 
-	ds.lastUpdate = dp.TimeStamp
-	ds.lastDs = dp.Value
+	ds.lastUpdate = ts
+	ds.lastDs = value
 
 	return nil
 }
