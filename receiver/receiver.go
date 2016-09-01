@@ -13,6 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package receiver manages the receiving end of the data. All of the
+// queueing, caching, perioding flushing and cluster forwarding logic
+// is here.
 package receiver
 
 import (

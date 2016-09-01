@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Cluster is a simple clustering package built on top of
-// https://godoc.org/github.com/hashicorp/memberlist.
+// Package cluster is a simplistic clustering implementaion built on
+// top of https://godoc.org/github.com/hashicorp/memberlist.
 //
 // The assumption behind this package is that you have identical
 // nodes, each responsible for a certain part of the data, a datum,

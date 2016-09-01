@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Tgres is a tool for receiving and reporting on simple time series
+// written in Go which uses PostgreSQL for storage.
 package main
 
 import (

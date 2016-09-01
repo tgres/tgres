@@ -13,7 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// NOTE: No locking!
+// Package aggregator provides the ability to aggregate data points from
+// various sources and passing the consolidated value on to tgres at a
+// pre-defined interval.
 package aggregator
 
 import (

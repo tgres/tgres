@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package http provides HTTP functionality for querying TS data as
+// well as submitting data points to a receiver.
 package http
 
 import (
