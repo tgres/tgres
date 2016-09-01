@@ -127,9 +127,6 @@ func (p *Pdp) AddValueMin(val float64, dur time.Duration) {
 // AddValueLast replaces the current value.
 func (p *Pdp) AddValueLast(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
-		if math.IsNaN(p.value) {
-			p.value = 0
-		}
 		p.value = val
 		p.duration = p.duration + dur
 	}

@@ -67,13 +67,13 @@ func TestPdp_AddValue(t *testing.T) {
 			math.Inf(1): 876,                // +Inf, not 0
 		} {
 			dp := NewPdp()
-			dp.SetValue(v1, d1)
 
 			var (
 				ev float64       // expected value
 				ed time.Duration // expected duration
 			)
 
+			// AddValue()
 			if math.IsNaN(v2) || d2 == 0 {
 				ev = v1
 				ed = d1
@@ -86,11 +86,81 @@ func TestPdp_AddValue(t *testing.T) {
 				ed = d1 + d2
 			}
 
+			dp.SetValue(v1, d1)
 			dp.AddValue(v2, d2)
 			if (!math.IsNaN(ev) && !math.IsNaN(dp.value)) && ev != dp.value || (math.IsNaN(ev) && !math.IsNaN(dp.value) || (!math.IsNaN(ev) && math.IsNaN(dp.value))) {
 				t.Errorf("AddValue: (%v, %v) + (%v, %v) != (%v, %v) but is (%v, %v)", v1, d1, v2, d2, ev, ed, dp.value, dp.duration)
 			}
+
+			// Reset()
+			dp.Reset()
+			if !math.IsNaN(dp.value) || dp.duration != 0 {
+				t.Errorf("Reset: dp.value != NaN || dp.duration != 0: (%v, %v)", dp.value, dp.duration)
+			}
+
+			// AddValueMax()
+			if math.IsNaN(v2) || d2 == 0 {
+				ev = v1
+				ed = d1
+			} else {
+				adj_v1 := v1
+				if math.IsNaN(adj_v1) {
+					adj_v1 = 0
+				}
+				ev = adj_v1
+				if v2 > adj_v1 {
+					ev = v2
+				}
+				ed = d1 + d2
+			}
+			dp.SetValue(v1, d1)
+			dp.AddValueMax(v2, d2)
+			if (!math.IsNaN(ev) && !math.IsNaN(dp.value)) && ev != dp.value || (math.IsNaN(ev) && !math.IsNaN(dp.value) || (!math.IsNaN(ev) && math.IsNaN(dp.value))) {
+				t.Errorf("AddValueMax: (%v, %v) + (%v, %v) != (%v, %v) but is (%v, %v)", v1, d1, v2, d2, ev, ed, dp.value, dp.duration)
+			}
+
+			// Reset()
+			dp.Reset()
+
+			// AddValueMin()
+			if math.IsNaN(v2) || d2 == 0 {
+				ev = v1
+				ed = d1
+			} else {
+				adj_v1 := v1
+				if math.IsNaN(adj_v1) {
+					adj_v1 = 0
+				}
+				ev = adj_v1
+				if v2 < adj_v1 {
+					ev = v2
+				}
+				ed = d1 + d2
+			}
+
+			dp.SetValue(v1, d1)
+			dp.AddValueMin(v2, d2)
+			if (!math.IsNaN(ev) && !math.IsNaN(dp.value)) && ev != dp.value || (math.IsNaN(ev) && !math.IsNaN(dp.value) || (!math.IsNaN(ev) && math.IsNaN(dp.value))) {
+				t.Errorf("AddValueMin: (%v, %v) + (%v, %v) != (%v, %v) but is (%v, %v)", v1, d1, v2, d2, ev, ed, dp.value, dp.duration)
+			}
+
+			// Reset()
+			dp.Reset()
+
+			// AddValueLast()
+			if math.IsNaN(v2) || d2 == 0 {
+				ev = v1
+				ed = d1
+			} else {
+				ev = v2
+				ed = d1 + d2
+			}
+
+			dp.SetValue(v1, d1)
+			dp.AddValueLast(v2, d2)
+			if (!math.IsNaN(ev) && !math.IsNaN(dp.value)) && ev != dp.value || (math.IsNaN(ev) && !math.IsNaN(dp.value) || (!math.IsNaN(ev) && math.IsNaN(dp.value))) {
+				t.Errorf("AddValueLast: (%v, %v) + (%v, %v) != (%v, %v) but is (%v, %v)", v1, d1, v2, d2, ev, ed, dp.value, dp.duration)
+			}
 		}
 	}
-
 }
