@@ -55,12 +55,14 @@ func TestPdp_SetValue(t *testing.T) {
 func TestPdp_AddValue(t *testing.T) {
 	for v1, d1 := range map[float64]time.Duration{ // Starting values
 		456:          123 * time.Second, // Just two numbers
+		-345:         123 * time.Second, // A negative value
 		math.NaN():   0,                 // Empty dp
 		math.NaN():   567,               // NaN with some duration
 		math.Inf(-1): 789,               // -Inf with some duration
 	} {
 		for v2, d2 := range map[float64]time.Duration{ // Values we add
 			567:         8910 * time.Second, // Just two numbers
+			-456:        8910 * time.Second, // Just two numbers
 			math.NaN():  0,                  // NaN, 0
 			math.NaN():  234,                // NaN, not 0
 			234:         0,                  // not 0, 0
@@ -99,6 +101,9 @@ func TestPdp_AddValue(t *testing.T) {
 			}
 
 			// AddValueMax()
+			if !math.IsNaN(v1) && !math.IsNaN(v2) {
+				v2 = v1 + v2 // to catch the code within if
+			}
 			if math.IsNaN(v2) || d2 == 0 {
 				ev = v1
 				ed = d1
@@ -123,6 +128,9 @@ func TestPdp_AddValue(t *testing.T) {
 			dp.Reset()
 
 			// AddValueMin()
+			if !math.IsNaN(v1) && !math.IsNaN(v2) {
+				v2 = v1 - v2 // to catch the code within if
+			}
 			if math.IsNaN(v2) || d2 == 0 {
 				ev = v1
 				ed = d1
@@ -162,5 +170,21 @@ func TestPdp_AddValue(t *testing.T) {
 				t.Errorf("AddValueLast: (%v, %v) + (%v, %v) != (%v, %v) but is (%v, %v)", v1, d1, v2, d2, ev, ed, dp.value, dp.duration)
 			}
 		}
+	}
+}
+
+func TestClockPdp_AddValue(t *testing.T) {
+	dp := &ClockPdp{}
+	dp.AddValue(123)
+	if dp.value != 0 {
+		t.Errorf("ClockPdp.AddValue: first AddValue should not set a value.")
+	}
+	if dp.End.IsZero() {
+		t.Errorf("ClockPdp.AddValue: first AddValue should set End.")
+	}
+	end := dp.End
+	dp.AddValue(123)
+	if end.Equal(dp.End) || end.After(dp.End) {
+		t.Errorf("ClockPdp.AddValue: after 2nd AddValue end.Equal(dp.End) || end.After(dp.End). end: %v dp.End: %v", end, dp.End)
 	}
 }
