@@ -165,7 +165,7 @@ func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.
 	return rraStart
 }
 
-// DpsAsPGString returns data points as a PG-compatible array string
+// DpsAsPGString returns data points as a PostgreSQL-compatible array string
 func (rra *RoundRobinArchive) DpsAsPGString(start, end int64) string {
 	var b bytes.Buffer
 	b.WriteString("{")
