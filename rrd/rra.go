@@ -119,27 +119,24 @@ func (rra *RoundRobinArchive) Step(dsStep time.Duration) time.Duration {
 	return dsStep * time.Duration(rra.stepsPerRow)
 }
 
-func (rra *RoundRobinArchive) mostlyCopy() *RoundRobinArchive {
-
-	// Only copy elements that change or needed for saving/rendering
-	new_rra := new(RoundRobinArchive)
-	new_rra.id = rra.id
-	new_rra.dsId = rra.dsId
-	new_rra.stepsPerRow = rra.stepsPerRow
-	new_rra.size = rra.size
-	new_rra.value = rra.value
-	new_rra.duration = rra.duration
-	new_rra.latest = rra.latest
-	new_rra.start = rra.start
-	new_rra.end = rra.end
-	new_rra.size = rra.size
-	new_rra.width = rra.width
-	new_rra.dps = make(map[int64]float64)
-
+func (rra *RoundRobinArchive) copy() *RoundRobinArchive {
+	new_rra := &RoundRobinArchive{
+		Pdp:         Pdp{value: rra.value, duration: rra.duration},
+		id:          rra.id,
+		dsId:        rra.dsId,
+		cf:          rra.cf,
+		stepsPerRow: rra.stepsPerRow,
+		size:        rra.size,
+		latest:      rra.latest,
+		xff:         rra.xff,
+		width:       rra.width,
+		start:       rra.start,
+		end:         rra.end,
+		dps:         make(map[int64]float64),
+	}
 	for k, v := range rra.dps {
 		new_rra.dps[k] = v
 	}
-
 	return new_rra
 }
 

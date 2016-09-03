@@ -16,11 +16,12 @@
 package rrd
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
 
-func Test_NewRoundRobinArchive(t *testing.T) {
+func Test_RoundRobinArchive1(t *testing.T) {
 	var (
 		id, dsId, stepsPerRow, size, width int64
 		cf                                 string
@@ -78,4 +79,40 @@ func Test_NewRoundRobinArchive(t *testing.T) {
 	if rra.Step(dsStep) != time.Duration(rra.stepsPerRow)*dsStep {
 		t.Errorf("rra.Step(%v) != time.Duration(rra.stepsPerRow)*%v", dsStep, dsStep)
 	}
+
+	// copy()
+	cpy := rra.copy()
+	if !reflect.DeepEqual(cpy, rra) {
+		t.Errorf("rra.copy() is not a copy")
+	}
+
+	// SlotRow()
+	var slot int64
+	rra.width, slot = 10, 20
+	if rra.SlotRow(slot) != slot/rra.width {
+		t.Errorf("SlotRow: width %v slot %v != %v (but %v)", rra.width, slot, rra.width/slot, rra.SlotRow(slot))
+	}
+	rra.width, slot = 15, 20
+	if rra.SlotRow(slot) != slot/rra.width+1 {
+		t.Errorf("SlotRow: width %v slot %v != %v (but %v)", rra.width, slot, rra.width/slot+1, rra.SlotRow(slot))
+	}
+
+	// Begins()
+	// Step 60s Size 10 => 600s
+	now := time.Unix(1472700000, 0)
+	rra.size = 9
+	rraStep := 61 * time.Second
+	et := time.Unix(1472699394, 0)
+	begins := rra.Begins(now, rraStep)
+	if !et.Equal(begins) {
+		t.Errorf("Begins: expecting %v, but got %v", et, begins)
+	}
+	rra.size = 10
+	rraStep = 60 * time.Second
+	et = time.Unix(1472699460, 0)
+	begins = rra.Begins(now, rraStep)
+	if !et.Equal(begins) {
+		t.Errorf("Begins: expecting %v, but got %v", et, begins)
+	}
+
 }

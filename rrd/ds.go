@@ -330,7 +330,7 @@ func (ds *DataSource) MostlyCopy() *DataSource {
 	new_ds.rras = make([]*RoundRobinArchive, len(ds.rras))
 
 	for n, rra := range ds.rras {
-		new_ds.rras[n] = rra.mostlyCopy()
+		new_ds.rras[n] = rra.copy()
 	}
 
 	return new_ds
