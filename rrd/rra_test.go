@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-func Test_RoundRobinArchive1(t *testing.T) {
+func Test_RoundRobinArchive(t *testing.T) {
 	var (
 		id, dsId, stepsPerRow, size, width int64
 		cf                                 string
@@ -36,7 +36,7 @@ func Test_RoundRobinArchive1(t *testing.T) {
 		t.Errorf("Invalid cf %q did not cause an error")
 	}
 
-	// Again, his time good data
+	// Again, this time good data
 	for _, cf = range []string{"MIN", "MAX", "LAST", "WMEAN"} {
 		rra, err = NewRoundRobinArchive(id, dsId, cf, stepsPerRow, size, width, xff, latest)
 		if err != nil {
@@ -56,6 +56,7 @@ func Test_RoundRobinArchive1(t *testing.T) {
 		t.Errorf("NewRoundRobinArchive: len(rra.dps) == 0")
 	}
 
+	// Accessors
 	if rra.Id() != rra.id {
 		t.Errorf("rra.Id(): %v  != rra.id: %v", rra.Id(), rra.id)
 	}

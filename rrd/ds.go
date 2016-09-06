@@ -243,8 +243,10 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 		rraStep := rra.Step(ds.step)
 
 		// currentBegin is a cursor pointing at the beginning of the
-		// current slot, currentEnd points at its end
-		currentBegin := rra.Begins(periodBegin, rraStep)
+		// current slot, currentEnd points at its end. We start out
+		// with currentBegin pointing at the slot one RRA-length ago
+		// from periodEnd.
+		currentBegin := rra.Begins(periodEnd, rraStep)
 
 		// move the cursor up to at least the periodBegin
 		if periodBegin.After(currentBegin) {
@@ -306,9 +308,12 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 // immedately after flushing the DS to permanent storage.
 func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.rras {
-		rra.dps = make(map[int64]float64)
+		if len(rra.dps) > 0 {
+			rra.dps = make(map[int64]float64)
+		}
 		rra.start, rra.end = 0, 0
 	}
+	ds.lastUpdate = time.Time{}
 }
 
 // MostlyCopy returns a copy of the DataSource that contains all the

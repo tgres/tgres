@@ -338,21 +338,25 @@ func (r *Receiver) dispatcher() {
 		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, rds}) {
 			if node.Name() == r.cluster.LocalNode().Name() {
 				r.workerChs[rds.ds.Id()%int64(r.NWorkers)] <- &incomingDpWithDs{dp, rds} // This dp is for us
-			} else if dp.Hops == 0 { // we do not forward more than once
-				if node.Ready() {
-					dp.Hops++
-					if msg, err := cluster.NewMsg(node, dp); err == nil {
-						snd <- msg
-						r.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
+			} else {
+				if dp.Hops == 0 { // we do not forward more than once
+					if node.Ready() {
+						dp.Hops++
+						if msg, err := cluster.NewMsg(node, dp); err == nil {
+							snd <- msg
+							r.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
+						} else {
+							log.Printf("dispatcher(): Encoding error forwarding a data point: %v", err)
+						}
 					} else {
-						log.Printf("dispatcher(): Encoding error forwarding a data point: %v", err)
+						// This should be a very rare thing
+						log.Printf("dispatcher(): Returning the data point to dispatcher!")
+						time.Sleep(100 * time.Millisecond)
+						r.dpCh <- dp
 					}
-				} else {
-					// This should be a very rare thing
-					log.Printf("dispatcher(): Returning the data point to dispatcher!")
-					time.Sleep(100 * time.Millisecond)
-					r.dpCh <- dp
 				}
+				// Always clear RRAs to prevent it from being saved
+				rds.ds.ClearRRAs()
 			}
 		}
 	}
