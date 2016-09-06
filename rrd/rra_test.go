@@ -81,6 +81,7 @@ func Test_RoundRobinArchive1(t *testing.T) {
 	}
 
 	// copy()
+	rra.dps[1] = 123.45
 	cpy := rra.copy()
 	if !reflect.DeepEqual(cpy, rra) {
 		t.Errorf("rra.copy() is not a copy")
@@ -115,4 +116,14 @@ func Test_RoundRobinArchive1(t *testing.T) {
 		t.Errorf("Begins: expecting %v, but got %v", et, begins)
 	}
 
+	// DpsAsPGString
+	expect := "{123.45,0}"
+	if rra.DpsAsPGString(1, 2) != expect {
+		t.Errorf("DpsAsPGString() didn't return %q", expect)
+	}
+
+	// PointCount
+	if rra.PointCount() != len(rra.dps) {
+		t.Errorf("PointCount != rra.dps")
+	}
 }

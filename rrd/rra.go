@@ -132,7 +132,7 @@ func (rra *RoundRobinArchive) copy() *RoundRobinArchive {
 		width:       rra.width,
 		start:       rra.start,
 		end:         rra.end,
-		dps:         make(map[int64]float64),
+		dps:         make(map[int64]float64, len(rra.dps)),
 	}
 	for k, v := range rra.dps {
 		new_rra.dps[k] = v
