@@ -835,7 +835,7 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := rra.Begins(rra.Latest(), rra.Step())
+	rraEarliest := rra.Begins(rra.Latest())
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest

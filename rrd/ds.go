@@ -61,16 +61,14 @@ func (ds *DataSource) SetRRAs(rras []*RoundRobinArchive) { ds.rras = rras }
 func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
 	var result []*RoundRobinArchive
 
+	// Any RRA include start?
 	for _, rra := range ds.rras {
-		// is start within this RRA's range?
-		rraBegin := rra.latest.Add(rra.step * time.Duration(rra.size) * -1)
-		if start.After(rraBegin) {
+		if rra.Includes(start) {
 			result = append(result, rra)
 		}
 	}
 
-	if len(result) == 0 {
-		// if we found nothing above, simply select the longest RRA
+	if len(result) == 0 { // if we found nothing above, simply select the longest RRA
 		var longest *RoundRobinArchive
 		for _, rra := range ds.rras {
 			if longest == nil || longest.size*int64(longest.step) < rra.size*int64(rra.step) {
@@ -244,7 +242,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 		// from periodEnd, then we move it up to periodBegin if it is
 		// later. This way we end up with the latest of periodBegin or
 		// rra-begin.
-		currentBegin := rra.Begins(periodEnd, rra.step)
+		currentBegin := rra.Begins(periodEnd)
 		if periodBegin.After(currentBegin) {
 			currentBegin = periodBegin
 		}

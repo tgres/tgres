@@ -148,10 +148,10 @@ func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
 // that that the argument "now" is within it. This will be a time
 // approximately but not exactly the RRA length ago, because it is
 // aligned on the RRA step boundary.
-func (rra *RoundRobinArchive) Begins(now time.Time, rraStep time.Duration) time.Time {
-	rraStart := now.Add(rraStep * time.Duration(rra.size) * -1).Truncate(rraStep)
-	if now.Equal(now.Truncate(rraStep)) {
-		rraStart = rraStart.Add(rraStep)
+func (rra *RoundRobinArchive) Begins(now time.Time) time.Time {
+	rraStart := now.Add(rra.step * time.Duration(rra.size) * -1).Truncate(rra.step)
+	if now.Equal(now.Truncate(rra.step)) {
+		rraStart = rraStart.Add(rra.step)
 	}
 	return rraStart
 }
@@ -173,4 +173,10 @@ func (rra *RoundRobinArchive) DpsAsPGString(start, end int64) string {
 // PointCount returns the number of points in this RRA.
 func (rra *RoundRobinArchive) PointCount() int {
 	return len(rra.dps)
+}
+
+// Includes tells whether the given time is within the RRA
+func (rra *RoundRobinArchive) Includes(t time.Time) bool {
+	begin := rra.Begins(rra.latest)
+	return t.After(begin) && !t.After(rra.latest)
 }

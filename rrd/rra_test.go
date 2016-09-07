@@ -102,16 +102,16 @@ func Test_RoundRobinArchive(t *testing.T) {
 	// Step 60s Size 10 => 600s
 	now := time.Unix(1472700000, 0)
 	rra.size = 9
-	rraStep := 61 * time.Second
+	rra.step = 61 * time.Second
 	et := time.Unix(1472699394, 0)
-	begins := rra.Begins(now, rraStep)
+	begins := rra.Begins(now)
 	if !et.Equal(begins) {
 		t.Errorf("Begins: expecting %v, but got %v", et, begins)
 	}
 	rra.size = 10
-	rraStep = 60 * time.Second
+	rra.step = 60 * time.Second
 	et = time.Unix(1472699460, 0)
-	begins = rra.Begins(now, rraStep)
+	begins = rra.Begins(now)
 	if !et.Equal(begins) {
 		t.Errorf("Begins: expecting %v, but got %v", et, begins)
 	}
@@ -125,5 +125,11 @@ func Test_RoundRobinArchive(t *testing.T) {
 	// PointCount
 	if rra.PointCount() != len(rra.dps) {
 		t.Errorf("PointCount != rra.dps")
+	}
+
+	// Includes
+	it := rra.latest.Add(-60 * time.Second)
+	if !rra.Includes(it) {
+		t.Errorf("Includes: %v should be included. rra.latest: %v rra.Begins(rra.latest): %v", it, rra.latest, rra.Begins(rra.latest))
 	}
 }
