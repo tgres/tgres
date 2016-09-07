@@ -137,4 +137,11 @@ func Test_DataSource_BestRRA(t *testing.T) {
 		t.Errorf("BestRRA: The % step should have been selected as the smallest resolution (no points), instead we got %#v", ten, best)
 	}
 
+	// Test nil
+	ds.SetRRAs([]*RoundRobinArchive{})
+	best = ds.BestRRA(start, end, points)
+	if best != nil {
+		t.Errorf("BestRRA should have returned nil, got: %#v", best)
+	}
+
 }

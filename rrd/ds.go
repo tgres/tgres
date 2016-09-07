@@ -75,7 +75,9 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 				longest = rra
 			}
 		}
-		result = append(result, longest)
+		if longest != nil {
+			result = append(result, longest)
+		}
 	}
 
 	if len(result) == 1 {
