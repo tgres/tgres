@@ -246,7 +246,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 		// current slot, currentEnd points at its end. We start out
 		// with currentBegin pointing at the slot one RRA-length ago
 		// from periodEnd.
-		currentBegin := rra.Begins(periodBegin, rraStep)
+		currentBegin := rra.Begins(periodEnd, rraStep)
 
 		// move the cursor up to at least the periodBegin
 		if periodBegin.After(currentBegin) {
@@ -305,15 +305,23 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 }
 
 // ClearRRAs clears the data in all RRAs. It is meant to be called
-// immedately after flushing the DS to permanent storage.
-func (ds *DataSource) ClearRRAs() {
+// immedately after flushing the DS to permanent storage. If clearLU
+// flag is true, then lastUpdate will get zeroed-out. (Normally you do
+// not want to reset lastUpdate so that PDP is updated correctly). A
+// DS with a zero lastUpdate is never saved, this is a prevention
+// measure for nodes that are only forwarding events, preventing them
+// from at some point saving their stale state and overwriting good
+// data..
+func (ds *DataSource) ClearRRAs(clearLU bool) {
 	for _, rra := range ds.rras {
 		if len(rra.dps) > 0 {
 			rra.dps = make(map[int64]float64)
 		}
 		rra.start, rra.end = 0, 0
 	}
-	ds.lastUpdate = time.Time{}
+	if clearLU {
+		ds.lastUpdate = time.Time{}
+	}
 }
 
 // MostlyCopy returns a copy of the DataSource that contains all the

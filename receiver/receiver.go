@@ -359,7 +359,7 @@ func (r *Receiver) dispatcher() {
 				if pc := rds.ds.PointCount(); pc > 0 {
 					log.Printf("dispatcher(): WARNING: Clearing DS with PointCount > 0: %v", pc)
 				}
-				rds.ds.ClearRRAs()
+				rds.ds.ClearRRAs(true)
 			}
 		}
 	}
@@ -480,7 +480,7 @@ func (r *Receiver) flushDs(rds *receiverDs, block bool) {
 	if block {
 		<-fr.resp
 	}
-	rds.ds.ClearRRAs()
+	rds.ds.ClearRRAs(false)
 	rds.lastFlushRT = time.Now()
 }
 
