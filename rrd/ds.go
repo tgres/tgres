@@ -246,7 +246,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 		// current slot, currentEnd points at its end. We start out
 		// with currentBegin pointing at the slot one RRA-length ago
 		// from periodEnd.
-		currentBegin := rra.Begins(periodEnd, rraStep)
+		currentBegin := rra.Begins(periodBegin, rraStep)
 
 		// move the cursor up to at least the periodBegin
 		if periodBegin.After(currentBegin) {
