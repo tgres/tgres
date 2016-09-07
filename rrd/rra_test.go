@@ -128,8 +128,16 @@ func Test_RoundRobinArchive(t *testing.T) {
 	}
 
 	// Includes
-	it := rra.latest.Add(-60 * time.Second)
+	it := rra.latest.Add(-time.Second)
 	if !rra.Includes(it) {
 		t.Errorf("Includes: %v should be included. rra.latest: %v rra.Begins(rra.latest): %v", it, rra.latest, rra.Begins(rra.latest))
+	}
+	it = rra.latest.Add(time.Second)
+	if rra.Includes(it) {
+		t.Errorf("Includes: %v should NOT be included. rra.latest: %v rra.Begins(rra.latest): %v", it, rra.latest, rra.Begins(rra.latest))
+	}
+	it = rra.Begins(latest).Add(-time.Second)
+	if rra.Includes(it) {
+		t.Errorf("Includes: %v should NOT be included. rra.latest: %v rra.Begins(rra.latest): %v", it, rra.latest, rra.Begins(rra.latest))
 	}
 }

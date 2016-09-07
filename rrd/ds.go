@@ -78,39 +78,43 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 		result = append(result, longest)
 	}
 
-	if len(result) > 1 && points > 0 {
-		// select the one with the closest matching resolution
-		expectedStep := end.Sub(start) / time.Duration(points)
-		var best *RoundRobinArchive
-		for _, rra := range result {
-			if best == nil {
-				best = rra
-			} else {
-				rraDiff := math.Abs(float64(expectedStep - rra.step))
-				bestDiff := math.Abs(float64(expectedStep - best.step))
-				if bestDiff > rraDiff {
-					best = rra
-				}
-			}
-		}
-		return best
-	} else if len(result) == 1 {
-		return result[0]
-	} else {
-		// select maximum resolution (i.e. smallest step)?
-		var best *RoundRobinArchive
-		for _, rra := range result {
-			if best == nil {
-				best = rra
-			} else {
-				if best.step > rra.step {
-					best = rra
-				}
-			}
-		}
-		return best
+	if len(result) == 1 {
+		return result[0] // nothing else to do
 	}
 
+	if len(result) > 1 {
+		if points > 0 {
+			// select the one with the closest matching resolution
+			expectedStep := end.Sub(start) / time.Duration(points)
+			var best *RoundRobinArchive
+			for _, rra := range result {
+				if best == nil {
+					best = rra
+				} else {
+					rraDiff := math.Abs(float64(expectedStep - rra.step))
+					bestDiff := math.Abs(float64(expectedStep - best.step))
+					if bestDiff > rraDiff {
+						best = rra
+					}
+				}
+			}
+			return best
+		} else { // no points specified, select maximum resolution (i.e. smallest step)
+			var best *RoundRobinArchive
+			for _, rra := range result {
+				if best == nil {
+					best = rra
+				} else {
+					if best.step > rra.step {
+						best = rra
+					}
+				}
+			}
+			return best
+		}
+	}
+
+	// Sorry, nothing
 	return nil
 }
 
