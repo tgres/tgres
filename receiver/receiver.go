@@ -356,6 +356,9 @@ func (r *Receiver) dispatcher() {
 					}
 				}
 				// Always clear RRAs to prevent it from being saved
+				if pc := rds.ds.PointCount(); pc > 0 {
+					log.Printf("dispatcher(): WARNING: Clearing DS with PointCount > 0: %v", pc)
+				}
 				rds.ds.ClearRRAs()
 			}
 		}
