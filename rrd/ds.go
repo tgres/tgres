@@ -89,7 +89,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 				best = rra
 			} else {
 				rraDiff := math.Abs(float64(expectedStep - rra.step))
-				bestDiff := math.Abs(float64(expectedStep - rra.step))
+				bestDiff := math.Abs(float64(expectedStep - best.step))
 				if bestDiff > rraDiff {
 					best = rra
 				}
