@@ -60,10 +60,17 @@ func Test_DataSource(t *testing.T) {
 		t.Errorf("ds.LastDs() != ds.lastDs")
 	}
 
-	rras := []*RoundRobinArchive{&RoundRobinArchive{id: 1}}
+	rras := []*RoundRobinArchive{&RoundRobinArchive{}}
 	ds.SetRRAs(rras)
 	if !reflect.DeepEqual(ds.RRAs(), rras) {
 		t.Errorf("ds.RRAs() != ds.rras")
+	}
+
+	ds.SetRRAs([]*RoundRobinArchive{&RoundRobinArchive{dps: map[int64]float64{1: 1, 2: 2, 3: 3}}})
+	// PointCount
+	pc := ds.PointCount()
+	if pc != 3 {
+		t.Errorf("ds.PointCount: should return 3, got %v", pc)
 	}
 }
 
