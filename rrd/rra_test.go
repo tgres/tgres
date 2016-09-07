@@ -23,22 +23,23 @@ import (
 
 func Test_RoundRobinArchive(t *testing.T) {
 	var (
-		id, dsId, stepsPerRow, size, width int64
-		cf                                 string
-		xff                                float32
-		latest                             time.Time
+		id, dsId, size, width int64
+		step                  time.Duration
+		cf                    string
+		xff                   float32
+		latest                time.Time
 	)
 
-	id, dsId, stepsPerRow, size, width, cf, xff, latest = 1, 3, 10, 100, 30, "FOOBAR", 0.5, time.Now()
+	id, dsId, step, size, width, cf, xff, latest = 1, 3, 10*time.Second, 100, 30, "FOOBAR", 0.5, time.Now()
 
-	rra, err := NewRoundRobinArchive(id, dsId, cf, stepsPerRow, size, width, xff, latest)
+	rra, err := NewRoundRobinArchive(id, dsId, cf, step, size, width, xff, latest)
 	if err == nil {
 		t.Errorf("Invalid cf %q did not cause an error")
 	}
 
 	// Again, this time good data
 	for _, cf = range []string{"MIN", "MAX", "LAST", "WMEAN"} {
-		rra, err = NewRoundRobinArchive(id, dsId, cf, stepsPerRow, size, width, xff, latest)
+		rra, err = NewRoundRobinArchive(id, dsId, cf, step, size, width, xff, latest)
 		if err != nil {
 			t.Errorf("NewRoundRobinArchive(cf = %q): error: %v", cf, err)
 			return
@@ -46,10 +47,10 @@ func Test_RoundRobinArchive(t *testing.T) {
 	}
 
 	if id != rra.id || dsId != rra.dsId ||
-		rra.cf != WMEAN || stepsPerRow != rra.stepsPerRow ||
+		rra.cf != WMEAN || step != rra.step ||
 		size != rra.size || width != rra.width || xff != rra.xff ||
 		latest != rra.latest {
-		t.Errorf(`id != rra.id || dsId != rra.dsId || cf != rra.cf || stepsPerRow != rra.stepsPerRow || size != rra.size || width != rra.sidth || xff != rra.xff || latest != rra.latest`)
+		t.Errorf(`id != rra.id || dsId != rra.dsId || cf != rra.cf || step != rra.step || size != rra.size || width != rra.sidth || xff != rra.xff || latest != rra.latest`)
 	}
 
 	if rra.dps == nil {
@@ -75,10 +76,8 @@ func Test_RoundRobinArchive(t *testing.T) {
 	if rra.End() != rra.end {
 		t.Errorf("rra.End(): %v  != rra.end: %v", rra.End(), rra.end)
 	}
-
-	dsStep := 25 * time.Second
-	if rra.Step(dsStep) != time.Duration(rra.stepsPerRow)*dsStep {
-		t.Errorf("rra.Step(%v) != time.Duration(rra.stepsPerRow)*%v", dsStep, dsStep)
+	if rra.Step() != rra.step {
+		t.Errorf("rra.Step(): %v  != rra.step: %v", rra.Step(), rra.step)
 	}
 
 	// copy()

@@ -297,7 +297,7 @@ type dbSeries struct {
 }
 
 func (dps *dbSeries) StepMs() int64 {
-	return dps.rra.Step(dps.ds.Step()).Nanoseconds() / 1000000
+	return dps.rra.Step().Nanoseconds() / 1000000
 }
 
 func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
@@ -340,7 +340,6 @@ func (dps *dbSeries) Alias(s ...string) string {
 }
 
 func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
-
 	var (
 		rows *sql.Rows
 		err  error
@@ -348,7 +347,7 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		finalGroupByMs int64
-		rraStepMs      = dps.rra.Step(dps.ds.Step()).Nanoseconds() / 1000000
+		rraStepMs      = dps.rra.Step().Nanoseconds() / 1000000
 	)
 
 	if dps.groupByMs != 0 {
@@ -492,7 +491,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	return ds, err
 }
 
-func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
+func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*rrd.RoundRobinArchive, error) {
 	var (
 		latest *time.Time
 		cf     string
@@ -510,7 +509,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows) (*rrd.RoundRobinArchive, error) {
 	if latest == nil {
 		latest = &time.Time{}
 	}
-	rra, err := rrd.NewRoundRobinArchive(id, dsId, cf, stepsPerRow, size, width, xff, *latest)
+	rra, err := rrd.NewRoundRobinArchive(id, dsId, cf, time.Duration(stepsPerRow)*dsStep, size, width, xff, *latest)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error creating rra: %v", err)
 		return nil, err
@@ -558,7 +557,7 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id())
+		rras, err := p.fetchRoundRobinArchives(ds)
 		if err != nil {
 			log.Printf("FetchDataSource(): error fetching RRAs: %v", err)
 			return nil, err
@@ -582,7 +581,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id())
+		rras, err := p.fetchRoundRobinArchives(ds)
 		if err != nil {
 			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
 			return nil, err
@@ -609,7 +608,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 	result := make([]*rrd.DataSource, 0)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds.Id())
+		rras, err := p.fetchRoundRobinArchives(ds)
 		if err != nil {
 			log.Printf("FetchDataSources(): error fetching RRAs: %v", err)
 			return nil, err
@@ -622,11 +621,11 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 	return result, nil
 }
 
-func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive, error) {
+func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.DataSource) ([]*rrd.RoundRobinArchive, error) {
 
 	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
 
-	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), ds_id)
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), ds.Id())
 	if err != nil {
 		log.Printf("fetchRoundRobinArchives(): error querying database: %v", err)
 		return nil, err
@@ -635,7 +634,7 @@ func (p *pgSerDe) fetchRoundRobinArchives(ds_id int64) ([]*rrd.RoundRobinArchive
 
 	var rras []*rrd.RoundRobinArchive
 	for rows.Next() {
-		if rra, err := roundRobinArchiveFromRow(rows); err == nil {
+		if rra, err := roundRobinArchiveFromRow(rows, ds.Step()); err == nil {
 			rras = append(rras, rra)
 		} else {
 			log.Printf("fetchRoundRobinArchives(): error: %v", err)
@@ -804,7 +803,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 			return nil, err
 		}
 		rraRows.Next()
-		rra, err := roundRobinArchiveFromRow(rraRows)
+		rra, err := roundRobinArchiveFromRow(rraRows, ds.Step())
 		if err != nil {
 			log.Printf("CreateOrReturnDataSource(): error2: %v", err)
 			return nil, err
@@ -836,7 +835,7 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	rra := ds.BestRRA(from, to, maxPoints)
 
 	// If from/to are nil - assign the rra boundaries
-	rraEarliest := rra.Begins(rra.Latest(), rra.Step(ds.Step()))
+	rraEarliest := rra.Begins(rra.Latest(), rra.Step())
 
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest

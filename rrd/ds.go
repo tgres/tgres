@@ -63,8 +63,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 
 	for _, rra := range ds.rras {
 		// is start within this RRA's range?
-		rraBegin := rra.latest.Add(time.Duration(rra.stepsPerRow) * ds.step * time.Duration(rra.size) * -1)
-
+		rraBegin := rra.latest.Add(rra.step * time.Duration(rra.size) * -1)
 		if start.After(rraBegin) {
 			result = append(result, rra)
 		}
@@ -74,7 +73,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 		// if we found nothing above, simply select the longest RRA
 		var longest *RoundRobinArchive
 		for _, rra := range ds.rras {
-			if longest == nil || longest.size*longest.stepsPerRow < rra.size*rra.stepsPerRow {
+			if longest == nil || longest.size*int64(longest.step) < rra.size*int64(rra.step) {
 				longest = rra
 			}
 		}
@@ -89,8 +88,8 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 			if best == nil {
 				best = rra
 			} else {
-				rraDiff := math.Abs(float64(expectedStep - time.Duration(rra.stepsPerRow)*ds.step))
-				bestDiff := math.Abs(float64(expectedStep - time.Duration(best.stepsPerRow)*ds.step))
+				rraDiff := math.Abs(float64(expectedStep - rra.step))
+				bestDiff := math.Abs(float64(expectedStep - rra.step))
 				if bestDiff > rraDiff {
 					best = rra
 				}
@@ -106,7 +105,7 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 			if best == nil {
 				best = rra
 			} else {
-				if best.stepsPerRow > rra.stepsPerRow {
+				if best.step > rra.step {
 					best = rra
 				}
 			}
@@ -239,16 +238,13 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 	// for each of this DS's RRAs
 	for _, rra := range ds.rras {
 
-		// The RRA step
-		rraStep := rra.Step(ds.step)
-
 		// currentBegin is a cursor pointing at the beginning of the
 		// current slot, currentEnd points at its end. We start out
 		// with currentBegin pointing at the slot one RRA-length ago
-		// from periodEnd.
-		currentBegin := rra.Begins(periodEnd, rraStep)
-
-		// move the cursor up to at least the periodBegin
+		// from periodEnd, then we move it up to periodBegin if it is
+		// later. This way we end up with the latest of periodBegin or
+		// rra-begin.
+		currentBegin := rra.Begins(periodEnd, rra.step)
 		if periodBegin.After(currentBegin) {
 			currentBegin = periodBegin
 		}
@@ -256,7 +252,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 		// for each RRA slot before periodEnd
 		for currentBegin.Before(periodEnd) {
 
-			endOfSlot := currentBegin.Truncate(rraStep).Add(rraStep)
+			endOfSlot := currentBegin.Truncate(rra.step).Add(rra.step)
 
 			currentEnd := endOfSlot
 			if currentEnd.After(periodEnd) {
@@ -278,12 +274,12 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
 			if currentEnd.Equal(endOfSlot) {
 
 				// Check XFF
-				known := float64(rra.duration) / float64(rraStep)
+				known := float64(rra.duration) / float64(rra.step)
 				if known < float64(rra.xff) {
 					rra.SetValue(math.NaN(), 0)
 				}
 
-				slotN := ((endOfSlot.UnixNano() / 1000000) / (rraStep.Nanoseconds() / 1000000)) % int64(rra.size)
+				slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
 				rra.latest = endOfSlot
 				rra.dps[slotN] = rra.value
 

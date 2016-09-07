@@ -40,8 +40,8 @@ type RoundRobinArchive struct {
 	// higher-resolution RRA are aggregated into a lower-resolution
 	// one. Must be WMEAN, MAX, MIN, LAST.
 	cf Consolidation
-	// A single "row" (i.e. a single value) span in DS steps.
-	stepsPerRow int64
+	// The RRA step
+	step time.Duration
 	// Number of data points in the RRA.
 	size int64
 	// Time at which most recent data point and the RRA end.
@@ -78,25 +78,25 @@ type RoundRobinArchive struct {
 	end int64
 }
 
-func (rra *RoundRobinArchive) Id() int64         { return rra.id }
-func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
-func (rra *RoundRobinArchive) Size() int64       { return rra.size }
-func (rra *RoundRobinArchive) Width() int64      { return rra.width }
-func (rra *RoundRobinArchive) Start() int64      { return rra.start }
-func (rra *RoundRobinArchive) End() int64        { return rra.end }
+func (rra *RoundRobinArchive) Id() int64           { return rra.id }
+func (rra *RoundRobinArchive) Latest() time.Time   { return rra.latest }
+func (rra *RoundRobinArchive) Step() time.Duration { return rra.step }
+func (rra *RoundRobinArchive) Size() int64         { return rra.size }
+func (rra *RoundRobinArchive) Width() int64        { return rra.width }
+func (rra *RoundRobinArchive) Start() int64        { return rra.start }
+func (rra *RoundRobinArchive) End() int64          { return rra.end }
 
-// NewRoundRobinArchive returns a pointer to a new RRAs. It is mostly
 // useful for serde implementations.
-func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
+func NewRoundRobinArchive(id, dsId int64, cf string, step time.Duration, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
 	rra := &RoundRobinArchive{
-		id:          id,
-		dsId:        dsId,
-		stepsPerRow: stepsPerRow,
-		size:        size,
-		width:       width,
-		xff:         xff,
-		latest:      latest,
-		dps:         make(map[int64]float64),
+		id:     id,
+		dsId:   dsId,
+		step:   step,
+		size:   size,
+		width:  width,
+		xff:    xff,
+		latest: latest,
+		dps:    make(map[int64]float64),
 	}
 	switch cf {
 	case "WMEAN":
@@ -113,26 +113,20 @@ func NewRoundRobinArchive(id, dsId int64, cf string, stepsPerRow, size, width in
 	return rra, nil
 }
 
-// Step returns the RRA step as time.Duration given the DS step as
-// argument. (RRA itself only knows its step as a number of DS steps).
-func (rra *RoundRobinArchive) Step(dsStep time.Duration) time.Duration {
-	return dsStep * time.Duration(rra.stepsPerRow)
-}
-
 func (rra *RoundRobinArchive) copy() *RoundRobinArchive {
 	new_rra := &RoundRobinArchive{
-		Pdp:         Pdp{value: rra.value, duration: rra.duration},
-		id:          rra.id,
-		dsId:        rra.dsId,
-		cf:          rra.cf,
-		stepsPerRow: rra.stepsPerRow,
-		size:        rra.size,
-		latest:      rra.latest,
-		xff:         rra.xff,
-		width:       rra.width,
-		start:       rra.start,
-		end:         rra.end,
-		dps:         make(map[int64]float64, len(rra.dps)),
+		Pdp:    Pdp{value: rra.value, duration: rra.duration},
+		id:     rra.id,
+		dsId:   rra.dsId,
+		cf:     rra.cf,
+		step:   rra.step,
+		size:   rra.size,
+		latest: rra.latest,
+		xff:    rra.xff,
+		width:  rra.width,
+		start:  rra.start,
+		end:    rra.end,
+		dps:    make(map[int64]float64, len(rra.dps)),
 	}
 	for k, v := range rra.dps {
 		new_rra.dps[k] = v
