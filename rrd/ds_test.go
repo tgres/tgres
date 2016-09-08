@@ -152,3 +152,23 @@ func Test_DataSource_BestRRA(t *testing.T) {
 	}
 
 }
+
+func Test_DataSource_surroundingStep(t *testing.T) {
+	//ts, step, begin, end:= time.Unix(1000, 0), 10*time.Second, time.Unix(990,0), time.Unix(
+
+	data := map[int64][]int64{
+		1000: {10, 990, 1000},
+		1001: {10, 1000, 1010},
+	}
+
+	for tt, vals := range data {
+		ts := time.Unix(tt, 0)
+		step := time.Duration(vals[0]) * time.Second
+		begin := time.Unix(vals[1], 0)
+		end := time.Unix(vals[2], 0)
+		b, e := surroundingStep(ts, step)
+		if b != begin || e != end {
+			t.Errorf("surroundingStep(%v, %v) should return (%v, %v), we get (%v, %v)", ts, step, begin, end, b, e)
+		}
+	}
+}

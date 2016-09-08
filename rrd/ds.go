@@ -130,19 +130,23 @@ func (ds *DataSource) PointCount() int {
 	return total
 }
 
+// surroundingStep returns begin and end of a PDP which either
+// includes or ends on a given time mark.
+func surroundingStep(mark time.Time, step time.Duration) (time.Time, time.Time) {
+	begin := mark.Truncate(step)
+	if mark.Equal(begin) { // We are exactly at the end, need to move one step back.
+		begin = begin.Add(step * -1)
+	}
+	return begin, begin.Add(step)
+}
+
 func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 
 	// This range can be less than a PDP or span multiple PDPs. Only
 	// the last PDP is current, the rest are all in the past.
 
-	// Beginning of the last PDP in the range.
-	endPdpBegin := end.Truncate(ds.step)
-	if end.Equal(endPdpBegin) {
-		// We are exactly at the end, need to move one step back.
-		endPdpBegin.Add(ds.step * -1)
-	}
-	// End of the last PDP.
-	endPdpEnd := endPdpBegin.Add(ds.step)
+	// Begin and of the last (possibly partial) PDP in the range.
+	endPdpBegin, endPdpEnd := surroundingStep(end, ds.step)
 
 	// If the range begins *before* the last PDP, or ends
 	// *exactly* on the end of a PDP, at last one PDP is now
