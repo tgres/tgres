@@ -63,7 +63,9 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 
 	// Any RRA include start?
 	for _, rra := range ds.rras {
-		if rra.Includes(start) {
+		// We need to include RRAs that were last updated before start too
+		// or we end up with nothing, then the lowest resolution RRA
+		if rra.Includes(start) || rra.Latest().Before(start) {
 			result = append(result, rra)
 		}
 	}

@@ -18,10 +18,39 @@ package receiver
 import (
 	"bytes"
 	"encoding/gob"
+	"os"
 	"reflect"
 	"testing"
 	"time"
 )
+
+// init sets debug
+func Test_init(t *testing.T) {
+	if os.Getenv("TGRES_RCVR_DEBUG") == "" && debug {
+		t.Errorf("debug is set when TGRES_RCVR_DEBUG isn't")
+	}
+}
+
+// dftDSFinder
+func Test_FindMatchingDSSpec(t *testing.T) {
+
+	df := &dftDSFinder{}
+	d := df.FindMatchingDSSpec("whatever")
+	if d.Step != 10*time.Second || len(d.RRAs) == 0 {
+		t.Errorf("FindMatchingDSSpec: d.Step != 10s || len(d.RRAs) == 0")
+	}
+}
+
+func Test_New(t *testing.T) {
+	r := New(nil, nil)
+	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres" {
+		t.Errorf(`New: r.NWorkers != 4 || r.ReportStatsPrefix != "tgres"`)
+	}
+}
+
+func Test_Start(t *testing.T) {
+	// TODO
+}
 
 // IncomingDP must be gob encodable
 func TestIncomingDP_gobEncodable(t *testing.T) {

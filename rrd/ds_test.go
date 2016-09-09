@@ -125,7 +125,17 @@ func Test_DataSource_BestRRA(t *testing.T) {
 		t.Errorf("BestRRA: The % step should have been selected as the nearest resolution, instead we got %#v", ten, best)
 	}
 
+	// If start is past latest, it should include
+	start = time.Unix(10100, 0)
+	end = time.Unix(10200, 0)
+	best = ds.BestRRA(start, end, points)
+	if best == nil || best.step != ten {
+		t.Errorf("BestRRA: The % step should have been selected even if start > latest, instead we got %#v", ten, best)
+	}
+
 	// And now fewer points bigger step
+	start = time.Unix(9500, 0)
+	end = time.Unix(9600, 0)
 	points = 3
 	best = ds.BestRRA(start, end, points)
 	if best == nil || best.step != twenty {
