@@ -28,7 +28,7 @@ type DataSource struct {
 	id         int64                // Id
 	name       string               // Series name
 	step       time.Duration        // Step (PDP) size
-	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values
+	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values. 0 -> no heartbeat.
 	lastUpdate time.Time            // Last time we received an update (series time - can be in the past or future)
 	lastDs     float64              // Last final value we saw
 	rras       []*RoundRobinArchive // Array of Round Robin Archives
@@ -140,10 +140,17 @@ func surroundingStep(mark time.Time, step time.Duration) (time.Time, time.Time) 
 	return begin, begin.Add(step)
 }
 
+// updateRange takes a range given to it (which can be less than a PDP
+// or span multiple PDPs) and performs at most 3 updates to the RRAs:
+//
+//        [1]                 [2] [3]
+//      ‖--|------- ... -------|---‖    the update range
+//   |-----|-----|- ... -|-----|-----|  ---> time
+//
+// 1 - for the remaining piece of the first PDP in the range
+// 2 - for all the full PDPs in between
+// 3 - for the starting piece of the last PDP
 func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
-
-	// This range can be less than a PDP or span multiple PDPs. Only
-	// the last PDP is current, the rest are all in the past.
 
 	// Begin and end of the last (possibly partial) PDP in the range.
 	endPdpBegin, endPdpEnd := surroundingStep(end, ds.step)
@@ -208,6 +215,9 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 	}
 }
 
+// ProcessIncomingDataPoint checks the values and updates the DS
+// PDP. If this the very first call for this DS (lastUpdate is 0),
+// then it only sets lastUpdate and returns.
 func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) error {
 
 	if math.IsInf(value, 0) {
@@ -219,7 +229,7 @@ func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) erro
 	}
 
 	// ds value is NaN if HB is exceeded
-	if ts.Sub(ds.lastUpdate) > ds.heartbeat {
+	if ds.heartbeat > 0 && ts.Sub(ds.lastUpdate) > ds.heartbeat {
 		value = math.NaN()
 	}
 
