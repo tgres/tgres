@@ -162,7 +162,8 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 	//  0:               +------+        20, 30, 10 => {3:50},           NaN, 0s
 	//  1:               +--+            20, 24, 4  =>     {},            50, 4s
 	//  2:                  +---+        24, 30, 6  => {3:50},           NaN, 0s
-	//  3:                      +---UU-+ 30, 40, 6  => {0:50},           NaN, 0s // 50 is correct! NaN is NOT a 0!
+	//  3:                      +---UU-+ 30, 40, 6  => {0:50},           NaN, 0s
+	//                              ^^ 50 is correct! NaN is NOT a 0! (30 would be wrong).
 	//  4:  WMEAN        +--+     val 5  20, 24, 4  =>     {},            50, 4s
 	//  5:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
 	//  6:  MIN          +--+     val 5  20, 24, 4  =>     {},             5, 4s
@@ -171,11 +172,12 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 	//  9:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
 	// 10:  LAST         +--+     val 5  20, 24, 4  =>     {},             5, 4s
 	// 11:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
-	// 12:           +----------+        14, 30, 1 => {2:50,3:50},      NaN, 0
-	// 13:        +-------------+        10, 30, 1 => {2:50,3:50},      NaN, 0
-	// 14:      +---------------+         4, 30, 1 => {1:50,2:50,3:50}, NaN, 0
-	// 15:      +------------+            4, 24, 1 => {1:50,2:50},       50, 1s
-	// 16:                      +---UU-+ 30, 40, 6  => {0:50},           NaN, 0s // XFF 0.7
+	// 12:           +----------+        14, 30, 10 => {2:50,3:50},      NaN, 0
+	// 13:        +-------------+        10, 30, 10 => {2:50,3:50},      NaN, 0
+	// 14:      +---------------+         4, 30, 10 => {1:50,2:50,3:50}, NaN, 0
+	// 15:      +------------+            4, 24, 4  => {1:50,2:50},       50, 1s
+	// 16:                      +---UU-+ 30, 40, 6  => {0:NaN},          NaN, 0s // XFF 0.7
+	//     |------|------|------|------|
 
 	step := 10 * time.Second
 	size := int64(4)
@@ -300,7 +302,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			begin:  time.Unix(14, 0),
 			end:    time.Unix(30, 0),
 			dsVal:  50,
-			dsDur:  16 * time.Second,
+			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{2: 50, 3: 50},
 			rraVal: math.NaN(),
 			rraDur: 0},
@@ -308,7 +310,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			begin:  time.Unix(10, 0),
 			end:    time.Unix(30, 0),
 			dsVal:  50,
-			dsDur:  20 * time.Second,
+			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{2: 50, 3: 50},
 			rraVal: math.NaN(),
 			rraDur: 0},
@@ -316,7 +318,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			begin:  time.Unix(4, 0),
 			end:    time.Unix(30, 0),
 			dsVal:  50,
-			dsDur:  26 * time.Second,
+			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{1: 50, 2: 50, 3: 50},
 			rraVal: math.NaN(),
 			rraDur: 0},
@@ -324,10 +326,10 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			begin:  time.Unix(4, 0),
 			end:    time.Unix(24, 0),
 			dsVal:  50,
-			dsDur:  20 * time.Second,
+			dsDur:  4 * time.Second,
 			rraDps: map[int64]float64{1: 50, 2: 50},
 			rraVal: 50,
-			rraDur: 20 * time.Second},
+			rraDur: 4 * time.Second},
 		16: {
 			begin:  time.Unix(30, 0),
 			end:    time.Unix(40, 0),

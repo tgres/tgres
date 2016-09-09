@@ -16,6 +16,7 @@
 package rrd
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -175,20 +176,31 @@ func Test_DataSource_surroundingStep(t *testing.T) {
 
 func Test_DataSource_updateRange(t *testing.T) {
 
+	// To test this, we need a range that begins mid-pdp and ends
+	// mid-pdp and spans multiple RRA slots.
+
 	ds := &DataSource{step: 10 * time.Second}
 	ds.SetRRAs([]*RoundRobinArchive{
 		&RoundRobinArchive{step: 10 * time.Second, size: 10},
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
 
-	begin, end := time.Unix(985, 0), time.Unix(995, 0)
+	begin, end := time.Unix(104, 0), time.Unix(156, 0)
 	ds.updateRange(begin, end, 100.0)
 
-	begin, end = time.Unix(996, 0), time.Unix(1005, 0)
-	ds.updateRange(begin, end, 100.0)
+	exp1 := map[int64]float64{1: 100, 2: 100, 3: 100, 4: 100, 5: 100}
+	if !reflect.DeepEqual(ds.rras[0].dps, exp1) {
+		t.Errorf("updateRange: expecting rra[0].dps: %v, got %v", exp1, ds.rras[0].dps)
+	}
+	if !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 {
+		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].value) || ds.rras[1].duration != 0")
+	}
 
-	begin, end = time.Unix(1006, 0), time.Unix(1015, 0)
-	ds.updateRange(begin, end, 100.0)
-
-	// TODO FINISH ME
+	exp2 := map[int64]float64{6: 100, 7: 100}
+	if !reflect.DeepEqual(ds.rras[1].dps, exp2) {
+		t.Errorf("updateRange: expecting rra1.dps: %v, got %v", exp2, ds.rras[1].dps)
+	}
+	if ds.rras[1].value != 100 || ds.rras[1].duration != 10*time.Second {
+		t.Errorf("updateRange: ds.rras[1].value != 100 || ds.rras[1].duration != 10*time.Second")
+	}
 }

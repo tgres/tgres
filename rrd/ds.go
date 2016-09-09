@@ -145,11 +145,11 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 	// This range can be less than a PDP or span multiple PDPs. Only
 	// the last PDP is current, the rest are all in the past.
 
-	// Begin and of the last (possibly partial) PDP in the range.
+	// Begin and end of the last (possibly partial) PDP in the range.
 	endPdpBegin, endPdpEnd := surroundingStep(end, ds.step)
 
 	// If the range begins *before* the last PDP, or ends *exactly* on
-	// the end of a PDP, then at last one PDP is now completed, and
+	// the end of a PDP, then at least one PDP is now completed, and
 	// updates need to trickle down to RRAs.
 	if begin.Before(endPdpBegin) || end.Equal(endPdpEnd) {
 
@@ -184,7 +184,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 		// we go extra expressive for clarity).
 		if begin.Before(endPdpBegin) || (begin.Equal(endPdpBegin) && end.Equal(endPdpEnd)) {
 
-			ds.SetValue(value, ds.step) // Since begin is aligned, we can bluntly set the value.
+			ds.SetValue(value, ds.step) // Since begin is aligned, we can set the whole value.
 
 			periodBegin := begin
 			periodEnd := endPdpBegin

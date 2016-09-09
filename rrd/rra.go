@@ -226,33 +226,37 @@ func (rra *RoundRobinArchive) update(periodBegin, periodEnd time.Time, value flo
 			rra.AddValueLast(value, duration)
 		}
 
-		// if end of slot
+		// if end of slot, move PDP into its place in dps.
 		if currentEnd.Equal(endOfSlot) {
-
-			// Check XFF
-			known := float64(rra.duration) / float64(rra.step)
-			if known < float64(rra.xff) {
-				rra.SetValue(math.NaN(), 0)
-			}
-
-			if rra.dps == nil {
-				rra.dps = make(map[int64]float64)
-			}
-
-			slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
-			rra.latest = endOfSlot
-			rra.dps[slotN] = rra.value
-
-			if len(rra.dps) == 1 {
-				rra.start = slotN
-			}
-			rra.end = slotN
-
-			// reset
-			rra.Reset()
+			rra.movePdpToDps(endOfSlot)
 		}
 
 		// move up the cursor
 		currentBegin = currentEnd
 	}
+}
+
+// movePdpToDps moves the PDP into its proper slot in the dps map and
+// resets the PDP.
+func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
+	// Check XFF
+	known := float64(rra.duration) / float64(rra.step)
+	if known < float64(rra.xff) {
+		rra.SetValue(math.NaN(), 0)
+	}
+
+	if rra.dps == nil {
+		rra.dps = make(map[int64]float64)
+	}
+
+	slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
+	rra.latest = endOfSlot
+	rra.dps[slotN] = rra.value
+
+	if len(rra.dps) == 1 {
+		rra.start = slotN
+	}
+	rra.end = slotN
+
+	rra.Reset()
 }
