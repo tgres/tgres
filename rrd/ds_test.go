@@ -172,3 +172,23 @@ func Test_DataSource_surroundingStep(t *testing.T) {
 		}
 	}
 }
+
+func Test_DataSource_updateRange(t *testing.T) {
+
+	ds := &DataSource{step: 10 * time.Second}
+	ds.SetRRAs([]*RoundRobinArchive{
+		&RoundRobinArchive{step: 10 * time.Second, size: 10},
+		&RoundRobinArchive{step: 20 * time.Second, size: 10},
+	})
+
+	begin, end := time.Unix(985, 0), time.Unix(995, 0)
+	ds.updateRange(begin, end, 100.0)
+
+	begin, end = time.Unix(996, 0), time.Unix(1005, 0)
+	ds.updateRange(begin, end, 100.0)
+
+	begin, end = time.Unix(1006, 0), time.Unix(1015, 0)
+	ds.updateRange(begin, end, 100.0)
+
+	// TODO FINISH ME
+}

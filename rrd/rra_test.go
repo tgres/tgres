@@ -16,6 +16,7 @@
 package rrd
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -30,11 +31,21 @@ func Test_RoundRobinArchive(t *testing.T) {
 		latest                time.Time
 	)
 
-	id, dsId, step, size, width, cf, xff, latest = 1, 3, 10*time.Second, 100, 30, "FOOBAR", 0.5, time.Now()
+	id, dsId, step, size, width, cf, xff, latest = 1, 3, 10*time.Second, 100, 30, "WMEAN", 0.5, time.Now()
 
-	rra, err := NewRoundRobinArchive(id, dsId, cf, step, size, width, xff, latest)
+	rra, err := NewRoundRobinArchive(id, dsId, "FOOBAR", step, size, width, xff, latest)
 	if err == nil {
-		t.Errorf("Invalid cf %q did not cause an error")
+		t.Errorf("Invalid cf 'FOOBAR' did not cause an error")
+	}
+
+	rra, err = NewRoundRobinArchive(id, dsId, cf, 0, size, width, xff, latest)
+	if err == nil {
+		t.Errorf("Invalid step 0 did not cause an error")
+	}
+
+	rra, err = NewRoundRobinArchive(id, dsId, cf, step, 0, width, xff, latest)
+	if err == nil {
+		t.Errorf("Invalid size 0 did not cause an error")
 	}
 
 	// Again, this time good data
@@ -140,4 +151,225 @@ func Test_RoundRobinArchive(t *testing.T) {
 	if rra.Includes(it) {
 		t.Errorf("Includes: %v should NOT be included. rra.latest: %v rra.Begins(rra.latest): %v", it, rra.latest, rra.Begins(rra.latest))
 	}
+}
+
+func Test_RoundRobinArchive_update(t *testing.T) {
+
+	// All the possibilities we want to test. Value is 50 unless noted.
+	//
+	//     0     10     20     30     40
+	//     |------|------|------|------| begin, end, ds_dur => expected dps, rra_value, rra_dur
+	//  0:               +------+        20, 30, 10 => {3:50},           NaN, 0s
+	//  1:               +--+            20, 24, 4  =>     {},            50, 4s
+	//  2:                  +---+        24, 30, 6  => {3:50},           NaN, 0s
+	//  3:                      +---UU-+ 30, 40, 6  => {0:50},           NaN, 0s // 50 is correct! NaN is NOT a 0!
+	//  4:  WMEAN        +--+     val 5  20, 24, 4  =>     {},            50, 4s
+	//  5:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
+	//  6:  MIN          +--+     val 5  20, 24, 4  =>     {},             5, 4s
+	//  7:                  +---+ keep   24, 30, 6  => {3:5},            NaN, 0s
+	//  8:  MAX          +--+     val 5  20, 24, 4  =>     {},             5, 4s
+	//  9:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
+	// 10:  LAST         +--+     val 5  20, 24, 4  =>     {},             5, 4s
+	// 11:                  +---+ keep   24, 30, 6  => {3:50},           NaN, 0s
+	// 12:           +----------+        14, 30, 1 => {2:50,3:50},      NaN, 0
+	// 13:        +-------------+        10, 30, 1 => {2:50,3:50},      NaN, 0
+	// 14:      +---------------+         4, 30, 1 => {1:50,2:50,3:50}, NaN, 0
+	// 15:      +------------+            4, 24, 1 => {1:50,2:50},       50, 1s
+	// 16:                      +---UU-+ 30, 40, 6  => {0:50},           NaN, 0s // XFF 0.7
+
+	step := 10 * time.Second
+	size := int64(4)
+
+	type valz struct {
+		begin, end time.Time
+		dsVal      float64
+		dsDur      time.Duration
+		rraDps     map[int64]float64
+		rraVal     float64
+		rraDur     time.Duration
+		keep       bool
+		cf         Consolidation
+		xff        float32
+	}
+
+	testVals := []valz{
+		0: {
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  10 * time.Second,
+			rraDps: map[int64]float64{3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		1: {
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  50,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{},
+			rraVal: 50,
+			rraDur: 4 * time.Second},
+		2: {
+			begin:  time.Unix(24, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			rraDps: map[int64]float64{3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		3: {
+			begin:  time.Unix(30, 0),
+			end:    time.Unix(40, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			rraDps: map[int64]float64{0: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		4: { // WMEAN
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  5,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{},
+			rraVal: 5,
+			rraDur: 4 * time.Second},
+		5: {
+			keep:   true,
+			begin:  time.Unix(24, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			rraDps: map[int64]float64{3: 32.0},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		6: { // MIN
+			cf:     MIN,
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  5,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{},
+			rraVal: 5,
+			rraDur: 4 * time.Second},
+		7: {
+			keep:   true,
+			begin:  time.Unix(24, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			rraDps: map[int64]float64{3: 5},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		8: { // MAX
+			cf:     MAX,
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  5,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{},
+			rraVal: 5,
+			rraDur: 4 * time.Second},
+		9: {
+			keep:   true,
+			begin:  time.Unix(24, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		10: { // LAST
+			cf:     LAST,
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  5,
+			dsDur:  4 * time.Second,
+			rraDps: map[int64]float64{},
+			rraVal: 5,
+			rraDur: 4 * time.Second},
+		11: {
+			keep:   true,
+			begin:  time.Unix(24, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			rraDps: map[int64]float64{3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		12: {
+			begin:  time.Unix(14, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  16 * time.Second,
+			rraDps: map[int64]float64{2: 50, 3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		13: {
+			begin:  time.Unix(10, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  20 * time.Second,
+			rraDps: map[int64]float64{2: 50, 3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		14: {
+			begin:  time.Unix(4, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  50,
+			dsDur:  26 * time.Second,
+			rraDps: map[int64]float64{1: 50, 2: 50, 3: 50},
+			rraVal: math.NaN(),
+			rraDur: 0},
+		15: {
+			begin:  time.Unix(4, 0),
+			end:    time.Unix(24, 0),
+			dsVal:  50,
+			dsDur:  20 * time.Second,
+			rraDps: map[int64]float64{1: 50, 2: 50},
+			rraVal: 50,
+			rraDur: 20 * time.Second},
+		16: {
+			begin:  time.Unix(30, 0),
+			end:    time.Unix(40, 0),
+			dsVal:  50,
+			dsDur:  6 * time.Second,
+			xff:    0.7,
+			rraDps: map[int64]float64{0: math.NaN()},
+			rraVal: math.NaN(),
+			rraDur: 0},
+	}
+
+	var rra *RoundRobinArchive
+	for n, vals := range testVals {
+
+		if !vals.keep {
+			rra = &RoundRobinArchive{step: step, size: size, cf: vals.cf, xff: vals.xff}
+			rra.Reset()
+		}
+
+		rra.update(vals.begin, vals.end, vals.dsVal, vals.dsDur)
+
+		// Stupid trick - replace NaNs with 999
+		for k, v := range rra.dps {
+			if math.IsNaN(v) {
+				rra.dps[k] = 999
+			}
+		}
+		for k, v := range vals.rraDps {
+			if math.IsNaN(v) {
+				vals.rraDps[k] = 999
+			}
+		}
+
+		if !((len(rra.dps) == 0 && len(vals.rraDps) == 0) || reflect.DeepEqual(rra.dps, vals.rraDps)) {
+			t.Errorf("update: for %d (%v, %v, %v, %v) we expect %v, but got %v", n, vals.begin, vals.end, vals.dsVal, vals.dsDur, vals.rraDps, rra.dps)
+		}
+		if rra.value != vals.rraVal || rra.duration != vals.rraDur {
+			if !(math.IsNaN(rra.value) && math.IsNaN(vals.rraVal)) {
+				t.Errorf("update: for %d (%v, %v, %v, %v) we expect rra (val, dur) of (%v, %v), but got (%v, %v)",
+					n, vals.begin, vals.end, vals.dsVal, vals.dsDur, vals.rraVal, vals.rraDur, rra.value, rra.duration)
+			}
+		}
+	}
+
 }

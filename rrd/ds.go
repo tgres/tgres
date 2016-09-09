@@ -140,7 +140,7 @@ func surroundingStep(mark time.Time, step time.Duration) (time.Time, time.Time) 
 	return begin, begin.Add(step)
 }
 
-func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
+func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 
 	// This range can be less than a PDP or span multiple PDPs. Only
 	// the last PDP is current, the rest are all in the past.
@@ -148,10 +148,10 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 	// Begin and of the last (possibly partial) PDP in the range.
 	endPdpBegin, endPdpEnd := surroundingStep(end, ds.step)
 
-	// If the range begins *before* the last PDP, or ends
-	// *exactly* on the end of a PDP, at last one PDP is now
-	// completed, and updates need to trickle down to RRAs.
-	if begin.Before(endPdpBegin) || (end.Equal(endPdpEnd)) {
+	// If the range begins *before* the last PDP, or ends *exactly* on
+	// the end of a PDP, then at last one PDP is now completed, and
+	// updates need to trickle down to RRAs.
+	if begin.Before(endPdpBegin) || end.Equal(endPdpEnd) {
 
 		// If range begins in the middle of a now completed PDP
 		// (which may be the last one IFF end == endPdpEnd)
@@ -167,9 +167,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 			ds.AddValue(value, offset)
 
 			// Update the RRAs
-			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
-				return err
-			}
+			ds.updateRRAs(periodBegin, periodEnd)
 
 			// The DS value now becomes zero, it has been "sent" to RRAs.
 			ds.Reset()
@@ -193,9 +191,7 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 			if end.Equal(end.Truncate(ds.step)) {
 				periodEnd = end
 			}
-			if err := ds.updateRRAs(periodBegin, periodEnd); err != nil {
-				return err
-			}
+			ds.updateRRAs(periodBegin, periodEnd)
 
 			// The DS value now becomes zero, it has been "sent" to RRAs.
 			ds.Reset()
@@ -210,8 +206,6 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) error {
 	if begin.Before(end) {
 		ds.AddValue(value, end.Sub(begin))
 	}
-
-	return nil
 }
 
 func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) error {
@@ -230,9 +224,7 @@ func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) erro
 	}
 
 	if !ds.lastUpdate.IsZero() { // Do not update a never-before-updated DS
-		if err := ds.updateRange(ds.lastUpdate, ts, value); err != nil {
-			return err
-		}
+		ds.updateRange(ds.lastUpdate, ts, value)
 	}
 
 	ds.lastUpdate = ts
@@ -241,71 +233,11 @@ func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) erro
 	return nil
 }
 
-func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) error {
-
+func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
 	// for each of this DS's RRAs
 	for _, rra := range ds.rras {
-
-		// currentBegin is a cursor pointing at the beginning of the
-		// current slot, currentEnd points at its end. We start out
-		// with currentBegin pointing at the slot one RRA-length ago
-		// from periodEnd, then we move it up to periodBegin if it is
-		// later. This way we end up with the latest of periodBegin or
-		// rra-begin.
-		currentBegin := rra.Begins(periodEnd)
-		if periodBegin.After(currentBegin) {
-			currentBegin = periodBegin
-		}
-
-		// for each RRA slot before periodEnd
-		for currentBegin.Before(periodEnd) {
-
-			endOfSlot := currentBegin.Truncate(rra.step).Add(rra.step)
-
-			currentEnd := endOfSlot
-			if currentEnd.After(periodEnd) {
-				currentEnd = periodEnd // i.e. currentEnd < endOfSlot
-			}
-
-			switch rra.cf {
-			case MAX:
-				rra.AddValueMax(ds.value, ds.duration)
-			case MIN:
-				rra.AddValueMin(ds.value, ds.duration)
-			case LAST:
-				rra.AddValueLast(ds.value, ds.duration)
-			case WMEAN:
-				rra.AddValue(ds.value, ds.duration)
-			}
-
-			// if end of slot
-			if currentEnd.Equal(endOfSlot) {
-
-				// Check XFF
-				known := float64(rra.duration) / float64(rra.step)
-				if known < float64(rra.xff) {
-					rra.SetValue(math.NaN(), 0)
-				}
-
-				slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
-				rra.latest = endOfSlot
-				rra.dps[slotN] = rra.value
-
-				if len(rra.dps) == 1 {
-					rra.start = slotN
-				}
-				rra.end = slotN
-
-				// reset
-				rra.Reset()
-			}
-
-			// move up the cursor
-			currentBegin = currentEnd
-		}
+		rra.update(periodBegin, periodEnd, ds.value, ds.duration)
 	}
-
-	return nil
 }
 
 // ClearRRAs clears the data in all RRAs. It is meant to be called

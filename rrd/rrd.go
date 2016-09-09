@@ -35,7 +35,8 @@
 //
 // DS Step: Step is the smallest unit of time for the DS in
 // milliseconds. RRA resolutions and sizes must be multiples of the DS
-// step.
+// step. In this implementation a step cannot be less than 1
+// millisecond.
 //
 // DS Heartbeat (HB): Duration of time that can pass without data. A
 // gap in data which exceeds HB is filled with NaNs.

@@ -18,6 +18,7 @@ package rrd
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -63,7 +64,8 @@ type RoundRobinArchive struct {
 	// The list of data points (as a map so that its sparse). Slots in
 	// dps are time-aligned starting at zero time. This means that if
 	// Latest is defined, we can compute any slot's timestamp without
-	// having to store it.
+	// having to store it. Slot numbers are aligned on millisecond,
+	// therefore an RRA step cannot be less than a millisecond.
 	dps map[int64]float64
 
 	// In the undelying storage, how many data points are stored in a
@@ -86,7 +88,7 @@ func (rra *RoundRobinArchive) Width() int64        { return rra.width }
 func (rra *RoundRobinArchive) Start() int64        { return rra.start }
 func (rra *RoundRobinArchive) End() int64          { return rra.end }
 
-// useful for serde implementations.
+// NewRoundRobinArchive returns a new RRA and checks that its valid. Useful for serde implementations.
 func NewRoundRobinArchive(id, dsId int64, cf string, step time.Duration, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
 	rra := &RoundRobinArchive{
 		id:     id,
@@ -109,6 +111,14 @@ func NewRoundRobinArchive(id, dsId int64, cf string, step time.Duration, size, w
 		rra.cf = LAST
 	default:
 		return nil, fmt.Errorf("Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
+	}
+	if rra.size == 0 {
+		return nil, fmt.Errorf("Invalid size: rra.size cannot be 0.")
+	}
+	// Steps are aligned on milliseconds, so a step of less than a
+	// millisecond would result in a division by zero (see rra.update())
+	if rra.step < 1000000 {
+		return nil, fmt.Errorf("Invalid step: rra.step: %v cannot be less than 1 millisecond.")
 	}
 	return rra, nil
 }
@@ -179,4 +189,70 @@ func (rra *RoundRobinArchive) PointCount() int {
 func (rra *RoundRobinArchive) Includes(t time.Time) bool {
 	begin := rra.Begins(rra.latest)
 	return t.After(begin) && !t.After(rra.latest)
+}
+
+// update the RRA. If duration is less than the period, then the difference is considered unknown.
+func (rra *RoundRobinArchive) update(periodBegin, periodEnd time.Time, value float64, duration time.Duration) {
+
+	// currentBegin is a cursor pointing at the beginning of the
+	// current slot, currentEnd points at its end. We start out
+	// with currentBegin pointing at the slot one RRA-length ago
+	// from periodEnd, then we move it up to periodBegin if it is
+	// later. This way we end up with the latest of periodBegin or
+	// rra-begin.
+	currentBegin := rra.Begins(periodEnd)
+	if periodBegin.After(currentBegin) {
+		currentBegin = periodBegin
+	}
+
+	// for each RRA slot before periodEnd
+	for currentBegin.Before(periodEnd) {
+
+		endOfSlot := currentBegin.Truncate(rra.step).Add(rra.step)
+
+		currentEnd := endOfSlot
+		if currentEnd.After(periodEnd) { // i.e. currentEnd < endOfSlot
+			currentEnd = periodEnd
+		}
+
+		switch rra.cf {
+		case WMEAN:
+			rra.AddValue(value, duration)
+		case MAX:
+			rra.AddValueMax(value, duration)
+		case MIN:
+			rra.AddValueMin(value, duration)
+		case LAST:
+			rra.AddValueLast(value, duration)
+		}
+
+		// if end of slot
+		if currentEnd.Equal(endOfSlot) {
+
+			// Check XFF
+			known := float64(rra.duration) / float64(rra.step)
+			if known < float64(rra.xff) {
+				rra.SetValue(math.NaN(), 0)
+			}
+
+			if rra.dps == nil {
+				rra.dps = make(map[int64]float64)
+			}
+
+			slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
+			rra.latest = endOfSlot
+			rra.dps[slotN] = rra.value
+
+			if len(rra.dps) == 1 {
+				rra.start = slotN
+			}
+			rra.end = slotN
+
+			// reset
+			rra.Reset()
+		}
+
+		// move up the cursor
+		currentBegin = currentEnd
+	}
 }

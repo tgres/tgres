@@ -108,12 +108,8 @@ func TestPdp_AddValue(t *testing.T) {
 				ev = v1
 				ed = d1
 			} else {
-				adj_v1 := v1
-				if math.IsNaN(adj_v1) {
-					adj_v1 = 0
-				}
-				ev = adj_v1
-				if v2 > adj_v1 {
+				ev = v1
+				if v2 > v1 || math.IsNaN(v1) {
 					ev = v2
 				}
 				ed = d1 + d2
@@ -135,12 +131,8 @@ func TestPdp_AddValue(t *testing.T) {
 				ev = v1
 				ed = d1
 			} else {
-				adj_v1 := v1
-				if math.IsNaN(adj_v1) {
-					adj_v1 = 0
-				}
-				ev = adj_v1
-				if v2 < adj_v1 {
+				ev = v1
+				if v2 < v1 || math.IsNaN(v1) {
 					ev = v2
 				}
 				ed = d1 + d2

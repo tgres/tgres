@@ -102,9 +102,8 @@ func (p *Pdp) AddValue(val float64, dur time.Duration) {
 func (p *Pdp) AddValueMax(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
-			p.value = 0
-		}
-		if p.value < val {
+			p.value = val // val "wins" over NaN
+		} else if p.value < val {
 			p.value = val
 		}
 		p.duration = p.duration + dur
@@ -115,9 +114,8 @@ func (p *Pdp) AddValueMax(val float64, dur time.Duration) {
 func (p *Pdp) AddValueMin(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		if math.IsNaN(p.value) {
-			p.value = 0
-		}
-		if p.value > val {
+			p.value = val // val "wins" over NaN
+		} else if p.value > val {
 			p.value = val
 		}
 		p.duration = p.duration + dur
