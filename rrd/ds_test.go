@@ -263,3 +263,57 @@ func Test_DataSource_ProcessIncomingDataPoint(t *testing.T) {
 		t.Errorf("ProcessIncomingDataPoint: no error on data point prior to last update")
 	}
 }
+
+func Test_DataSource_ClearRRAs(t *testing.T) {
+
+	ds := &DataSource{step: 10 * time.Second}
+	ds.SetRRAs([]*RoundRobinArchive{
+		&RoundRobinArchive{step: 20 * time.Second, size: 10},
+	})
+	ds.Reset()
+	ds.rras[0].Reset()
+
+	ds.ClearRRAs(false)
+	if ds.rras[0].dps != nil {
+		t.Errorf("ClearRRAs: ds.rras[0].dps got replaced even though it's empty?")
+	}
+
+	ds.rras[0].dps = map[int64]float64{1: 1}
+	ds.lastUpdate = time.Now()
+	ds.ClearRRAs(false)
+	if len(ds.rras[0].dps) != 0 || ds.rras[0].start != 0 || ds.rras[0].end != 0 {
+		t.Errorf("ClearRRAs: len(ds.rras[0].dps) != 0 || ds.rras[0].start != 0 || ds.rras[0].end != 0")
+	}
+	if ds.lastUpdate.IsZero() {
+		t.Errorf("ClearRRAs: with false: ds.lastUpdate.IsZero()")
+	}
+
+	ds.ClearRRAs(true)
+	if !ds.lastUpdate.IsZero() {
+		t.Errorf("ClearRRAs: with true: !ds.lastUpdate.IsZero()")
+	}
+}
+
+func Test_DataSource_Copy(t *testing.T) {
+
+	ds := &DataSource{
+		Pdp: Pdp{
+			value:    123,
+			duration: 4 * time.Second,
+		},
+		id:         34534,
+		name:       "dfssslksdmlfkm",
+		step:       10 * time.Second,
+		heartbeat:  45 * time.Second,
+		lastUpdate: time.Now(),
+		lastDs:     93458,
+	}
+	ds.SetRRAs([]*RoundRobinArchive{
+		&RoundRobinArchive{step: 20 * time.Second, size: 10, dps: map[int64]float64{6: 100, 7: 100, 8: 100}},
+	})
+
+	cpy := ds.Copy()
+	if !reflect.DeepEqual(ds, cpy) {
+		t.Errorf("Copy: !reflect.DeepEqual(ds, cpy)")
+	}
+}

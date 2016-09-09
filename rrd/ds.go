@@ -270,23 +270,19 @@ func (ds *DataSource) ClearRRAs(clearLU bool) {
 	}
 }
 
-// MostlyCopy returns a copy of the DataSource that contains all the
-// fields that should be persisted when flushing. The idea is that
-// this copy can then be saved in a separate goroutine without having
-// to lock the DataSource.
-func (ds *DataSource) MostlyCopy() *DataSource {
+// Copy returns a copy of the DataSource.
+func (ds *DataSource) Copy() *DataSource {
 
-	// Only copy elements that change or needed for saving/rendering
-	new_ds := new(DataSource)
-	new_ds.id = ds.id
-	new_ds.name = ds.name
-	new_ds.step = ds.step
-	new_ds.heartbeat = ds.heartbeat
-	new_ds.lastUpdate = ds.lastUpdate
-	new_ds.lastDs = ds.lastDs
-	new_ds.value = ds.value
-	new_ds.duration = ds.duration
-	new_ds.rras = make([]*RoundRobinArchive, len(ds.rras))
+	new_ds := &DataSource{
+		Pdp:        Pdp{value: ds.value, duration: ds.duration},
+		id:         ds.id,
+		name:       ds.name,
+		step:       ds.step,
+		heartbeat:  ds.heartbeat,
+		lastUpdate: ds.lastUpdate,
+		lastDs:     ds.lastDs,
+		rras:       make([]*RoundRobinArchive, len(ds.rras)),
+	}
 
 	for n, rra := range ds.rras {
 		new_ds.rras[n] = rra.copy()

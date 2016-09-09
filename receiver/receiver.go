@@ -472,7 +472,7 @@ func (r *Receiver) worker(id int64) {
 }
 
 func (r *Receiver) flushDs(rds *receiverDs, block bool) {
-	fr := &dsFlushRequest{ds: rds.ds.MostlyCopy()}
+	fr := &dsFlushRequest{ds: rds.ds.Copy()}
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
