@@ -19,6 +19,7 @@
 package receiver
 
 import (
+	"fmt"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
@@ -158,7 +159,7 @@ func (r *Receiver) Start() error {
 	r.startWg.Wait()
 	log.Printf("Receiver: All workers running, starting dispatcher.")
 
-	go r.dispatcher()
+	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &r.startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r, r, r.dss, r.workerChs, r.NWorkers, r)
 	log.Printf("Receiver: Ready.")
 
 	return nil
@@ -215,6 +216,13 @@ func (r *Receiver) stopFlushers() {
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
+func (r *Receiver) stopAllWorkers() {
+	r.stopPacedMetricWorker()
+	r.stopAggWorker()
+	r.stopWorkers()
+	r.stopFlushers()
+}
+
 func (r *Receiver) stopAggWorker() {
 
 	log.Printf("stopAggWorker(): waiting for agg channel to empty...")
@@ -245,7 +253,7 @@ func (r *Receiver) createOrLoadDS(name string) (*receiverDs, error) {
 			rds = r.dss.Insert(ds)
 			// tell the cluster about it (TODO should Insert() do this?)
 			r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-				return []cluster.DistDatum{&distDatumDataSource{r, rds}}, nil
+				return []cluster.DistDatum{&distDatumDataSource{rds, r.dss, r}}, nil
 			})
 		}
 		return rds, err
@@ -253,40 +261,90 @@ func (r *Receiver) createOrLoadDS(name string) (*receiverDs, error) {
 	return nil, nil // We couldn't find anything, which is not an error
 }
 
-func (r *Receiver) dispatcher() {
-	r.dispatcherWg.Add(1)
-	defer r.dispatcherWg.Done()
+func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) {
+	defer func() { recover() }() // if we're writing to a closed channel below
+
+	for {
+		m := <-rcv
+
+		// To get an event back:
+		var dp IncomingDP
+		if err := m.Decode(&dp); err != nil {
+			log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
+			continue
+		}
+
+		var maxHops = clstr.NumMembers() * 2 // This is kind of arbitrary
+		if dp.Hops > maxHops {
+			log.Printf("dispatcher(): dropping data point, max hops (%d) reached", maxHops)
+			continue
+		}
+
+		dpCh <- &dp // See recover above
+	}
+}
+
+func dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, dss *dataSources, workerChs []chan *incomingDpWithDs, dsf dsFlusherBlocking,
+	dp *IncomingDP, NWorkers int, scr statCountReporter, dpCh chan *IncomingDP, snd chan *cluster.Msg) {
+	for _, node := range clstr.NodesForDistDatum(&distDatumDataSource{rds, dss, dsf}) {
+		if node.Name() == clstr.LocalNode().Name() {
+			workerChs[rds.ds.Id()%int64(NWorkers)] <- &incomingDpWithDs{dp, rds} // This dp is for us
+		} else {
+			if dp.Hops == 0 { // we do not forward more than once
+				if node.Ready() {
+					dp.Hops++
+					if msg, err := cluster.NewMsg(node, dp); err == nil {
+						snd <- msg
+						scr.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
+					} else {
+						log.Printf("dispatcher(): Encoding error forwarding a data point: %v", err)
+					}
+				} else {
+					// This should be a very rare thing
+					log.Printf("dispatcher(): Returning the data point to dispatcher!")
+					time.Sleep(100 * time.Millisecond)
+					dpCh <- dp
+				}
+			}
+			// Always clear RRAs to prevent it from being saved
+			if pc := rds.ds.PointCount(); pc > 0 {
+				log.Printf("dispatcher(): WARNING: Clearing DS with PointCount > 0: %v", pc)
+			}
+			rds.ds.ClearRRAs(true)
+		}
+	}
+}
+
+func dispatcherLookupDsByName(name string, dss *dataSources, dscl dsCreateOrLoader) *receiverDs {
+	var rds *receiverDs = dss.GetByName(name)
+	if rds == nil {
+		var err error
+		if rds, err = dscl.createOrLoadDS(name); err != nil {
+			log.Printf("dispatcher(): createOrLoadDS() error: %v", err)
+			return nil
+		}
+		if rds == nil {
+			log.Printf("dispatcher(): No spec matched name: %q, ignoring data point", name)
+			return nil
+		}
+	}
+	return rds
+}
+
+func dispatcher(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp workerStopper, scr statCountReporter,
+	dscl dsCreateOrLoader, dss *dataSources, workerChs []chan *incomingDpWithDs, NWorkers int, dsf dsFlusherBlocking) {
+	wc.onEnter()
+	defer wc.onExit()
 
 	// Monitor Cluster changes
-	clusterChgCh := r.cluster.NotifyClusterChanges()
+	clusterChgCh := clstr.NotifyClusterChanges()
 
 	// Channel for event forwards to other nodes and us
-	snd, rcv := r.cluster.RegisterMsgType()
-	go func() {
-		defer func() { recover() }() // if we're writing to a closed channel below
-
-		for {
-			m := <-rcv
-
-			// To get an event back:
-			var dp IncomingDP
-			if err := m.Decode(&dp); err != nil {
-				log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
-				continue
-			}
-
-			var maxHops = r.cluster.NumMembers() * 2 // This is kind of arbitrary
-			if dp.Hops > maxHops {
-				log.Printf("dispatcher(): dropping data point, max hops (%d) reached", maxHops)
-				continue
-			}
-
-			r.dpCh <- &dp // See recover above
-		}
-	}()
+	snd, rcv := clstr.RegisterMsgType()
+	go dispatcherIncomingDPMessages(rcv, clstr, dpCh)
 
 	log.Printf("dispatcher(): marking cluster node as Ready.")
-	r.cluster.Ready(true)
+	clstr.Ready(true)
 
 	for {
 
@@ -295,24 +353,21 @@ func (r *Receiver) dispatcher() {
 		select {
 		case _, ok = <-clusterChgCh:
 			if ok {
-				if err := r.cluster.Transition(45 * time.Second); err != nil {
+				if err := clstr.Transition(45 * time.Second); err != nil {
 					log.Printf("dispatcher(): Transition error: %v", err)
 				}
 			}
 			continue
-		case dp, ok = <-r.dpCh:
+		case dp, ok = <-dpCh:
 		}
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			r.stopPacedMetricWorker()
-			r.stopAggWorker()
-			r.stopWorkers()
-			r.stopFlushers()
+			wstp.stopAllWorkers()
 			break
 		}
 
-		r.reportStatCount("receiver.dispatcher.datapoints.total", 1)
+		scr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
 
 		if math.IsNaN(dp.Value) {
 			// NaN is meaningless, e.g. "the thermometer is
@@ -322,45 +377,8 @@ func (r *Receiver) dispatcher() {
 			continue
 		}
 
-		var rds *receiverDs = r.dss.GetByName(dp.Name)
-		if rds == nil {
-			var err error
-			if rds, err = r.createOrLoadDS(dp.Name); err != nil {
-				log.Printf("dispatcher(): createOrLoadDS() error: %v", err)
-				continue
-			}
-			if rds == nil {
-				log.Printf("dispatcher(): No spec matched name: %q, ignoring data point", dp.Name)
-				continue
-			}
-		}
-
-		for _, node := range r.cluster.NodesForDistDatum(&distDatumDataSource{r, rds}) {
-			if node.Name() == r.cluster.LocalNode().Name() {
-				r.workerChs[rds.ds.Id()%int64(r.NWorkers)] <- &incomingDpWithDs{dp, rds} // This dp is for us
-			} else {
-				if dp.Hops == 0 { // we do not forward more than once
-					if node.Ready() {
-						dp.Hops++
-						if msg, err := cluster.NewMsg(node, dp); err == nil {
-							snd <- msg
-							r.reportStatCount("receiver.dispatcher.datapoints.forwarded", 1)
-						} else {
-							log.Printf("dispatcher(): Encoding error forwarding a data point: %v", err)
-						}
-					} else {
-						// This should be a very rare thing
-						log.Printf("dispatcher(): Returning the data point to dispatcher!")
-						time.Sleep(100 * time.Millisecond)
-						r.dpCh <- dp
-					}
-				}
-				// Always clear RRAs to prevent it from being saved
-				if pc := rds.ds.PointCount(); pc > 0 {
-					log.Printf("dispatcher(): WARNING: Clearing DS with PointCount > 0: %v", pc)
-				}
-				rds.ds.ClearRRAs(true)
-			}
+		if rds := dispatcherLookupDsByName(dp.Name, dss, dscl); rds != nil {
+			dispatcherProcessOrForward(rds, clstr, dss, workerChs, dsf, dp, NWorkers, scr, dpCh, snd)
 		}
 	}
 }
@@ -392,82 +410,71 @@ func (r *Receiver) QueueGauge(name string, v float64) {
 	r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
 }
 
-func (r *Receiver) worker(id int64) {
-	r.workerWg.Add(1)
-	defer r.workerWg.Done()
+func workerPeriodicFlushSignal(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
+	// Sleep randomly between min and max cache durations (is this wise?)
+	i := int(maxCacheDur.Nanoseconds()-minCacheDur.Nanoseconds()) / 1000000
+	dur := time.Duration(rand.Intn(i))*time.Millisecond + minCacheDur
+	time.Sleep(dur)
+	periodicFlushCheck <- true
+}
+
+func workerPeriodicFlush(wc wController, dsf dsFlusherBlocking, recent map[int64]bool, dss *dataSources, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+	for dsId, _ := range recent {
+		rds := dss.GetById(dsId)
+		if rds == nil {
+			log.Printf("%s: Cannot lookup ds id (%d) to flush (possible if it moved to another node).", wc.ident(), dsId)
+			delete(recent, dsId)
+			continue
+		}
+		if rds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
+			if debug {
+				log.Printf("%s: Requesting (periodic) flush of ds id: %d", wc.ident(), rds.ds.Id())
+			}
+			dsf.flushDs(rds, false)
+			delete(recent, rds.ds.Id())
+		}
+	}
+}
+
+func worker(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dataSources, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+	wc.onEnter()
+	defer wc.onExit()
 
 	recent := make(map[int64]bool)
 
-	periodicFlushCheck := make(chan int)
-	go func() {
-		for {
-			// Sleep randomly between min and max cache durations (is this wise?)
-			i := int(r.MaxCacheDuration.Nanoseconds()-r.MinCacheDuration.Nanoseconds()) / 1000000
-			dur := time.Duration(rand.Intn(i))*time.Millisecond + r.MinCacheDuration
-			time.Sleep(dur)
-			periodicFlushCheck <- 1
-		}
-	}()
+	periodicFlushCheck := make(chan bool)
+	go workerPeriodicFlushSignal(periodicFlushCheck, minCacheDur, maxCacheDur)
 
-	log.Printf("  - worker(%d) started.", id)
-	r.startWg.Done()
+	log.Printf("  - %s started.", wc.ident())
+	wc.onStarted()
 
 	for {
-		var (
-			rds           *receiverDs
-			channelClosed bool
-		)
+		var rds *receiverDs
 
 		select {
 		case <-periodicFlushCheck:
-			// Nothing to do here
-		case dpds, ok := <-r.workerChs[id]:
-			if ok {
-				rds = dpds.rds // at this point ds has to be already set
-				if err := rds.ds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
-					recent[rds.ds.Id()] = true
+			workerPeriodicFlush(wc, dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
+		case dpds, ok := <-workerCh:
+			if !ok {
+				break
+			}
+			rds = dpds.rds // at this point ds has to be already set
+			if err := rds.ds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
+				if rds.shouldBeFlushed(maxPoints, minCacheDur, maxCacheDur) {
+					// flush just this one ds
+					if debug {
+						log.Printf("%s: Requesting flush of ds id: %d", wc.ident(), rds.ds.Id())
+					}
+					dsf.flushDs(rds, false)
+					delete(recent, rds.ds.Id())
 				} else {
-					log.Printf("worker(%d): dp.process(%s) error: %v", id, rds.ds.Name(), err)
+					recent[rds.ds.Id()] = true
 				}
 			} else {
-				channelClosed = true
+				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), rds.ds.Name(), err)
 			}
 		}
 
-		if rds == nil {
-			// periodic flush - check recent
-			if len(recent) > 0 {
-				if debug {
-					log.Printf("worker(%d): Periodic flush.", id)
-				}
-				for dsId, _ := range recent {
-					rds = r.dss.GetById(dsId)
-					if rds == nil {
-						log.Printf("worker(%d): Cannot lookup ds id (%d) to flush (possible if it moved to another node).", id, dsId)
-						delete(recent, dsId)
-						continue
-					}
-					if rds.shouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
-						if debug {
-							log.Printf("worker(%d): Requesting (periodic) flush of ds id: %d", id, rds.ds.Id())
-						}
-						r.flushDs(rds, false)
-						delete(recent, rds.ds.Id())
-					}
-				}
-			}
-		} else if rds.shouldBeFlushed(r.MaxCachedPoints, r.MinCacheDuration, r.MaxCacheDuration) {
-			// flush just this one ds
-			if debug {
-				log.Printf("worker(%d): Requesting flush of ds id: %d", id, rds.ds.Id())
-			}
-			r.flushDs(rds, false)
-			delete(recent, rds.ds.Id())
-		}
-
-		if channelClosed {
-			break
-		}
 	}
 }
 
@@ -492,37 +499,93 @@ func (r *Receiver) startWorkers() {
 	r.startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-
-		go r.worker(int64(i))
+		go worker(&wrkCtl{wg: &r.flusherWg, startWg: &r.startWg, id: fmt.Sprintf("worker(%d)", i)}, r, r.workerChs[i], r.dss, r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints)
 	}
-
 }
 
-func (r *Receiver) flusher(id int64) {
-	r.flusherWg.Add(1)
-	defer r.flusherWg.Done()
+type dsFlusher interface {
+	FlushDataSource(*rrd.DataSource) error
+}
 
-	log.Printf("  - flusher(%d) started.", id)
-	r.startWg.Done()
+type dsFlusherBlocking interface { // TODO same as above?
+	flushDs(*receiverDs, bool)
+}
+
+type statReporter interface {
+	reportStatCount(string, float64)
+}
+
+type dataPointQueuer interface {
+	QueueDataPoint(string, time.Time, float64)
+}
+
+type aggregatorCommandQueuer interface {
+	QueueAggregatorCommand(*aggregator.Command)
+}
+
+type statCountReporter interface {
+	reportStatCount(string, float64)
+}
+
+type dsCreateOrLoader interface {
+	createOrLoadDS(string) (*receiverDs, error)
+}
+
+type wrkCtl struct {
+	wg, startWg *sync.WaitGroup
+	id          string
+}
+
+func (w *wrkCtl) ident() string { return w.id }
+func (w *wrkCtl) onEnter()      { w.wg.Add(1) }
+func (w *wrkCtl) onExit()       { w.wg.Done() }
+func (w *wrkCtl) onStarted()    { w.startWg.Done() }
+
+type wController interface {
+	ident() string
+	onEnter()
+	onExit()
+	onStarted()
+}
+
+type clusterer interface {
+	RegisterMsgType() (chan *cluster.Msg, chan *cluster.Msg)
+	NumMembers() int
+	LoadDistData(func() ([]cluster.DistDatum, error)) error
+	NodesForDistDatum(cluster.DistDatum) []*cluster.Node
+	LocalNode() *cluster.Node
+	NotifyClusterChanges() chan bool
+	Transition(time.Duration) error
+	Ready(bool) error
+	//NewMsg(*cluster.Node, interface{}) (*cluster.Msg, error)
+}
+
+type workerStopper interface {
+	stopAllWorkers()
+}
+
+func flusher(wc wController, df dsFlusher, sr statReporter, flusherCh chan *dsFlushRequest) {
+	wc.onEnter()
+	defer wc.onExit()
+
+	log.Printf("  - %s started.", wc.ident())
+	wc.onStarted()
 
 	for {
-		fr, ok := <-r.flusherChs[id]
-		if ok {
-			if err := r.serde.FlushDataSource(fr.ds); err != nil {
-				log.Printf("flusher(%d): error flushing data source %v: %v", id, fr.ds, err)
-				if fr.resp != nil {
-					fr.resp <- false
-				}
-			} else if fr.resp != nil {
-				fr.resp <- true
-			}
-			r.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
-		} else {
-			log.Printf("flusher(%d): channel closed, exiting", id)
-			break
+		fr, ok := <-flusherCh
+		if !ok {
+			log.Printf("%s: channel closed, exiting", wc.ident())
+			return
 		}
+		err := df.FlushDataSource(fr.ds)
+		if err != nil {
+			log.Printf("%s: error flushing data source %v: %v", wc.ident(), fr.ds, err)
+		}
+		if fr.resp != nil {
+			fr.resp <- (err == nil)
+		}
+		sr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
 	}
-
 }
 
 func (r *Receiver) startFlushers() {
@@ -533,23 +596,23 @@ func (r *Receiver) startFlushers() {
 	r.startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.flusherChs[i] = make(chan *dsFlushRequest)
-		go r.flusher(int64(i))
+		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: &r.startWg, id: fmt.Sprintf("flusher(%d)", i)}, r.serde, r, r.flusherChs[i])
 	}
 }
 
 func (r *Receiver) startAggWorker() {
 	log.Printf("Starting aggWorker...")
 	r.startWg.Add(1)
-	go r.aggWorker()
+	go aggWorker(&wrkCtl{wg: &r.aggWg, startWg: &r.startWg, id: "aggWorker"}, r.aggCh, r.cluster, r.StatFlushDuration, r.StatsNamePrefix, r, r)
 }
 
-func (r *Receiver) aggWorker() {
+func aggWorker(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, sr statReporter, dpq *Receiver) {
 
-	r.aggWg.Add(1)
-	defer r.aggWg.Done()
+	wc.onEnter()
+	defer wc.onExit()
 
 	// Channel for event forwards to other nodes and us
-	snd, rcv := r.cluster.RegisterMsgType()
+	snd, rcv := clstr.RegisterMsgType()
 	go func() {
 		defer func() { recover() }() // if we're writing to a closed channel below
 
@@ -559,17 +622,17 @@ func (r *Receiver) aggWorker() {
 			// To get an event back:
 			var ac aggregator.Command
 			if err := m.Decode(&ac); err != nil {
-				log.Printf("aggWorker(): msg <- rcv aggreagator.Command decoding FAILED, ignoring this command.")
+				log.Printf("%s: msg <- rcv aggreagator.Command decoding FAILED, ignoring this command.", wc.ident())
 				continue
 			}
 
-			var maxHops = r.cluster.NumMembers() * 2 // This is kind of arbitrary
+			var maxHops = clstr.NumMembers() * 2 // This is kind of arbitrary
 			if ac.Hops > maxHops {
-				log.Printf("aggWorker(): dropping command, max hops (%d) reached", maxHops)
+				log.Printf("%s: dropping command, max hops (%d) reached", wc.ident(), maxHops)
 				continue
 			}
 
-			r.aggCh <- &ac // See recover above
+			aggCh <- &ac // See recover above
 		}
 	}()
 
@@ -581,24 +644,24 @@ func (r *Receiver) aggWorker() {
 			// multiple of duration if the system clock is
 			// adjusted. This thing will mostly remain aligned.
 			clock := time.Now()
-			time.Sleep(clock.Truncate(r.StatFlushDuration).Add(r.StatFlushDuration).Sub(clock))
+			time.Sleep(clock.Truncate(statFlushDuration).Add(statFlushDuration).Sub(clock))
 			if len(flushCh) == 0 {
 				flushCh <- time.Now()
 			} else {
-				log.Printf("aggWorker(): dropping aggreagator flush timer on the floor - busy system?")
+				log.Printf("%s: dropping aggreagator flush timer on the floor - busy system?", wc.ident())
 			}
 		}
 	}()
 
-	log.Printf("aggWorker(): started.")
-	r.startWg.Done()
+	log.Printf("%s: started.", wc.ident())
+	wc.onStarted()
 
-	statsd.Prefix = r.StatsNamePrefix
+	statsd.Prefix = statsNamePrefix
 
-	agg := aggregator.NewAggregator(r)
+	agg := aggregator.NewAggregator(dpq) // aggregator.dataPointQueuer
 	aggDd := &distDatumAggregator{agg}
-	r.cluster.LoadDistData(func() ([]cluster.DistDatum, error) {
-		log.Printf("aggWorker(): adding the aggregator.Aggregator DistDatum to the cluster")
+	clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
+		log.Printf("%s: adding the aggregator.Aggregator DistDatum to the cluster", wc.ident())
 		return []cluster.DistDatum{aggDd}, nil
 	})
 
@@ -615,26 +678,26 @@ func (r *Receiver) aggWorker() {
 		select {
 		case now := <-flushCh:
 			agg.Flush(now)
-		case ac, ok := <-r.aggCh:
+		case ac, ok := <-aggCh:
 			if !ok {
-				log.Printf("aggWorker(): channel closed, performing last flush")
+				log.Printf("%s: channel closed, performing last flush", wc.ident())
 				agg.Flush(time.Now())
 				return
 			}
 
-			for _, node := range r.cluster.NodesForDistDatum(aggDd) {
-				if node.Name() == r.cluster.LocalNode().Name() {
+			for _, node := range clstr.NodesForDistDatum(aggDd) {
+				if node.Name() == clstr.LocalNode().Name() {
 					agg.ProcessCmd(ac)
 				} else if ac.Hops == 0 { // we do not forward more than once
 					if node.Ready() {
 						ac.Hops++
 						if msg, err := cluster.NewMsg(node, ac); err == nil {
 							snd <- msg
-							r.reportStatCount("receiver.aggregationss_forwarded", 1)
+							sr.reportStatCount("receiver.aggregationss_forwarded", 1)
 						}
 					} else {
 						// Drop it
-						log.Printf("aggWorker(): dropping command on the floor because no node is Ready!")
+						log.Printf("%s: dropping command on the floor because no node is Ready!", wc.ident())
 					}
 				}
 			}
@@ -658,22 +721,22 @@ type pacedMetric struct {
 func (r *Receiver) startPacedMetricWorker() {
 	log.Printf("Starting pacedMetricWorker...")
 	r.startWg.Add(1)
-	go r.pacedMetricWorker(time.Second)
+	go pacedMetricWorker(&wrkCtl{wg: &r.pacedMetricWg, startWg: &r.startWg, id: "pacedMetricWorker"}, r.pacedMetricCh, r, r, time.Second)
 }
 
-func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
-	r.pacedMetricWg.Add(1)
-	defer r.pacedMetricWg.Done()
+func pacedMetricWorker(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
+	wc.onEnter()
+	defer wc.onExit()
 
 	sums := make(map[string]float64)
 	gauges := make(map[string]*rrd.ClockPdp)
 
 	flush := func() {
 		for name, sum := range sums {
-			r.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
+			acq.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
 		}
 		for name, gauge := range gauges {
-			r.QueueDataPoint(name, gauge.End, gauge.Reset())
+			dpq.QueueDataPoint(name, gauge.End, gauge.Reset())
 		}
 		sums = make(map[string]float64)
 		// NB: We do not reset gauges, they need to live on
@@ -686,19 +749,19 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 			if len(flushCh) == 0 {
 				flushCh <- true
 			} else {
-				log.Printf("pacedMetricWorker(): dropping flush timer on the floor - busy system?")
+				log.Printf("%s: dropping flush timer on the floor - busy system?", wc.ident())
 			}
 		}
 	}()
 
-	log.Printf("pacedMetricWorker(): started.")
-	r.startWg.Done()
+	log.Printf("%s: started.", wc.ident())
+	wc.onStarted()
 
 	for {
 		select {
 		case <-flushCh:
 			flush()
-		case ps, ok := <-r.pacedMetricCh:
+		case ps, ok := <-pacedMetricCh:
 			if !ok {
 				flush()
 				return
@@ -720,20 +783,21 @@ func (r *Receiver) pacedMetricWorker(frequency time.Duration) {
 // Implement cluster.DistDatum for data sources
 
 type distDatumDataSource struct {
-	r   *Receiver
 	rds *receiverDs
+	dss *dataSources
+	dsf dsFlusherBlocking
 }
 
 func (d *distDatumDataSource) Relinquish() error {
 	if !d.rds.ds.LastUpdate().IsZero() {
-		d.r.flushDs(d.rds, true)
-		d.r.dss.Delete(d.rds)
+		d.dsf.flushDs(d.rds, true)
+		d.dss.Delete(d.rds)
 	}
 	return nil
 }
 
 func (d *distDatumDataSource) Acquire() error {
-	d.r.dss.Delete(d.rds) // it will get loaded afresh when needed
+	d.dss.Delete(d.rds) // it will get loaded afresh when needed
 	return nil
 }
 
