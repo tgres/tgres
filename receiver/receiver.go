@@ -63,7 +63,6 @@ type Receiver struct {
 	flusherWg                          sync.WaitGroup
 	aggWg                              sync.WaitGroup
 	dispatcherWg                       sync.WaitGroup
-	startWg                            sync.WaitGroup
 	pacedMetricWg                      sync.WaitGroup
 	ReportStats                        bool
 	ReportStatsPrefix                  string
@@ -147,22 +146,32 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 	}
 }
 
-func (r *Receiver) Start() error {
+func (r *Receiver) startAllWorkers(startWg *sync.WaitGroup) {
+	startWorkers(r, startWg)
+	startFlushers(r, startWg)
+	startAggWorker(r, startWg)
+	startPacedMetricWorker(r, startWg)
+}
+
+func (r *Receiver) Start() {
+	doStart(r, r)
+}
+
+var doStart = func(ws workerStarter, r *Receiver) {
 	log.Printf("Receiver: starting...")
 
-	r.startWorkers()
-	r.startFlushers()
-	r.startAggWorker()
-	r.startPacedMetricWorker()
+	var startWg sync.WaitGroup
+	ws.startAllWorkers(&startWg)
 
 	// Wait for workers/flushers to start correctly
-	r.startWg.Wait()
+	startWg.Wait()
 	log.Printf("Receiver: All workers running, starting dispatcher.")
 
-	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &r.startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r, r, r.dss, r.workerChs, r.NWorkers, r)
-	log.Printf("Receiver: Ready.")
+	startWg.Add(1)
+	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r, r, r.dss, r.workerChs, r.NWorkers, r)
+	startWg.Wait()
 
-	return nil
+	log.Printf("Receiver: Ready.")
 }
 
 func (r *Receiver) Stop() {
@@ -331,7 +340,7 @@ func dispatcherLookupDsByName(name string, dss *dataSources, dscl dsCreateOrLoad
 	return rds
 }
 
-func dispatcher(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp workerStopper, scr statCountReporter,
+var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp workerStopper, scr statCountReporter,
 	dscl dsCreateOrLoader, dss *dataSources, workerChs []chan *incomingDpWithDs, NWorkers int, dsf dsFlusherBlocking) {
 	wc.onEnter()
 	defer wc.onExit()
@@ -345,6 +354,8 @@ func dispatcher(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp wor
 
 	log.Printf("dispatcher(): marking cluster node as Ready.")
 	clstr.Ready(true)
+
+	wc.onStarted()
 
 	for {
 
@@ -449,8 +460,6 @@ func worker(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWith
 	wc.onStarted()
 
 	for {
-		var rds *receiverDs
-
 		select {
 		case <-periodicFlushCheck:
 			workerPeriodicFlush(wc, dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
@@ -458,7 +467,7 @@ func worker(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWith
 			if !ok {
 				break
 			}
-			rds = dpds.rds // at this point ds has to be already set
+			rds := dpds.rds // at this point ds has to be already set
 			if err := rds.ds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
 				if rds.shouldBeFlushed(maxPoints, minCacheDur, maxCacheDur) {
 					// flush just this one ds
@@ -491,15 +500,15 @@ func (r *Receiver) flushDs(rds *receiverDs, block bool) {
 	rds.lastFlushRT = time.Now()
 }
 
-func (r *Receiver) startWorkers() {
+var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 
 	r.workerChs = make([]chan *incomingDpWithDs, r.NWorkers)
 
 	log.Printf("Starting %d workers...", r.NWorkers)
-	r.startWg.Add(r.NWorkers)
+	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-		go worker(&wrkCtl{wg: &r.flusherWg, startWg: &r.startWg, id: fmt.Sprintf("worker(%d)", i)}, r, r.workerChs[i], r.dss, r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints)
+		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker(%d)", i)}, r, r.workerChs[i], r.dss, r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints)
 	}
 }
 
@@ -564,6 +573,10 @@ type workerStopper interface {
 	stopAllWorkers()
 }
 
+type workerStarter interface {
+	startAllWorkers(*sync.WaitGroup)
+}
+
 func flusher(wc wController, df dsFlusher, sr statReporter, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
@@ -588,22 +601,22 @@ func flusher(wc wController, df dsFlusher, sr statReporter, flusherCh chan *dsFl
 	}
 }
 
-func (r *Receiver) startFlushers() {
+var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 
 	r.flusherChs = make([]chan *dsFlushRequest, r.NWorkers)
 
 	log.Printf("Starting %d flushers...", r.NWorkers)
-	r.startWg.Add(r.NWorkers)
+	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.flusherChs[i] = make(chan *dsFlushRequest)
-		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: &r.startWg, id: fmt.Sprintf("flusher(%d)", i)}, r.serde, r, r.flusherChs[i])
+		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("flusher(%d)", i)}, r.serde, r, r.flusherChs[i])
 	}
 }
 
-func (r *Receiver) startAggWorker() {
+var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {
 	log.Printf("Starting aggWorker...")
-	r.startWg.Add(1)
-	go aggWorker(&wrkCtl{wg: &r.aggWg, startWg: &r.startWg, id: "aggWorker"}, r.aggCh, r.cluster, r.StatFlushDuration, r.StatsNamePrefix, r, r)
+	startWg.Add(1)
+	go aggWorker(&wrkCtl{wg: &r.aggWg, startWg: startWg, id: "aggWorker"}, r.aggCh, r.cluster, r.StatFlushDuration, r.StatsNamePrefix, r, r)
 }
 
 func aggWorker(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, sr statReporter, dpq *Receiver) {
@@ -718,10 +731,10 @@ type pacedMetric struct {
 	value float64
 }
 
-func (r *Receiver) startPacedMetricWorker() {
+var startPacedMetricWorker = func(r *Receiver, startWg *sync.WaitGroup) {
 	log.Printf("Starting pacedMetricWorker...")
-	r.startWg.Add(1)
-	go pacedMetricWorker(&wrkCtl{wg: &r.pacedMetricWg, startWg: &r.startWg, id: "pacedMetricWorker"}, r.pacedMetricCh, r, r, time.Second)
+	startWg.Add(1)
+	go pacedMetricWorker(&wrkCtl{wg: &r.pacedMetricWg, startWg: startWg, id: "pacedMetricWorker"}, r.pacedMetricCh, r, r, time.Second)
 }
 
 func pacedMetricWorker(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {

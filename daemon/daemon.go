@@ -167,10 +167,7 @@ func Init() { // not to be confused with init()
 	}
 
 	// *finally* start the receiver (because graceful restart, parent must save first)
-	if err := rcvr.Start(); err != nil {
-		log.Printf("Could not start the receiver: %v", err)
-		return
-	}
+	rcvr.Start()
 
 	// TODO - there should be a -f(oreground) flag?
 	// Also see not below about saving the starting working directory

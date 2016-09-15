@@ -20,6 +20,7 @@ import (
 	"encoding/gob"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,8 +49,65 @@ func Test_New(t *testing.T) {
 	}
 }
 
-func Test_Start(t *testing.T) {
-	// TODO
+func Test_startAllWorkers(t *testing.T) {
+	// Save and replace the start funcs
+	f1, f2, f3, f4 := startWorkers, startFlushers, startAggWorker, startPacedMetricWorker
+	called := 0
+	f := func(r *Receiver, wg *sync.WaitGroup) { called++ }
+	startWorkers, startFlushers, startAggWorker, startPacedMetricWorker = f, f, f, f
+	(*Receiver)(nil).startAllWorkers(&sync.WaitGroup{})
+	if called != 4 {
+		t.Errorf("startAllWorkers: called != 4")
+	}
+	// Restore
+	startWorkers, startFlushers, startAggWorker, startPacedMetricWorker = f1, f2, f3, f4
+}
+
+func Test_Recevier_Start(t *testing.T) {
+	save := doStart
+	called := 0
+	doStart = func(ws workerStarter, r *Receiver) { called++ }
+	(*Receiver)(nil).Start()
+	if called != 1 {
+		t.Errorf("Receiver.Start: called != 1")
+	}
+	doStart = save
+}
+
+type fakeWorkerStarter struct {
+	startAllWorkersCalled int
+	delay                 time.Duration
+}
+
+func (ws *fakeWorkerStarter) startAllWorkers(startWg *sync.WaitGroup) {
+	ws.startAllWorkersCalled++
+	startWg.Add(1)
+	go func() {
+		time.Sleep(ws.delay)
+		startWg.Done()
+	}()
+}
+
+func Test_doStart(t *testing.T) {
+	delay := 100 * time.Millisecond
+	ws := &fakeWorkerStarter{delay: delay}
+	r := &Receiver{}
+	saveDisp := dispatcher
+	called := 0
+	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp workerStopper, scr statCountReporter,
+		dscl dsCreateOrLoader, dss *dataSources, workerChs []chan *incomingDpWithDs, NWorkers int, dsf dsFlusherBlocking) {
+		called++
+		wc.onStarted()
+	}
+	started := time.Now()
+	doStart(ws, r)
+	if called == 0 {
+		t.Errorf("doStart: didn't call dispatcher()?")
+	}
+	if time.Now().Sub(started) < delay {
+		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
+	}
+	dispatcher = saveDisp
 }
 
 // IncomingDP must be gob encodable
