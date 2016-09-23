@@ -757,7 +757,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 }
 
 // CreateOrReturnDataSource loads or returns an existing DS. This is
-// done by using upsertss first on the ds table, then for each
+// done by using upserts first on the ds table, then for each
 // RRA. This method also attempt to create the TS empty rows with ON
 // CONFLICT DO NOTHING. (There is no reason to ever load TS data
 // because of the nature of an RRD - we accumulate data points and
@@ -774,7 +774,10 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 		return nil, err
 	}
 	defer rows.Close()
-	rows.Next()
+	if !rows.Next() {
+		log.Printf("CreateOrReturnDataSource(): unable to lookup/create")
+		return nil, fmt.Errorf("unable to lookup/create")
+	}
 	ds, err := dataSourceFromRow(rows)
 	if err != nil {
 		log.Printf("CreateOrReturnDataSource(): error: %v", err)

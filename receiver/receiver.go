@@ -45,7 +45,7 @@ type MatchingDSSpecFinder interface {
 }
 
 type Receiver struct {
-	cluster                            *cluster.Cluster
+	cluster                            clusterer
 	serde                              serde.SerDe
 	NWorkers                           int
 	MaxCacheDuration, MinCacheDuration time.Duration
@@ -72,7 +72,7 @@ type Receiver struct {
 // IncomingDP is incoming data, i.e. this is the form in which input
 // data is expected. This is not an internal representation of a data
 // point, it's the format in which they are expected to arrive and is
-// easy to convert to from most ant data point representation out
+// easy to convert to from most any data point representation out
 // there. This data point representation has no notion of duration and
 // therefore must rely on some kind of an externally stored "last
 // update" time.
@@ -146,7 +146,7 @@ func New(clstr *cluster.Cluster, serde serde.SerDe) *Receiver {
 	}
 }
 
-func (r *Receiver) startAllWorkers(startWg *sync.WaitGroup) {
+var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 	startWorkers(r, startWg)
 	startFlushers(r, startWg)
 	startAggWorker(r, startWg)
@@ -154,104 +154,91 @@ func (r *Receiver) startAllWorkers(startWg *sync.WaitGroup) {
 }
 
 func (r *Receiver) Start() {
-	doStart(r, r)
+	doStart(r)
 }
 
-var doStart = func(ws workerStarter, r *Receiver) {
+var doStart = func(r *Receiver) {
 	log.Printf("Receiver: starting...")
 
 	var startWg sync.WaitGroup
-	ws.startAllWorkers(&startWg)
+	startAllWorkers(r, &startWg)
 
 	// Wait for workers/flushers to start correctly
 	startWg.Wait()
 	log.Printf("Receiver: All workers running, starting dispatcher.")
 
 	startWg.Add(1)
-	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r, r, r.dss, r.workerChs, r.NWorkers, r)
+	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r, r.dss, r.workerChs, r.NWorkers, r)
 	startWg.Wait()
 
 	log.Printf("Receiver: Ready.")
 }
 
-func (r *Receiver) Stop() {
-
+var stopDispatcher = func(r *Receiver) {
 	log.Printf("Closing dispatcher channel...")
 	close(r.dpCh)
 	r.dispatcherWg.Wait()
 	log.Printf("Dispatcher finished.")
+}
 
+func (r *Receiver) Stop() {
+	doStop(r, r.cluster)
+}
+
+var doStop = func(r *Receiver, clstr clusterer) {
+	stopDispatcher(r)
+	stopAllWorkers(r)
 	log.Printf("Leaving cluster.")
-	r.cluster.Leave(1 * time.Second)
-	r.cluster.Shutdown()
+	clstr.Leave(1 * time.Second)
+	clstr.Shutdown()
 }
 
 func (r *Receiver) ClusterReady(ready bool) {
 	r.cluster.Ready(ready)
 }
 
-func (r *Receiver) stopWorkers() {
-	log.Printf("stopWorkers(): waiting for worker channels to empty...")
-	empty := false
-	for !empty {
-		empty = true
-		for _, c := range r.workerChs {
-			if len(c) > 0 {
-				empty = false
-				break
-			}
-		}
-		if !empty {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
+var stopWorkers = func(workerChs []chan *incomingDpWithDs, workerWg *sync.WaitGroup) {
 	log.Printf("stopWorkers(): closing all worker channels...")
-	for _, ch := range r.workerChs {
+	for _, ch := range workerChs {
 		close(ch)
 	}
 	log.Printf("stopWorkers(): waiting for workers to finish...")
-	r.workerWg.Wait()
+	workerWg.Wait()
 	log.Printf("stopWorkers(): all workers finished.")
 }
 
-func (r *Receiver) stopFlushers() {
+var stopFlushers = func(flusherChs []chan *dsFlushRequest, flusherWg *sync.WaitGroup) {
 	log.Printf("stopFlushers(): closing all flusher channels...")
-	for _, ch := range r.flusherChs {
+	for _, ch := range flusherChs {
 		close(ch)
 	}
 	log.Printf("stopFlushers(): waiting for flushers to finish...")
-	r.flusherWg.Wait()
+	flusherWg.Wait()
 	log.Printf("stopFlushers(): all flushers finished.")
 }
 
-func (r *Receiver) stopAllWorkers() {
-	r.stopPacedMetricWorker()
-	r.stopAggWorker()
-	r.stopWorkers()
-	r.stopFlushers()
-}
-
-func (r *Receiver) stopAggWorker() {
-
-	log.Printf("stopAggWorker(): waiting for agg channel to empty...")
-	for len(r.aggCh) > 0 {
-		time.Sleep(100 * time.Millisecond)
-	}
-
+var stopAggWorker = func(aggCh chan *aggregator.Command, aggWg *sync.WaitGroup) {
 	log.Printf("stopAggWorker(): closing agg channel...")
-	close(r.aggCh)
+	close(aggCh)
 	log.Printf("stopAggWorker(): waiting for agg worker to finish...")
-	r.aggWg.Wait()
+	aggWg.Wait()
 	log.Printf("stopAggWorker(): agg worker finished.")
 }
 
-func (r *Receiver) stopPacedMetricWorker() {
+var stopPacedMetricWorker = func(pacedMetricCh chan *pacedMetric, pacedMetricWg *sync.WaitGroup) {
 	log.Printf("stopPacedMetricWorker(): closing paced metric channel...")
-	close(r.pacedMetricCh)
+	close(pacedMetricCh)
 	log.Printf("stopPacedMetricWorker(): waiting for paced metric worker to finish...")
-	r.pacedMetricWg.Wait()
+	pacedMetricWg.Wait()
 	log.Printf("stopPacedMetricWorker(): paced metric worker finished.")
+}
+
+var stopAllWorkers = func(r *Receiver) {
+	// Order matters here
+	stopPacedMetricWorker(r.pacedMetricCh, &r.pacedMetricWg)
+	stopAggWorker(r.aggCh, &r.aggWg)
+	stopWorkers(r.workerChs, &r.workerWg)
+	stopFlushers(r.flusherChs, &r.flusherWg)
 }
 
 func (r *Receiver) createOrLoadDS(name string) (*receiverDs, error) {
@@ -340,7 +327,7 @@ func dispatcherLookupDsByName(name string, dss *dataSources, dscl dsCreateOrLoad
 	return rds
 }
 
-var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, wstp workerStopper, scr statCountReporter,
+var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter,
 	dscl dsCreateOrLoader, dss *dataSources, workerChs []chan *incomingDpWithDs, NWorkers int, dsf dsFlusherBlocking) {
 	wc.onEnter()
 	defer wc.onExit()
@@ -374,7 +361,6 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, ws
 
 		if !ok {
 			log.Printf("dispatcher(): channel closed, shutting down")
-			wstp.stopAllWorkers()
 			break
 		}
 
@@ -566,15 +552,9 @@ type clusterer interface {
 	NotifyClusterChanges() chan bool
 	Transition(time.Duration) error
 	Ready(bool) error
+	Leave(timeout time.Duration) error
+	Shutdown() error
 	//NewMsg(*cluster.Node, interface{}) (*cluster.Msg, error)
-}
-
-type workerStopper interface {
-	stopAllWorkers()
-}
-
-type workerStarter interface {
-	startAllWorkers(*sync.WaitGroup)
 }
 
 func flusher(wc wController, df dsFlusher, sr statReporter, flusherCh chan *dsFlushRequest) {
