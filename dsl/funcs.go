@@ -1065,7 +1065,8 @@ func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 }
 
 // aliasSub()
-// TODO regex groups don't work yet
+// TODO regex groups don't work yet (they do with "$1" syntax, but not
+// graphite's "\1" syntax)
 
 func dslAliasSub(args map[string]interface{}) (SeriesMap, error) {
 	result := args["seriesList"].(SeriesMap)
