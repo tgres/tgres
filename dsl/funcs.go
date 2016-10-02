@@ -1046,17 +1046,20 @@ func dslAliasByMetric(args map[string]interface{}) (SeriesMap, error) {
 }
 
 // aliasByNode()
-// TODO implement nodes vararg, not just first n?
 func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 	result := args["seriesList"].(SeriesMap)
 	nodes := args["nodes"].([]interface{})
-	n := int(nodes[0].(float64))
 	for name, series := range result {
 		parts := strings.Split(name, ".")
-		if n >= len(parts) {
-			return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
+		var alias_parts []string
+		for _, num := range(nodes) {
+			n := int(num.(float64))
+			if n >= len(parts) {
+				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
+			}
+			alias_parts = append(alias_parts, parts[n])
 		}
-		series.Alias(parts[n])
+		series.Alias(strings.Join(alias_parts, "."))
 	}
 	return result, nil
 }
