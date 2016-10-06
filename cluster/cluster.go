@@ -97,7 +97,10 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, rpcport in
 		ncache:    make(map[*memberlist.Node]*Node),
 	}
 	cfg := memberlist.DefaultLANConfig()
+	cfg.TCPTimeout = 30 * time.Second
+	cfg.SuspicionMult = 6
 	cfg.PushPullInterval = 15 * time.Second
+
 	if baddr != "" {
 		cfg.BindAddr = baddr
 	}
