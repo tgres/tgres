@@ -134,14 +134,13 @@ func Init() { // not to be confused with init()
 	}
 
 	// Create the receiver
-	rcvr := receiver.New(c, db)
+	rcvr := receiver.New(c, db, receiver.MatchingDSSpecFinder(Cfg))
 	rcvr.NWorkers = Cfg.Workers
 	rcvr.MaxCacheDuration = Cfg.MaxCache.Duration
 	rcvr.MinCacheDuration = Cfg.MinCache.Duration
 	rcvr.MaxCachedPoints = Cfg.MaxCachedPoints
 	rcvr.StatFlushDuration = Cfg.StatFlush.Duration
 	rcvr.StatsNamePrefix = Cfg.StatsNamePrefix
-	rcvr.DSSpecs = receiver.MatchingDSSpecFinder(Cfg)
 
 	// Create and run the Service Manager
 	serviceMgr = newServiceManager(rcvr)

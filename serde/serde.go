@@ -23,10 +23,16 @@ import (
 	"time"
 )
 
-// This thing knows how to load/save series in some storage
-type SerDe interface {
+type DataSourceSerDe interface {
 	// Create a DS with name, and/or return it
 	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
+	// Flush a DS
+	FlushDataSource(ds *rrd.DataSource) error
+}
+
+// This thing knows how to load/save series in some storage
+type SerDe interface {
+	DataSourceSerDe
 
 	FetchDataSource(id int64) (*rrd.DataSource, error)
 	FetchDataSourceByName(name string) (*rrd.DataSource, error)
@@ -34,8 +40,6 @@ type SerDe interface {
 	FetchDataSources() ([]*rrd.DataSource, error)
 	FetchDataSourceNames() (map[string]int64, error)
 
-	// Flush a DS
-	FlushDataSource(ds *rrd.DataSource) error
 	// Query
 	SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (dsl.Series, error)
 	// Use the database to infer outside IPs of other connected clients
