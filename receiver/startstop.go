@@ -150,6 +150,12 @@ var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 	}
 }
 
+var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {
+	log.Printf("Starting aggWorker...")
+	startWg.Add(1)
+	go aggWorker(&wrkCtl{wg: &r.aggWg, startWg: startWg, id: "aggWorker"}, r.aggCh, r.cluster, r.StatFlushDuration, r.StatsNamePrefix, r, r)
+}
+
 var startPacedMetricWorker = func(r *Receiver, startWg *sync.WaitGroup) {
 	log.Printf("Starting pacedMetricWorker...")
 	startWg.Add(1)

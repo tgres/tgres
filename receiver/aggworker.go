@@ -23,15 +23,8 @@ import (
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/statsd"
 	"log"
-	"sync"
 	"time"
 )
-
-var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {
-	log.Printf("Starting aggWorker...")
-	startWg.Add(1)
-	go aggWorker(&wrkCtl{wg: &r.aggWg, startWg: startWg, id: "aggWorker"}, r.aggCh, r.cluster, r.StatFlushDuration, r.StatsNamePrefix, r, r)
-}
 
 func aggWorker(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
 

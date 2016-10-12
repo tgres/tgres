@@ -45,7 +45,7 @@ func Test_FindMatchingDSSpec(t *testing.T) {
 }
 
 func Test_New(t *testing.T) {
-	r := New(nil, nil)
+	r := New(nil, nil, nil)
 	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres" {
 		t.Errorf(`New: r.NWorkers != 4 || r.ReportStatsPrefix != "tgres"`)
 	}
@@ -81,8 +81,7 @@ func Test_doStart(t *testing.T) {
 	r := &Receiver{}
 	saveDisp := dispatcher
 	called := 0
-	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter,
-		dscl dsCreateOrLoader, dss *dataSources, workerChs []chan *incomingDpWithDs, NWorkers int, dsf dsFlusherBlocking) {
+	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
 		called++
 		wc.onStarted()
 	}
