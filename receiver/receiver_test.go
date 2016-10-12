@@ -18,7 +18,9 @@ package receiver
 import (
 	"bytes"
 	"encoding/gob"
+	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
 	"os"
 	"reflect"
 	"testing"
@@ -29,6 +31,24 @@ import (
 func Test_init(t *testing.T) {
 	if os.Getenv("TGRES_RCVR_DEBUG") == "" && debug {
 		t.Errorf("debug is set when TGRES_RCVR_DEBUG isn't")
+	}
+}
+
+func Test_workerChannels_queue(t *testing.T) {
+	var wcs workerChannels = make([]chan *incomingDpWithDs, 2)
+	wcs[0] = make(chan *incomingDpWithDs)
+	wcs[1] = make(chan *incomingDpWithDs)
+
+	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+	rds := &receiverDs{DataSource: ds}
+	called := 0
+	go func() {
+		<-wcs[0]
+		called++
+	}()
+	wcs.queue(nil, rds)
+	if called != 1 {
+		t.Errorf("id 0 should be send to worker 0")
 	}
 }
 
@@ -68,6 +88,74 @@ func Test_Receiver_ClusterReady(t *testing.T) {
 	r.ClusterReady(true)
 	if c.nReady != 1 {
 		t.Errorf("ClusterReady: c.nReady != 1 - didn't call Ready()?")
+	}
+}
+
+func Test_Receiver_QueueDataPoint(t *testing.T) {
+	r := &Receiver{dpCh: make(chan *IncomingDP)}
+	called := 0
+	go func() {
+		<-r.dpCh
+		called++
+	}()
+	r.QueueDataPoint("", time.Time{}, 0)
+	if called != 1 {
+		t.Errorf("QueueDataPoint didn't sent to dpCh?")
+	}
+}
+
+func Test_Receiver_QueueAggregatorCommand(t *testing.T) {
+	r := &Receiver{aggCh: make(chan *aggregator.Command)}
+	called := 0
+	go func() {
+		<-r.aggCh
+		called++
+	}()
+	r.QueueAggregatorCommand(nil)
+	if called != 1 {
+		t.Errorf("QueueAggregatorCommand didn't sent to aggCh?")
+	}
+}
+
+func Test_Receiver_reportStatCount(t *testing.T) {
+	// Also tests QueueSum and QueueGauge
+	r := &Receiver{ReportStats: true, ReportStatsPrefix: "foo", pacedMetricCh: make(chan *pacedMetric)}
+	called := 0
+	go func() {
+		for {
+			<-r.pacedMetricCh
+			called++
+		}
+	}()
+	(*Receiver)(nil).reportStatCount("", 0) // noop
+	r.reportStatCount("", 0)                // noop (f == 0)
+	r.reportStatCount("", 1)                // called++
+	r.ReportStats = false
+	r.reportStatCount("", 1) // noop (ReportStats false)
+	r.QueueSum("", 0)        // called++
+	r.QueueGauge("", 0)      // called++
+	if called != 3 {
+		t.Errorf("reportStatCount call count not 3 but %d", called)
+	}
+}
+
+func Test_Receiver_flushDs(t *testing.T) {
+	// So we need to test that this calls queueblocking...
+	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1)}
+	r.flusherChs[0] = make(chan *dsFlushRequest)
+	called := 0
+	go func() {
+		for {
+			<-r.flusherChs[0]
+			called++
+		}
+	}()
+	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+	rds := &receiverDs{DataSource: ds}
+	// TODO testing that ClearRRAs was called is tricky...
+	r.flushDs(rds, false)
+	if called != 1 {
+		t.Errorf("flushDs call count not 1: %d", called)
 	}
 }
 
