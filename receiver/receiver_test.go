@@ -23,6 +23,7 @@ import (
 	"github.com/tgres/tgres/rrd"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -144,18 +145,31 @@ func Test_Receiver_flushDs(t *testing.T) {
 	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1)}
 	r.flusherChs[0] = make(chan *dsFlushRequest)
 	called := 0
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
-			<-r.flusherChs[0]
+			if _, ok := <-r.flusherChs[0]; !ok {
+				break
+			}
 			called++
 		}
 	}()
 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
+	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+	ds.ProcessIncomingDataPoint(10, time.Unix(100, 0))
+	ds.ProcessIncomingDataPoint(10, time.Unix(101, 0))
 	rds := &receiverDs{DataSource: ds}
-	// TODO testing that ClearRRAs was called is tricky...
 	r.flushDs(rds, false)
+	close(r.flusherChs[0])
+	wg.Wait()
 	if called != 1 {
 		t.Errorf("flushDs call count not 1: %d", called)
+	}
+	if ds.PointCount() != 0 {
+		t.Errorf("ClearRRAs was not called by flushDs")
 	}
 }
 
