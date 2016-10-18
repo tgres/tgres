@@ -1,6 +1,7 @@
 
 # This is a TOML file: https://github.com/toml-lang/toml
 
+foreground =           false
 pid-file =             "tgres.pid"
 log-file =             "log/tgres.log"
 log-cycle-interval =   "24h"

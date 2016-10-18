@@ -36,6 +36,7 @@ var Cfg *Config
 type Config struct {
 	PidPath                  string   `toml:"pid-file"`
 	LogPath                  string   `toml:"log-file"`
+	Foreground               bool     `toml:"foreground"`
 	LogCycle                 duration `toml:"log-cycle-interval"`
 	DbConnectString          string   `toml:"db-connect-string"`
 	MaxCachedPoints          int      `toml:"max-cached-points"`
@@ -157,6 +158,10 @@ func (c *Config) processConfigPidFile(wd string) error {
 }
 
 func (c *Config) processConfigLogFile(wd string) error {
+	if c.Foreground == true {
+		log.Printf("Foreground Mode, logs will remain on stdout")
+		return nil
+	}
 	if os.Getenv("TGRES_LOG") != "" {
 		c.LogPath = os.Getenv("TGRES_LOG")
 	}
@@ -176,6 +181,9 @@ func (c *Config) processConfigLogFile(wd string) error {
 }
 
 func (c *Config) processConfigLogCycleInterval() error {
+	if c.Foreground == true {
+		return nil
+	}
 	if c.LogCycle.Duration == 0 {
 		return fmt.Errorf("log-cycle-interval setting empty")
 	}
