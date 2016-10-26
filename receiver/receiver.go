@@ -22,7 +22,6 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"os"
 	"sync"
@@ -82,11 +81,6 @@ func (w workerChannels) queue(dp *IncomingDP, rds *receiverDs) {
 type incomingDpWithDs struct {
 	dp  *IncomingDP
 	rds *receiverDs
-}
-
-type dsFlushRequest struct {
-	ds   *rrd.DataSource
-	resp chan bool
 }
 
 func New(clstr *cluster.Cluster, serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
@@ -158,7 +152,7 @@ func (r *Receiver) flushDs(rds *receiverDs, block bool) {
 	rds.lastFlushRT = time.Now()
 }
 
-type dsFlusherBlocking interface { // TODO same as above?
+type dsFlusherBlocking interface {
 	flushDs(*receiverDs, bool)
 }
 

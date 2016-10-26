@@ -13,15 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
+	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"log"
 )
+
+type dsFlushRequest struct {
+	ds   *rrd.DataSource
+	resp chan bool
+}
 
 type flusherChannels []chan *dsFlushRequest
 
@@ -36,7 +39,7 @@ func (f flusherChannels) queueBlocking(rds *receiverDs, block bool) {
 	}
 }
 
-func flusher(wc wController, db serde.DataSourceSerDe, scr statCountReporter, flusherCh chan *dsFlushRequest) {
+func flusher(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
 

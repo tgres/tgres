@@ -96,7 +96,6 @@ func (d *dsCache) loadOrCreateDS(name string) (*rrd.DataSource, error) {
 }
 
 // getByNameOrLoadOrCreate gets, or loads from db (and possibly creates) a ds
-// ZZZ ever more reason to move the flushing in here somehow....
 func (d *dsCache) getByNameOrLoadOrCreate(name string) (*receiverDs, error) {
 	rds := d.getByName(name)
 	if rds == nil || rds.stale {

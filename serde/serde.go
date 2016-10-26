@@ -23,11 +23,15 @@ import (
 	"time"
 )
 
-type DataSourceSerDe interface {
-	// Create a DS with name, and/or return it
-	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
+type DataSourceFlusher interface {
 	// Flush a DS
 	FlushDataSource(ds *rrd.DataSource) error
+}
+
+type DataSourceSerDe interface {
+	DataSourceFlusher
+	// Create a DS with name, and/or return it
+	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
 }
 
 // This thing knows how to load/save series in some storage
