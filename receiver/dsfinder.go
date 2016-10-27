@@ -31,6 +31,9 @@ type MatchingDSSpecFinder interface {
 }
 
 func (_ *dftDSFinder) FindMatchingDSSpec(name string) *serde.DSSpec {
+	if name == "" {
+		return nil
+	}
 	return &serde.DSSpec{
 		Step:      10 * time.Second,
 		Heartbeat: 2 * time.Hour,

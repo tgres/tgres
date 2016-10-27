@@ -16,6 +16,7 @@ package receiver
 
 import (
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 	"testing"
 	"time"
 )
@@ -61,5 +62,32 @@ func Test_dsCache_insert(t *testing.T) {
 	}
 	if rds2 := d.getByName("foo"); rds2 != rds {
 		t.Errorf("insert: getByName did not return correct value")
+	}
+}
+
+type fakeSerde struct {
+	called int
+}
+
+func (f *fakeSerde) FlushDataSource(ds *rrd.DataSource) error {
+	f.called++
+	return nil
+}
+
+func (f *fakeSerde) CreateOrReturnDataSource(name string, dsSpec *serde.DSSpec) (*rrd.DataSource, error) {
+	f.called++
+	return nil, nil
+}
+
+func Test_dsCache_loadOrCreateDS(t *testing.T) {
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	d := newDsCache(db, df, nil, nil, true)
+	d.loadOrCreateDS("foo")
+	if db.called != 1 {
+		t.Errorf("loadOrCreateDS: CreateOrReturnDataSource should be called once, we got: %d", db.called)
+	}
+	if ds, _ := d.loadOrCreateDS(""); ds != nil {
+		t.Errorf("loadOrCreateDS: for a blank name we should get nil")
 	}
 }
