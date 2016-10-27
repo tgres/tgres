@@ -180,7 +180,7 @@ type fakeCluster struct {
 
 func (_ *fakeCluster) RegisterMsgType() (chan *cluster.Msg, chan *cluster.Msg)  { return nil, nil }
 func (_ *fakeCluster) NumMembers() int                                          { return 0 }
-func (_ *fakeCluster) LoadDistData(f func() ([]cluster.DistDatum, error)) error { return nil }
+func (_ *fakeCluster) LoadDistData(f func() ([]cluster.DistDatum, error)) error { f(); return nil }
 func (_ *fakeCluster) NodesForDistDatum(cluster.DistDatum) []*cluster.Node      { return nil }
 func (_ *fakeCluster) LocalNode() *cluster.Node                                 { return nil }
 func (_ *fakeCluster) NotifyClusterChanges() chan bool                          { return nil }

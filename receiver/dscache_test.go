@@ -15,6 +15,7 @@
 package receiver
 
 import (
+	"fmt"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"testing"
@@ -66,17 +67,21 @@ func Test_dsCache_insert(t *testing.T) {
 }
 
 type fakeSerde struct {
-	called int
+	flushCalled, createCalled int
+	fakeErr                   bool
 }
 
 func (f *fakeSerde) FlushDataSource(ds *rrd.DataSource) error {
-	f.called++
+	f.flushCalled++
 	return nil
 }
 
 func (f *fakeSerde) CreateOrReturnDataSource(name string, dsSpec *serde.DSSpec) (*rrd.DataSource, error) {
-	f.called++
-	return nil, nil
+	f.createCalled++
+	if f.fakeErr {
+		return nil, fmt.Errorf("some error")
+	}
+	return rrd.NewDataSource(7, name, 0, 0, time.Time{}, 0), nil
 }
 
 func Test_dsCache_loadOrCreateDS(t *testing.T) {
@@ -84,10 +89,83 @@ func Test_dsCache_loadOrCreateDS(t *testing.T) {
 	df := &dftDSFinder{}
 	d := newDsCache(db, df, nil, nil, true)
 	d.loadOrCreateDS("foo")
-	if db.called != 1 {
-		t.Errorf("loadOrCreateDS: CreateOrReturnDataSource should be called once, we got: %d", db.called)
+	if db.createCalled != 1 {
+		t.Errorf("loadOrCreateDS: CreateOrReturnDataSource should be called once, we got: %d", db.createCalled)
 	}
-	if ds, _ := d.loadOrCreateDS(""); ds != nil {
+	ds, err := d.loadOrCreateDS("")
+	if ds != nil {
 		t.Errorf("loadOrCreateDS: for a blank name we should get nil")
+	}
+	if err != nil {
+		t.Errorf("loadOrCreateDS: err != nil")
+	}
+}
+
+func Test_getByNameOrLoadOrCreate(t *testing.T) {
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	c := &fakeCluster{}
+	d := newDsCache(db, df, c, nil, true)
+
+	rds, err := d.getByNameOrLoadOrCreate("foo")
+	if db.createCalled != 1 {
+		t.Errorf("getByNameOrLoadOrCreate: CreateOrReturnDataSource should be called once, we got: %d", db.createCalled)
+	}
+	if err != nil || rds == nil {
+		t.Errorf("getByNameOrLoadOrCreate: err != nil || rds == nil")
+	}
+
+	d = newDsCache(db, df, nil, nil, true)
+	db.fakeErr = true
+	rds, err = d.getByNameOrLoadOrCreate("foo")
+	if err == nil || rds != nil {
+		t.Errorf("getByNameOrLoadOrCreate: err == nil || rds != nil")
+	}
+	if db.createCalled != 2 || db.flushCalled != 0 {
+		t.Errorf("getByNameOrLoadOrCreate (2): db.createCalled != 2 || db.flushCalled != 0, got: %d %d", db.createCalled, db.flushCalled)
+	}
+}
+
+// This is a receiver
+type fakeDsFlusher struct {
+	called int
+}
+
+func (f *fakeDsFlusher) flushDs(rds *receiverDs, block bool) {
+	f.called++
+}
+
+func Test_receiverDs_Relinquish(t *testing.T) {
+	ds := rrd.NewDataSource(7, "foo", 0, 0, time.Time{}, 0)
+	f := &fakeDsFlusher{}
+	rds := &receiverDs{DataSource: ds, dsf: f}
+
+	err := rds.Relinquish()
+	if err != nil {
+		t.Errorf("rds.Relinquish: err != nil: %v", err)
+	}
+	if f.called != 0 {
+		t.Errorf("if lastupdate is zero, ds should not be flushed")
+	}
+
+	ds.ProcessIncomingDataPoint(123, time.Now())
+	err = rds.Relinquish()
+	if err != nil {
+		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
+	}
+	if f.called != 1 {
+		t.Errorf("if lastupdate is not zero, ds should be flushed")
+	}
+
+	// test Acquire while we're at it
+	err = rds.Acquire()
+	if err != nil {
+		t.Errorf("Acquire: err != nil")
+	}
+	if !rds.stale {
+		t.Errorf("Acquire: !rds.stale")
+	}
+	if f.called != 1 {
+		t.Errorf("Acquire: should not call flush")
 	}
 }

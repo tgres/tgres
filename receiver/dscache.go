@@ -113,6 +113,7 @@ func (d *dsCache) getByNameOrLoadOrCreate(name string) (*receiverDs, error) {
 	return rds, nil
 }
 
+// register the rds as a DistDatum with the cluster
 func (d *dsCache) register(rds *receiverDs) {
 	if d.clstr != nil {
 		d.clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
