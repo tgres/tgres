@@ -60,5 +60,6 @@ func flusher(wc wController, db serde.DataSourceFlusher, scr statCountReporter, 
 			fr.resp <- (err == nil)
 		}
 		scr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
+		scr.reportStatCount("serde.flushes", 1)
 	}
 }
