@@ -148,7 +148,7 @@ func Test_receiverDs_Relinquish(t *testing.T) {
 		t.Errorf("if lastupdate is zero, ds should not be flushed")
 	}
 
-	ds.ProcessIncomingDataPoint(123, time.Now())
+	ds.ProcessIncomingDataPoint(123, time.Unix(1000, 0))
 	err = rds.Relinquish()
 	if err != nil {
 		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
@@ -168,4 +168,62 @@ func Test_receiverDs_Relinquish(t *testing.T) {
 	if f.called != 1 {
 		t.Errorf("Acquire: should not call flush")
 	}
+
+	// receiverDs methods
+	if rds.Type() != "DataSource" {
+		t.Errorf(`rds.Type() != "DataSource"`)
+	}
+
+	if rds.GetName() != "foo" {
+		t.Errorf(`rds.GetName() != "foo"`)
+	}
+}
+
+func Test_receiverDs_shouldBeFlushed(t *testing.T) {
+	var (
+		id, dsId, size, width int64
+		step                  time.Duration
+		cf                    string
+		xff                   float32
+		latest                time.Time
+	)
+
+	id, dsId, step, size, width, cf, xff, latest = 1, 3, 10*time.Second, 100, 30, "WMEAN", 0.5, time.Unix(1000, 0)
+	ds := rrd.NewDataSource(dsId, "foo", 0, 0, time.Time{}, 0)
+	rra, _ := rrd.NewRoundRobinArchive(id, dsId, cf, step, size, width, xff, latest)
+	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+	f := &fakeDsFlusher{}
+	rds := &receiverDs{DataSource: ds, dsf: f, lastFlushRT: time.Now()}
+
+	// When rds.LastUpdate().IsZero() it should be false
+	if rds.shouldBeFlushed(0, 0, 0) {
+		t.Errorf("with rds.LastUpdate().IsZero(), rds.shouldBeFlushed == true")
+	}
+
+	// this will cause a LastUpdate != 0
+	ds.ProcessIncomingDataPoint(123, time.Now().Add(-2*time.Hour))
+
+	// so far we still have 0 points, so nothing to flush
+	if rds.shouldBeFlushed(0, 0, 0) {
+		t.Errorf("with PointCount 0, rds.shouldBeFlushed == true")
+	}
+
+	ds.ProcessIncomingDataPoint(123, time.Now().Add(-time.Hour))
+
+	if !rds.shouldBeFlushed(0, 0, 24*time.Hour) {
+		t.Errorf("with maxCachedPoints == 0, rds.shouldBeFlushed != true")
+	}
+
+	if rds.shouldBeFlushed(1000, 0, 24*time.Hour) {
+		t.Errorf("with maxCachedPoints == 1000, rds.shouldBeFlushed == true")
+	}
+
+	if rds.shouldBeFlushed(1000, 24*time.Hour, 24*time.Hour) {
+		t.Errorf("with maxCachedPoints == 1000, minCache 24hr, rds.shouldBeFlushed == true")
+	}
+
+	if !rds.shouldBeFlushed(1000, 0, 0) {
+		t.Errorf("with maxCachedPoints == 1000, minCache 0, maxCache 0, rds.shouldBeFlushed != true")
+	}
+
 }
