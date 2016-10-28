@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
@@ -30,7 +27,10 @@ func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh c
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
-		m := <-rcv
+		m, ok := <-rcv
+		if !ok {
+			return
+		}
 
 		// To get an event back:
 		var dp IncomingDP
@@ -49,14 +49,11 @@ func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh c
 	}
 }
 
-func dispatcherForwardDpToNode(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+func dispatcherForwardDPToNode(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
 	if dp.Hops == 0 { // we do not forward more than once
 		if node.Ready() {
 			dp.Hops++
-			msg, err := cluster.NewMsg(node, dp)
-			if err != nil {
-				return err
-			}
+			msg, _ := cluster.NewMsg(node, dp) // can't possibly error
 			snd <- msg
 		} else {
 			return fmt.Errorf("sendDpToNode(): Node is not ready")
@@ -70,7 +67,7 @@ func dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, workerChs work
 		if node.Name() == clstr.LocalNode().Name() {
 			workerChs.queue(dp, rds)
 		} else {
-			if err := dispatcherForwardDpToNode(dp, node, snd); err != nil {
+			if err := dispatcherForwardDPToNode(dp, node, snd); err != nil {
 				log.Printf("dispatcher(): Error forwarding a data point: %v", err)
 				// TODO For not ready error - sleep and return the dp to the channel?
 				continue
