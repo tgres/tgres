@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) {
+var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -83,7 +83,7 @@ var dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerCh
 	return
 }
 
-func dispatcherProcessIncomingDP(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+var dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 
 	scr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
 
@@ -141,7 +141,6 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 			continue
 		case dp, ok = <-dpCh:
 		}
-
 		if !ok {
 			log.Printf("dispatcher: channel closed, shutting down")
 			break

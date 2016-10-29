@@ -18,6 +18,7 @@ package receiver
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
@@ -176,17 +177,31 @@ func Test_Receiver_flushDs(t *testing.T) {
 // fake cluster
 type fakeCluster struct {
 	n, nLeave, nShutdown, nReady int
+	nReg, nTrans                 int
 	nodesForDd                   []*cluster.Node
 	ln                           *cluster.Node
+	cChange                      chan bool
+	tErr                         bool
 }
 
-func (_ *fakeCluster) RegisterMsgType() (chan *cluster.Msg, chan *cluster.Msg)  { return nil, nil }
+func (c *fakeCluster) RegisterMsgType() (chan *cluster.Msg, chan *cluster.Msg) {
+	c.nReg++
+	return nil, nil
+}
 func (_ *fakeCluster) NumMembers() int                                          { return 0 }
 func (_ *fakeCluster) LoadDistData(f func() ([]cluster.DistDatum, error)) error { f(); return nil }
 func (c *fakeCluster) NodesForDistDatum(cluster.DistDatum) []*cluster.Node      { return c.nodesForDd }
 func (c *fakeCluster) LocalNode() *cluster.Node                                 { return c.ln }
-func (_ *fakeCluster) NotifyClusterChanges() chan bool                          { return nil }
-func (_ *fakeCluster) Transition(time.Duration) error                           { return nil }
+func (c *fakeCluster) NotifyClusterChanges() chan bool {
+	return c.cChange
+}
+func (c *fakeCluster) Transition(time.Duration) error {
+	c.nTrans++
+	if c.tErr {
+		return fmt.Errorf("some error")
+	}
+	return nil
+}
 func (c *fakeCluster) Ready(bool) error {
 	c.n++
 	c.nReady = c.n

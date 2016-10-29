@@ -24,6 +24,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -321,10 +322,87 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 	dispatcherProcessOrForward = saveFn
 }
 
-// func Test_dispatcher(t *testing.T) {
+func Test_theDispatcher(t *testing.T) {
 
-// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
+	saveFn1 := dispatcherIncomingDPMessages
+	saveFn2 := dispatcherProcessIncomingDP
+	dimCalled := 0
+	dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) { dimCalled++ }
+	dpidpCalled := 0
+	dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+		dpidpCalled++
+	}
 
-// 	// dispatcher(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
 
-// }
+	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
+	clstr := &fakeCluster{cChange: make(chan bool)}
+	dpCh := make(chan *IncomingDP)
+	scr := &fakeSr{}
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	dsc := newDsCache(db, df, clstr, nil, true)
+
+	wc.startWg.Add(1)
+	go dispatcher(wc, dpCh, clstr, scr, dsc, nil)
+	wc.startWg.Wait()
+
+	if clstr.nReady == 0 {
+		t.Errorf("dispatcher: Ready(true) not called on cluster")
+	}
+
+	if clstr.nReg == 0 {
+		t.Errorf("dispatcher: cluster.RegisterMsgType() not called")
+	}
+
+	// This sometimes can fail because we don't wait for that goroutine in this test...
+	time.Sleep(5 * time.Millisecond)
+	if dimCalled == 0 {
+		t.Errorf("dispatcher: dispatcherIncomingDPMessages not started")
+	}
+
+	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
+	dpCh <- dp
+	dpCh <- dp
+
+	if dpidpCalled == 0 {
+		t.Errorf("dispatcher: dispatcherProcessIncomingDP not called")
+	}
+
+	// Trigger a transition
+	clstr.cChange <- true
+	dpCh <- dp
+
+	if clstr.nTrans == 0 {
+		t.Errorf("dispatcher: on cluster change, Transition() not called")
+	}
+
+	// Transition with error
+	clstr.tErr = true
+	clstr.cChange <- true
+	dpCh <- dp
+
+	if !strings.Contains(string(fl.last), "some error") {
+		t.Errorf("dispatcher: on transition error, 'some error' missing from logs")
+	}
+
+	dpidpCalled = 0
+	close(dpCh)
+	time.Sleep(5 * time.Millisecond)
+
+	if dpidpCalled > 0 {
+		t.Errorf("dispatcher: dispatcherProcessIncomingDP must not be called on channel close")
+	}
+
+	if !strings.Contains(string(fl.last), "shutting down") {
+		t.Errorf("dispatcher: on channel close, missing 'shutting down' log entry")
+	}
+
+	dispatcherIncomingDPMessages = saveFn1
+	dispatcherProcessIncomingDP = saveFn2
+}
