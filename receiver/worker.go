@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
@@ -34,17 +31,17 @@ func workerPeriodicFlushSignal(periodicFlushCheck chan bool, minCacheDur, maxCac
 	}
 }
 
-func workerPeriodicFlush(wc wController, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+func workerPeriodicFlush(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
 	for dsId, _ := range recent {
 		rds := dss.getById(dsId)
 		if rds == nil {
-			log.Printf("%s: Cannot lookup ds id (%d) to flush (possible if it moved to another node).", wc.ident(), dsId)
+			log.Printf("%s: Cannot lookup ds id (%d) to flush (possible if it moved to another node).", ident, dsId)
 			delete(recent, dsId)
 			continue
 		}
 		if rds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
 			if debug {
-				log.Printf("%s: Requesting (periodic) flush of ds id: %d", wc.ident(), rds.Id())
+				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, rds.Id())
 			}
 			dsf.flushDs(rds, false)
 			delete(recent, rds.Id())
@@ -67,7 +64,7 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 	for {
 		select {
 		case <-periodicFlushCheck:
-			workerPeriodicFlush(wc, dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
+			workerPeriodicFlush(wc.ident(), dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
 		case dpds, ok := <-workerCh:
 			if !ok {
 				break
