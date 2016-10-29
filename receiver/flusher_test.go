@@ -83,8 +83,8 @@ func Test_flusher(t *testing.T) {
 		t.Errorf("FlushDataSource() not called.")
 	}
 
-	if sr.called != 1 {
-		t.Errorf("reportStatCount() not called.")
+	if sr.called != 2 {
+		t.Errorf("reportStatCount() should have been called 2 times.")
 	}
 
 	close(fc)

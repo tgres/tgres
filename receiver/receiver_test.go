@@ -176,13 +176,15 @@ func Test_Receiver_flushDs(t *testing.T) {
 // fake cluster
 type fakeCluster struct {
 	n, nLeave, nShutdown, nReady int
+	nodesForDd                   []*cluster.Node
+	ln                           *cluster.Node
 }
 
 func (_ *fakeCluster) RegisterMsgType() (chan *cluster.Msg, chan *cluster.Msg)  { return nil, nil }
 func (_ *fakeCluster) NumMembers() int                                          { return 0 }
 func (_ *fakeCluster) LoadDistData(f func() ([]cluster.DistDatum, error)) error { f(); return nil }
-func (_ *fakeCluster) NodesForDistDatum(cluster.DistDatum) []*cluster.Node      { return nil }
-func (_ *fakeCluster) LocalNode() *cluster.Node                                 { return nil }
+func (c *fakeCluster) NodesForDistDatum(cluster.DistDatum) []*cluster.Node      { return c.nodesForDd }
+func (c *fakeCluster) LocalNode() *cluster.Node                                 { return c.ln }
 func (_ *fakeCluster) NotifyClusterChanges() chan bool                          { return nil }
 func (_ *fakeCluster) Transition(time.Duration) error                           { return nil }
 func (c *fakeCluster) Ready(bool) error {

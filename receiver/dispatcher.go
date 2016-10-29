@@ -49,7 +49,7 @@ func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh c
 	}
 }
 
-func dispatcherForwardDPToNode(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
 	if dp.Hops == 0 { // we do not forward more than once
 		if node.Ready() {
 			dp.Hops++

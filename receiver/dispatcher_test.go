@@ -16,8 +16,10 @@
 package receiver
 
 import (
+	"fmt"
 	"github.com/hashicorp/memberlist"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
 	"log"
 	"os"
 	"strings"
@@ -151,4 +153,89 @@ func Test_dispatcherForwardDPToNode(t *testing.T) {
 
 func Test_dispatcherProcessOrForward(t *testing.T) {
 
+	saveFn := dispatcherForwardDPToNode
+	forward, fwErr := 0, error(nil)
+	dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+		forward++
+		return fwErr
+	}
+
+	// rds
+	ds := rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
+	rds := &receiverDs{DataSource: ds}
+
+	// cluster
+	clstr := &fakeCluster{}
+	md := make([]byte, 20)
+	md[0] = 1 // Ready
+	node := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "local"}}
+	clstr.nodesForDd = []*cluster.Node{node}
+	clstr.ln = node
+
+	// workerChs
+	workerChs := make([]chan *incomingDpWithDs, 1)
+	workerChs[0] = make(chan *incomingDpWithDs)
+	sent := 0
+	go func() {
+		for {
+			<-workerChs[0]
+			sent++
+		}
+	}()
+
+	// Test if we are LocalNode
+	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	if sent < 1 {
+		t.Errorf("dispatcherProcessOrForward: Nothing sent to workerChs")
+	}
+
+	// Now test we are NOT LN, forward
+	remote := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "remote"}}
+	clstr.nodesForDd = []*cluster.Node{remote}
+
+	n := dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	if forward != 1 {
+		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not called")
+	}
+	if n != 1 {
+		t.Errorf("dispatcherProcessOrForward: return value != 1")
+	}
+
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
+
+	fwErr = fmt.Errorf("some error")
+	n = dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	if n != 0 {
+		t.Errorf("dispatcherProcessOrForward: return value != 1")
+	}
+	if !strings.Contains(string(fl.last), "some error") {
+		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not logged")
+	}
+	fwErr = nil
+
+	// make an rds with points
+	ds = rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
+	rra, _ := rrd.NewRoundRobinArchive(1, 0, "WMEAN", 10*time.Second, 100, 30, 0.5, time.Unix(1000, 0))
+	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+	ds.ProcessIncomingDataPoint(123, time.Unix(2000, 0))
+	ds.ProcessIncomingDataPoint(123, time.Unix(3000, 0))
+	rds = &receiverDs{DataSource: ds}
+
+	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	if !strings.Contains(string(fl.last), "PointCount") {
+		t.Errorf("dispatcherProcessOrForward: Missing the PointCount warning log")
+	}
+	if rds.PointCount() != 0 {
+		t.Errorf("dispatcherProcessOrForward: ClearRRAs(true) not called")
+	}
+
+	// dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+
+	dispatcherForwardDPToNode = saveFn
 }
