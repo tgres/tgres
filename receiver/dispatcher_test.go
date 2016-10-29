@@ -21,6 +21,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 		t.Errorf("Malformed messages should not cause data points, count: %d", count)
 	}
 	if !strings.Contains(string(fl.last), "decoding FAILED") {
-		t.Errorf("Malformed messages shold log 'decoding FAILED'")
+		t.Errorf("Malformed messages should log 'decoding FAILED'")
 	}
 
 	// now we need a real message
@@ -91,7 +92,7 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 		t.Errorf("Hops exceeded should not cause data points, count: %d", count)
 	}
 	if !strings.Contains(string(fl.last), "max hops") {
-		t.Errorf("Hops exceeded messages shold log 'max hops'")
+		t.Errorf("Hops exceeded messages should log 'max hops'")
 	}
 
 	// Closing the dpCh should cause the recover() to happen
@@ -235,7 +236,95 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 		t.Errorf("dispatcherProcessOrForward: ClearRRAs(true) not called")
 	}
 
-	// dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
-
+	// restore dispatcherForwardDPToNode
 	dispatcherForwardDPToNode = saveFn
 }
+
+func Test_dispatcherProcessIncomingDP(t *testing.T) {
+
+	saveFn := dispatcherProcessOrForward
+	dpofCalled := 0
+	dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+		dpofCalled++
+		return 0
+	}
+
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
+
+	// dp
+	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
+
+	// dsc
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	c := &fakeCluster{}
+	dsc := newDsCache(db, df, c, nil, true)
+
+	// src
+	scr := &fakeSr{}
+
+	// NaN
+	dp.Value = math.NaN()
+	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	if scr.called != 1 {
+		t.Errorf("dispatcherProcessIncomingDP: With a NaN, reportStatCount() should only be called once")
+	}
+	if dpofCalled > 0 {
+		t.Errorf("dispatcherProcessIncomingDP: With a NaN, dispatcherProcessOrForward should not be called")
+	}
+
+	// A value
+	dp.Value = 1234
+	scr.called = 0
+	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	if scr.called != 2 {
+		t.Errorf("dispatcherProcessIncomingDP: With a value, reportStatCount() should be called twice")
+	}
+	if dpofCalled != 1 {
+		t.Errorf("dispatcherProcessIncomingDP: With a NaN, dispatcherProcessOrForward should be called once")
+	}
+
+	// A blank name should cause a nil rds
+	dp.Name = ""
+	scr.called, dpofCalled = 0, 0
+	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	if scr.called != 1 {
+		t.Errorf("dispatcherProcessIncomingDP: With a blank name, reportStatCount() should be called once")
+	}
+	if dpofCalled > 0 {
+		t.Errorf("dispatcherProcessIncomingDP: With a blank name, dispatcherProcessOrForward should not be called")
+	}
+	if !strings.Contains(string(fl.last), "No spec matched") {
+		t.Errorf("should log 'No spec matched'")
+	}
+
+	// fake a db error
+	dp.Name = "blah"
+	db.fakeErr = true
+	scr.called, dpofCalled = 0, 0
+	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	if scr.called != 1 {
+		t.Errorf("dispatcherProcessIncomingDP: With a db error, reportStatCount() should be called once")
+	}
+	if dpofCalled > 0 {
+		t.Errorf("dispatcherProcessIncomingDP: With a db error, dispatcherProcessOrForward should not be called")
+	}
+	if !strings.Contains(string(fl.last), "error") {
+		t.Errorf("should log 'error'")
+	}
+
+	dispatcherProcessOrForward = saveFn
+}
+
+// func Test_dispatcher(t *testing.T) {
+
+// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
+
+// 	// dispatcher(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
+
+// }

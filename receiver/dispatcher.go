@@ -35,13 +35,13 @@ func dispatcherIncomingDPMessages(rcv chan *cluster.Msg, clstr clusterer, dpCh c
 		// To get an event back:
 		var dp IncomingDP
 		if err := m.Decode(&dp); err != nil {
-			log.Printf("dispatcher(): msg <- rcv data point decoding FAILED, ignoring this data point.")
+			log.Printf("dispatcher: msg <- rcv data point decoding FAILED, ignoring this data point.")
 			continue
 		}
 
 		var maxHops = clstr.NumMembers() * 2 // This is kind of arbitrary
 		if dp.Hops > maxHops {
-			log.Printf("dispatcher(): dropping data point, max hops (%d) reached", maxHops)
+			log.Printf("dispatcher: dropping data point, max hops (%d) reached", maxHops)
 			continue
 		}
 
@@ -62,20 +62,20 @@ var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd cha
 	return nil
 }
 
-func dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+var dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
 	for _, node := range clstr.NodesForDistDatum(rds) {
 		if node.Name() == clstr.LocalNode().Name() {
 			workerChs.queue(dp, rds)
 		} else {
 			if err := dispatcherForwardDPToNode(dp, node, snd); err != nil {
-				log.Printf("dispatcher(): Error forwarding a data point: %v", err)
+				log.Printf("dispatcher: Error forwarding a data point: %v", err)
 				// TODO For not ready error - sleep and return the dp to the channel?
 				continue
 			}
 			forwarded++
 			// Always clear RRAs to prevent it from being saved
 			if pc := rds.PointCount(); pc > 0 {
-				log.Printf("dispatcher(): WARNING: Clearing DS with PointCount > 0: %v", pc)
+				log.Printf("dispatcher: WARNING: Clearing DS with PointCount > 0: %v", pc)
 			}
 			rds.ClearRRAs(true)
 		}
@@ -83,8 +83,7 @@ func dispatcherProcessOrForward(rds *receiverDs, clstr clusterer, workerChs work
 	return
 }
 
-func dispatcherProcessIncomingDP(dp *IncomingDP, scr statCountReporter, dsc *dsCache,
-	workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+func dispatcherProcessIncomingDP(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 
 	scr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
 
@@ -98,11 +97,11 @@ func dispatcherProcessIncomingDP(dp *IncomingDP, scr statCountReporter, dsc *dsC
 
 	rds, err := dsc.getByNameOrLoadOrCreate(dp.Name)
 	if err != nil {
-		log.Printf("dispatcher(): dsCache error: %v", err)
+		log.Printf("dispatcher: dsCache error: %v", err)
 		return
 	}
 	if rds == nil {
-		log.Printf("dispatcher(): No spec matched name: %q, ignoring data point", dp.Name)
+		log.Printf("dispatcher: No spec matched name: %q, ignoring data point", dp.Name)
 		return
 	}
 
@@ -123,7 +122,7 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 	snd, rcv := clstr.RegisterMsgType()
 	go dispatcherIncomingDPMessages(rcv, clstr, dpCh)
 
-	log.Printf("dispatcher(): marking cluster node as Ready.")
+	log.Printf("dispatcher: marking cluster node as Ready.")
 	clstr.Ready(true)
 
 	wc.onStarted()
@@ -136,7 +135,7 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 		case _, ok = <-clusterChgCh:
 			if ok {
 				if err := clstr.Transition(45 * time.Second); err != nil {
-					log.Printf("dispatcher(): Transition error: %v", err)
+					log.Printf("dispatcher: Transition error: %v", err)
 				}
 			}
 			continue
@@ -144,7 +143,7 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 		}
 
 		if !ok {
-			log.Printf("dispatcher(): channel closed, shutting down")
+			log.Printf("dispatcher: channel closed, shutting down")
 			break
 		}
 
