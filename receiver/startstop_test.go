@@ -17,6 +17,7 @@ package receiver
 
 import (
 	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/serde"
 	"sync"
 	"testing"
 	"time"
@@ -38,13 +39,19 @@ func Test_startAllWorkers(t *testing.T) {
 
 func Test_doStart(t *testing.T) {
 	delay := 100 * time.Millisecond
-	r := &Receiver{}
+	r := &Receiver{dpCh: make(chan *IncomingDP)}
 	saveDisp := dispatcher
 	saveSaw := startAllWorkers
 	called := 0
+	stopped := false
 	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
+		wc.onEnter()
+		defer wc.onExit()
 		called++
 		wc.onStarted()
+		if _, ok := <-dpCh; !ok {
+			stopped = true
+		}
 	}
 	calledSAW := 0
 	startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
@@ -66,6 +73,13 @@ func Test_doStart(t *testing.T) {
 	if time.Now().Sub(started) < delay {
 		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
 	}
+
+	// test stopDispatcher here too
+	stopDispatcher(r)
+	if !stopped {
+		t.Errorf("stopDispatcher didn't stop dispatcher")
+	}
+
 	dispatcher = saveDisp
 	startAllWorkers = saveSaw
 }
@@ -223,4 +237,86 @@ func Test_stopAllWorkers(t *testing.T) {
 	}
 	// Restore
 	stopWorkers, stopFlushers, stopAggWorker, stopPacedMetricWorker = f1, f2, f3, f4
+}
+
+func Test_startWorkers(t *testing.T) {
+	nWorkers := 0
+	saveWorker := worker
+	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+		wc.onEnter()
+		defer wc.onExit()
+		nWorkers++
+		wc.onStarted()
+	}
+
+	var startWg sync.WaitGroup
+	r := &Receiver{NWorkers: 5}
+	startWorkers(r, &startWg)
+	startWg.Wait()
+
+	if nWorkers != 5 {
+		t.Errorf("startWorkers: nWorkers started != 5")
+	}
+	worker = saveWorker
+}
+
+func Test_startFlushers(t *testing.T) {
+	nFlushers := 0
+	saveFlusher := flusher
+	flusher = func(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
+		wc.onEnter()
+		defer wc.onExit()
+		nFlushers++
+		wc.onStarted()
+	}
+
+	var startWg sync.WaitGroup
+	r := &Receiver{NWorkers: 5}
+	startFlushers(r, &startWg)
+	startWg.Wait()
+
+	if nFlushers != 5 {
+		t.Errorf("startFlushers: nFlushers started != 5")
+	}
+	flusher = saveFlusher
+}
+
+func Test_startAggWorker(t *testing.T) {
+	started := 0
+	saveAW := aggWorker
+	aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
+		wc.onEnter()
+		defer wc.onExit()
+		started++
+		wc.onStarted()
+	}
+	var startWg sync.WaitGroup
+	r := &Receiver{}
+	startAggWorker(r, &startWg)
+	startWg.Wait()
+
+	if started == 0 {
+		t.Errorf("startAggWorker: no aggWorker started")
+	}
+	aggWorker = saveAW
+}
+
+func Test_startPacedMetricWorker(t *testing.T) {
+	started := 0
+	savePMW := pacedMetricWorker
+	pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
+		wc.onEnter()
+		defer wc.onExit()
+		started++
+		wc.onStarted()
+	}
+	var startWg sync.WaitGroup
+	r := &Receiver{}
+	startPacedMetricWorker(r, &startWg)
+	startWg.Wait()
+
+	if started == 0 {
+		t.Errorf("startPAcedMetricWorker: no pacedMetricWorker started")
+	}
+	pacedMetricWorker = savePMW
 }

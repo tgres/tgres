@@ -38,7 +38,7 @@ type pacedMetric struct {
 	value float64
 }
 
-func pacedMetricWorker(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
+var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
 	wc.onEnter()
 	defer wc.onExit()
 

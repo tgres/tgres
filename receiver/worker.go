@@ -52,7 +52,7 @@ func workerPeriodicFlush(wc wController, dsf dsFlusherBlocking, recent map[int64
 	}
 }
 
-func worker(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
 	wc.onEnter()
 	defer wc.onExit()
 

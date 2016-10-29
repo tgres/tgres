@@ -39,7 +39,7 @@ func (f flusherChannels) queueBlocking(rds *receiverDs, block bool) {
 	}
 }
 
-func flusher(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
+var flusher = func(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
 

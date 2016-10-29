@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-func aggWorker(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
+var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
 
 	wc.onEnter()
 	defer wc.onExit()
