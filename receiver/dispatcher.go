@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) {
+var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -39,7 +39,7 @@ var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, clstr clusterer, 
 			continue
 		}
 
-		var maxHops = clstr.NumMembers() * 2 // This is kind of arbitrary
+		maxHops := 2
 		if dp.Hops > maxHops {
 			log.Printf("dispatcher: dropping data point, max hops (%d) reached", maxHops)
 			continue
@@ -120,7 +120,7 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 
 	// Channel for event forwards to other nodes and us
 	snd, rcv := clstr.RegisterMsgType()
-	go dispatcherIncomingDPMessages(rcv, clstr, dpCh)
+	go dispatcherIncomingDPMessages(rcv, dpCh)
 
 	log.Printf("dispatcher: marking cluster node as Ready.")
 	clstr.Ready(true)

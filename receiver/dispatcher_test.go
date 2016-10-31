@@ -48,7 +48,6 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 	log.SetOutput(fl)
 
 	rcv := make(chan *cluster.Msg)
-	clstr := &fakeCluster{}
 	dpCh := make(chan *IncomingDP)
 
 	count := 0
@@ -61,7 +60,7 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 		}
 	}()
 
-	go dispatcherIncomingDPMessages(rcv, clstr, dpCh)
+	go dispatcherIncomingDPMessages(rcv, dpCh)
 
 	// Sending a bogus message should not cause anything be written to dpCh
 	rcv <- &cluster.Msg{}
@@ -104,7 +103,7 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 	rcv <- m
 
 	// Closing the channel exists (not sure how to really test for that)
-	go dispatcherIncomingDPMessages(rcv, clstr, dpCh)
+	go dispatcherIncomingDPMessages(rcv, dpCh)
 	close(rcv)
 }
 
@@ -327,7 +326,7 @@ func Test_theDispatcher(t *testing.T) {
 	saveFn1 := dispatcherIncomingDPMessages
 	saveFn2 := dispatcherProcessIncomingDP
 	dimCalled := 0
-	dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, clstr clusterer, dpCh chan *IncomingDP) { dimCalled++ }
+	dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) { dimCalled++ }
 	dpidpCalled := 0
 	dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 		dpidpCalled++

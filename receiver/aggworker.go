@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
@@ -26,6 +23,32 @@ import (
 	"time"
 )
 
+func aggworkerIncomingAggCmds(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
+	defer func() { recover() }() // if we're writing to a closed channel below
+
+	for {
+		m, ok := <-rcv
+		if !ok {
+			return
+		}
+
+		// To get an event back:
+		var ac aggregator.Command
+		if err := m.Decode(&ac); err != nil {
+			log.Printf("%s: msg <- rcv aggreagator.Command decoding FAILED, ignoring this command.", ident)
+			continue
+		}
+
+		maxHops := 2
+		if ac.Hops > maxHops {
+			log.Printf("%s: dropping command, max hops (%d) reached", ident, maxHops)
+			continue
+		}
+
+		aggCh <- &ac // See recover above
+	}
+}
+
 var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
 
 	wc.onEnter()
@@ -33,28 +56,7 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 
 	// Channel for event forwards to other nodes and us
 	snd, rcv := clstr.RegisterMsgType()
-	go func() {
-		defer func() { recover() }() // if we're writing to a closed channel below
-
-		for {
-			m := <-rcv
-
-			// To get an event back:
-			var ac aggregator.Command
-			if err := m.Decode(&ac); err != nil {
-				log.Printf("%s: msg <- rcv aggreagator.Command decoding FAILED, ignoring this command.", wc.ident())
-				continue
-			}
-
-			var maxHops = clstr.NumMembers() * 2 // This is kind of arbitrary
-			if ac.Hops > maxHops {
-				log.Printf("%s: dropping command, max hops (%d) reached", wc.ident(), maxHops)
-				continue
-			}
-
-			aggCh <- &ac // See recover above
-		}
-	}()
+	go aggworkerIncomingAggCmds(wc.ident(), rcv, aggCh)
 
 	var flushCh = make(chan time.Time, 1)
 	go func() {
