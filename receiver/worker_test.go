@@ -18,8 +18,10 @@ package receiver
 import (
 	"github.com/tgres/tgres/rrd"
 	"log"
+	"math"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -46,7 +48,7 @@ func Test_workerPeriodicFlushSignal(t *testing.T) {
 	}
 }
 
-func Test_theWorkerPeriodicFlush(t *testing.T) {
+func Test_workerPeriodicFlush(t *testing.T) {
 
 	// fake logger
 	fl := &fakeLogger{}
@@ -104,4 +106,91 @@ func Test_theWorkerPeriodicFlush(t *testing.T) {
 	if f.called == 0 {
 		t.Errorf("workerPeriodicFlush: should have been flushed")
 	}
+}
+
+func Test_theWorker(t *testing.T) {
+
+	// fake logger
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
+
+	ident := "FOO"
+	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: ident}
+	dsf := &fakeDsFlusher{}
+	workerCh := make(chan *incomingDpWithDs)
+
+	// dsc
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	c := &fakeCluster{}
+	dsc := newDsCache(db, df, c, nil, true)
+
+	saveFn1, saveFn2 := workerPeriodicFlushSignal, workerPeriodicFlush
+
+	wpfsCalled := 0
+	workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
+		wpfsCalled++
+		periodicFlushCheck <- true
+	}
+	wpfCalled := 0
+	workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+		wpfCalled++
+	}
+
+	wc.startWg.Add(1)
+	go worker(wc, dsf, workerCh, dsc, 0, 0, 10)
+	wc.startWg.Wait()
+
+	time.Sleep(5 * time.Millisecond) // because go workerPeriodicFlushSignal()
+	if wpfsCalled == 0 {
+		t.Errorf("worker: workerPeriodicFlushSignal should be called")
+	}
+
+	if !strings.Contains(string(fl.last), ident) {
+		t.Errorf("worker: missing worker started log entry for ident: %s", ident)
+	}
+
+	if wpfCalled == 0 {
+		t.Errorf("worker: at least one periodic flush should have happened")
+	}
+
+	debug = true
+
+	// make an rds with points
+	ds := rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
+	rra, _ := rrd.NewRoundRobinArchive(1, 0, "WMEAN", 10*time.Second, 100, 30, 0.5, time.Unix(1000, 0))
+	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+	rds := &receiverDs{DataSource: ds}
+	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(2000, 0), Value: 123}
+	workerCh <- &incomingDpWithDs{dp, rds}
+	dp = &IncomingDP{Name: "foo", TimeStamp: time.Unix(3000, 0), Value: 123}
+	workerCh <- &incomingDpWithDs{dp, rds}
+	dp = &IncomingDP{Name: "foo", TimeStamp: time.Unix(4000, 0), Value: 123}
+	workerCh <- &incomingDpWithDs{dp, rds}
+
+	if dsf.called < 1 {
+		t.Errorf("worker: flushDs should be called at least once: %d", dsf.called)
+	}
+
+	if !strings.Contains(string(fl.last), "Requesting flush") {
+		t.Errorf("worker: missing 'Requesting flush' log entry")
+	}
+
+	// trigger an error
+	dp = &IncomingDP{Name: "foo", TimeStamp: time.Unix(5000, 0), Value: math.Inf(-1)}
+	workerCh <- &incomingDpWithDs{dp, rds}
+
+	close(workerCh)
+	wc.wg.Wait()
+
+	if !strings.Contains(string(fl.last), "not a valid data point") {
+		t.Errorf("worker: missing 'not a valid data point' log entry")
+	}
+
+	// restore funcs
+	workerPeriodicFlushSignal, workerPeriodicFlush = saveFn1, saveFn2
 }

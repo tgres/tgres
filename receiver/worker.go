@@ -21,17 +21,17 @@ import (
 	"time"
 )
 
-func workerPeriodicFlushSignal(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
+var workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
 	for {
 		// Sleep randomly between min and max cache durations (is this wise?)
 		i := int(maxCacheDur.Nanoseconds()-minCacheDur.Nanoseconds()) / 1000000
-		dur := time.Duration(rand.Intn(i))*time.Millisecond + minCacheDur
+		dur := time.Duration(rand.Intn(i+1))*time.Millisecond + minCacheDur
 		time.Sleep(dur)
 		periodicFlushCheck <- true
 	}
 }
 
-func workerPeriodicFlush(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
 	for dsId, _ := range recent {
 		rds := dss.getById(dsId)
 		if rds == nil {
@@ -67,7 +67,7 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 			workerPeriodicFlush(wc.ident(), dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
 		case dpds, ok := <-workerCh:
 			if !ok {
-				break
+				return
 			}
 			rds := dpds.rds // at this point ds has to be already set
 			if err := rds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
