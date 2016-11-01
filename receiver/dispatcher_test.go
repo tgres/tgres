@@ -131,7 +131,7 @@ func Test_dispatcherForwardDPToNode(t *testing.T) {
 	dispatcherForwardDPToNode(dp, node, snd)
 
 	if count > 0 {
-		t.Errorf("Data points with hops > 0 should not be forwarded")
+		t.Errorf("dispatcherForwardDPToNode: Data points with hops > 0 should not be forwarded")
 	}
 
 	// otherwise it should work
@@ -213,7 +213,7 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	fwErr = fmt.Errorf("some error")
 	n = dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
 	if n != 0 {
-		t.Errorf("dispatcherProcessOrForward: return value != 1")
+		t.Errorf("dispatcherProcessOrForward: return value != 0")
 	}
 	if !strings.Contains(string(fl.last), "some error") {
 		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not logged")
@@ -265,7 +265,7 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 	c := &fakeCluster{}
 	dsc := newDsCache(db, df, c, nil, true)
 
-	// src
+	// scr
 	scr := &fakeSr{}
 
 	// NaN

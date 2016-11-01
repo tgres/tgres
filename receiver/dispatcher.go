@@ -56,7 +56,7 @@ var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd cha
 			msg, _ := cluster.NewMsg(node, dp) // can't possibly error
 			snd <- msg
 		} else {
-			return fmt.Errorf("sendDpToNode(): Node is not ready")
+			return fmt.Errorf("dispatcherForwardDPToNode: Node is not ready")
 		}
 	}
 	return nil

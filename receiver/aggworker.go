@@ -16,6 +16,7 @@
 package receiver
 
 import (
+	"fmt"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/statsd"
@@ -23,7 +24,7 @@ import (
 	"time"
 )
 
-func aggworkerIncomingAggCmds(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
+var aggWorkerIncomingAggCmds = func(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -49,6 +50,51 @@ func aggworkerIncomingAggCmds(ident string, rcv chan *cluster.Msg, aggCh chan *a
 	}
 }
 
+var aggWorkerPeriodicFlushSignal = func(ident string, flushCh chan time.Time, dur time.Duration) {
+	defer func() { recover() }() // if we're writing to a closed channel below
+	for {
+		// NB: We do not use a time.Ticker here because my simple
+		// experiments show that it will not stay aligned on a
+		// multiple of duration if the system clock is
+		// adjusted. This thing will mostly remain aligned.
+		clock := time.Now()
+		time.Sleep(clock.Truncate(dur).Add(dur).Sub(clock))
+		if len(flushCh) == 0 {
+			flushCh <- time.Now()
+		} else {
+			log.Printf("%s: dropping aggreagator flush timer on the floor - busy system?", ident)
+		}
+	}
+}
+
+var aggWorkerForwardACToNode = func(ac *aggregator.Command, node *cluster.Node, snd chan *cluster.Msg) error {
+	if ac.Hops == 0 { // we do not forward more than once
+		if node.Ready() {
+			ac.Hops++
+			msg, _ := cluster.NewMsg(node, ac) // can't possibly error
+			snd <- msg
+		} else {
+			return fmt.Errorf("aggWorkerForwardAcToNode: Node is not ready")
+		}
+	}
+	return nil
+}
+
+var aggWorkerProcessOrForward = func(ac *aggregator.Command, aggDd *distDatumAggregator, clstr clusterer, snd chan *cluster.Msg) (forwarded int) {
+	for _, node := range clstr.NodesForDistDatum(aggDd) {
+		if node.Name() == clstr.LocalNode().Name() {
+			aggDd.ProcessCmd(ac)
+		} else {
+			if err := aggWorkerForwardACToNode(ac, node, snd); err != nil {
+				log.Printf("aggworker: Error forwarding aggregator command: %v", err)
+				continue
+			}
+			forwarded++
+		}
+	}
+	return forwarded
+}
+
 var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
 
 	wc.onEnter()
@@ -56,24 +102,10 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 
 	// Channel for event forwards to other nodes and us
 	snd, rcv := clstr.RegisterMsgType()
-	go aggworkerIncomingAggCmds(wc.ident(), rcv, aggCh)
+	go aggWorkerIncomingAggCmds(wc.ident(), rcv, aggCh)
 
-	var flushCh = make(chan time.Time, 1)
-	go func() {
-		for {
-			// NB: We do not use a time.Ticker here because my simple
-			// experiments show that it will not stay aligned on a
-			// multiple of duration if the system clock is
-			// adjusted. This thing will mostly remain aligned.
-			clock := time.Now()
-			time.Sleep(clock.Truncate(statFlushDuration).Add(statFlushDuration).Sub(clock))
-			if len(flushCh) == 0 {
-				flushCh <- time.Now()
-			} else {
-				log.Printf("%s: dropping aggreagator flush timer on the floor - busy system?", wc.ident())
-			}
-		}
-	}()
+	flushCh := make(chan time.Time, 1)
+	go aggWorkerPeriodicFlushSignal(wc.ident(), flushCh, statFlushDuration)
 
 	log.Printf("%s: started.", wc.ident())
 	wc.onStarted()
@@ -107,37 +139,28 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 				return
 			}
 
-			for _, node := range clstr.NodesForDistDatum(aggDd) {
-				if node.Name() == clstr.LocalNode().Name() {
-					agg.ProcessCmd(ac)
-				} else if ac.Hops == 0 { // we do not forward more than once
-					if node.Ready() {
-						ac.Hops++
-						if msg, err := cluster.NewMsg(node, ac); err == nil {
-							snd <- msg
-							scr.reportStatCount("receiver.aggregations_forwarded", 1)
-						}
-					} else {
-						// Drop it
-						log.Printf("%s: dropping command on the floor because no node is Ready!", wc.ident())
-					}
-				}
-			}
+			forwarded := aggWorkerProcessOrForward(ac, aggDd, clstr, snd)
+			scr.reportStatCount("receiver.aggregations_forwarded", float64(forwarded))
 		}
 	}
 }
 
 // Implement cluster.DistDatum for stats
 
+type aggregatorer interface {
+	ProcessCmd(cmd *aggregator.Command)
+	Flush(now time.Time)
+}
+
 type distDatumAggregator struct {
-	a *aggregator.Aggregator
+	aggregatorer
 }
 
 func (d *distDatumAggregator) Id() int64       { return 1 }
 func (d *distDatumAggregator) Type() string    { return "aggregator.Aggregator" }
 func (d *distDatumAggregator) GetName() string { return "TheAggregator" }
 func (d *distDatumAggregator) Relinquish() error {
-	d.a.Flush(time.Now())
+	d.Flush(time.Now())
 	return nil
 }
 func (d *distDatumAggregator) Acquire() error { return nil }
