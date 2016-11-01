@@ -257,7 +257,7 @@ func Test_theAggworker(t *testing.T) {
 		log.SetOutput(os.Stderr) // restore default output
 	}()
 
-	ident := "ident"
+	ident := "aggident"
 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: ident}
 	aggCh := make(chan *aggregator.Command)
 

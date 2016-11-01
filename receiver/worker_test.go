@@ -71,7 +71,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	c := &fakeCluster{}
 	dsc := newDsCache(db, df, c, nil, true)
 
-	workerPeriodicFlush("ident", f, recent, dsc, 0, 10*time.Millisecond, 10)
+	workerPeriodicFlush("workerperiodic", f, recent, dsc, 0, 10*time.Millisecond, 10)
 
 	if !strings.Contains(string(fl.last), "annot lookup") {
 		t.Errorf("workerPeriodicFlush: non-existent ds did not log 'annot lookup'")
@@ -85,7 +85,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	rds := &receiverDs{DataSource: ds}
 	dsc.insert(rds)
 
-	workerPeriodicFlush("ident", f, recent, dsc, 0, 10*time.Millisecond, 10)
+	workerPeriodicFlush("workerperiodic2", f, recent, dsc, 0, 10*time.Millisecond, 10)
 
 	if f.called > 0 {
 		t.Errorf("workerPeriodicFlush: no flush should have happened")
@@ -102,7 +102,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	recent[7] = true
 	debug = true
 
-	workerPeriodicFlush("ident", f, recent, dsc, 0, 10*time.Millisecond, 0)
+	workerPeriodicFlush("workerperiodic3", f, recent, dsc, 0, 10*time.Millisecond, 0)
 	if f.called == 0 {
 		t.Errorf("workerPeriodicFlush: should have been flushed")
 	}
@@ -145,7 +145,7 @@ func Test_theWorker(t *testing.T) {
 	go worker(wc, dsf, workerCh, dsc, 0, 0, 10)
 	wc.startWg.Wait()
 
-	time.Sleep(5 * time.Millisecond) // because go workerPeriodicFlushSignal()
+	time.Sleep(50 * time.Millisecond) // because go workerPeriodicFlushSignal()
 	if wpfsCalled == 0 {
 		t.Errorf("worker: workerPeriodicFlushSignal should be called")
 	}

@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
@@ -38,6 +35,29 @@ type pacedMetric struct {
 	value float64
 }
 
+var pacedMetricFlush = func(sums map[string]float64, gauges map[string]*rrd.ClockPdp, acq aggregatorCommandQueuer, dpq dataPointQueuer) map[string]float64 {
+	for name, sum := range sums {
+		acq.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
+	}
+	for name, gauge := range gauges {
+		dpq.QueueDataPoint(name, gauge.End, gauge.Reset())
+	}
+	// NB: We do not reset the gauges map, it lives on
+	return make(map[string]float64)
+}
+
+var pacedMetricPeriodicFlushSignal = func(flushCh chan bool, frequency time.Duration, ident string) {
+	defer func() { recover() }()
+	for {
+		time.Sleep(frequency)
+		if len(flushCh) == 0 {
+			flushCh <- true
+		} else {
+			log.Printf("%s: dropping flush timer on the floor - busy system?", ident)
+		}
+	}
+}
+
 var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
 	wc.onEnter()
 	defer wc.onExit()
@@ -45,28 +65,8 @@ var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, ac
 	sums := make(map[string]float64)
 	gauges := make(map[string]*rrd.ClockPdp)
 
-	flush := func() {
-		for name, sum := range sums {
-			acq.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, name, sum))
-		}
-		for name, gauge := range gauges {
-			dpq.QueueDataPoint(name, gauge.End, gauge.Reset())
-		}
-		sums = make(map[string]float64)
-		// NB: We do not reset gauges, they need to live on
-	}
-
 	var flushCh = make(chan bool, 1)
-	go func() {
-		for {
-			time.Sleep(frequency)
-			if len(flushCh) == 0 {
-				flushCh <- true
-			} else {
-				log.Printf("%s: dropping flush timer on the floor - busy system?", wc.ident())
-			}
-		}
-	}()
+	go pacedMetricPeriodicFlushSignal(flushCh, frequency, wc.ident())
 
 	log.Printf("%s: started.", wc.ident())
 	wc.onStarted()
@@ -74,10 +74,10 @@ var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, ac
 	for {
 		select {
 		case <-flushCh:
-			flush()
+			sums = pacedMetricFlush(sums, gauges, acq, dpq)
 		case ps, ok := <-pacedMetricCh:
 			if !ok {
-				flush()
+				sums = pacedMetricFlush(sums, gauges, acq, dpq)
 				return
 			} else {
 				switch ps.kind {
