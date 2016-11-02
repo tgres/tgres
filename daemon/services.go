@@ -37,13 +37,13 @@ type trService interface {
 }
 
 type serviceMap map[string]trService
-type ServiceManager struct {
+type serviceManager struct {
 	rcvr     *receiver.Receiver
 	services serviceMap
 }
 
-func newServiceManager(rcvr *receiver.Receiver, cfg *Config) *ServiceManager {
-	return &ServiceManager{rcvr: rcvr,
+func newServiceManager(rcvr *receiver.Receiver, cfg *Config) *serviceManager {
+	return &serviceManager{rcvr: rcvr,
 		services: serviceMap{
 			"gt":  &graphiteTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteTextListenSpec},
 			"gu":  &graphiteUdpTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteUdpListenSpec},
@@ -61,7 +61,7 @@ func processListenSpec(listenSpec string) string {
 	return listenSpec
 }
 
-func (r *ServiceManager) run(gracefulProtos string) error {
+func (r *serviceManager) run(gracefulProtos string) error {
 
 	// TODO If a listen-spec changes in the config and a graceful
 	// restart is issued, the new config will not take effect as the
@@ -89,7 +89,7 @@ func (r *ServiceManager) run(gracefulProtos string) error {
 	return nil
 }
 
-func (r *ServiceManager) listenerFilesAndProtocols() ([]*os.File, string) {
+func (r *serviceManager) listenerFilesAndProtocols() ([]*os.File, string) {
 
 	files := []*os.File{}
 	protos := []string{}
@@ -101,7 +101,7 @@ func (r *ServiceManager) listenerFilesAndProtocols() ([]*os.File, string) {
 	return files, strings.Join(protos, ",")
 }
 
-func (r *ServiceManager) closeListeners() {
+func (r *serviceManager) closeListeners() {
 	for _, service := range r.services {
 		service.Stop()
 	}

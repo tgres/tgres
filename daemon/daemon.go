@@ -117,7 +117,7 @@ var startReceiver = func(r *receiver.Receiver) {
 	r.Start()
 }
 
-var waitForSignal = func(r *receiver.Receiver, sm *ServiceManager, cfgPath string) {
+var waitForSignal = func(r *receiver.Receiver, sm *serviceManager, cfgPath string) {
 	for {
 		// Wait for a SIGINT or SIGTERM.
 		ch := make(chan os.Signal)
@@ -256,7 +256,7 @@ func Finish(cfg *Config) {
 	os.Remove(cfg.PidPath)
 }
 
-func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *ServiceManager, cfgPath string) {
+func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPath string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
@@ -287,7 +287,7 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *ServiceManager, cfgPat
 	}
 }
 
-func gracefulExit(rcvr *receiver.Receiver, serviceMgr *ServiceManager) {
+func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 
 	log.Printf("Gracefully exiting...")
 
