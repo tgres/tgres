@@ -42,14 +42,14 @@ type ServiceManager struct {
 	services serviceMap
 }
 
-func newServiceManager(rcvr *receiver.Receiver) *ServiceManager {
+func newServiceManager(rcvr *receiver.Receiver, cfg *Config) *ServiceManager {
 	return &ServiceManager{rcvr: rcvr,
 		services: serviceMap{
-			"gt":  &graphiteTextServiceManager{rcvr: rcvr},
-			"gu":  &graphiteUdpTextServiceManager{rcvr: rcvr},
-			"gp":  &graphitePickleServiceManager{rcvr: rcvr},
-			"su":  &statsdUdpTextServiceManager{rcvr: rcvr},
-			"www": &wwwServer{rcvr: rcvr},
+			"gt":  &graphiteTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteTextListenSpec},
+			"gu":  &graphiteUdpTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteUdpListenSpec},
+			"gp":  &graphitePickleServiceManager{rcvr: rcvr, listenSpec: cfg.GraphitePickleListenSpec},
+			"su":  &statsdUdpTextServiceManager{rcvr: rcvr, listenSpec: cfg.StatsdUdpListenSpec},
+			"www": &wwwServer{rcvr: rcvr, listenSpec: cfg.HttpListenSpec},
 		},
 	}
 }
@@ -111,8 +111,9 @@ func (r *ServiceManager) closeListeners() {
 // ---
 
 type wwwServer struct {
-	rcvr     *receiver.Receiver
-	listener *graceful.Listener
+	rcvr       *receiver.Receiver
+	listener   *graceful.Listener
+	listenSpec string
 }
 
 func (g *wwwServer) File() *os.File {
@@ -134,14 +135,13 @@ func (g *wwwServer) Start(file *os.File) error {
 		err error
 	)
 
-	if Cfg.HttpListenSpec != "" {
+	if g.listenSpec != "" {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", processListenSpec(Cfg.HttpListenSpec))
+			gl, err = net.Listen("tcp", processListenSpec(g.listenSpec))
 		}
 	} else {
-		fmt.Printf("Not starting HTTP server because http-listen-spec is blank.\n")
 		log.Printf("Not starting HTTP server because http-listen-spec is blank.")
 		return nil
 	}
@@ -153,9 +153,9 @@ func (g *wwwServer) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Printf("HTTP protocol Listening on %s\n", processListenSpec(Cfg.HttpListenSpec))
+	fmt.Printf("HTTP protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
-	go httpServer(Cfg.HttpListenSpec, g.listener, g.rcvr)
+	go httpServer(g.listenSpec, g.listener, g.rcvr)
 
 	return nil
 }
@@ -163,8 +163,9 @@ func (g *wwwServer) Start(file *os.File) error {
 // ---
 
 type graphitePickleServiceManager struct {
-	rcvr     *receiver.Receiver
-	listener *graceful.Listener
+	rcvr       *receiver.Receiver
+	listener   *graceful.Listener
+	listenSpec string
 }
 
 func (g *graphitePickleServiceManager) File() *os.File {
@@ -186,11 +187,11 @@ func (g *graphitePickleServiceManager) Start(file *os.File) error {
 		err error
 	)
 
-	if Cfg.GraphitePickleListenSpec != "" {
+	if g.listenSpec != "" {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", processListenSpec(Cfg.GraphitePickleListenSpec))
+			gl, err = net.Listen("tcp", processListenSpec(g.listenSpec))
 		}
 	} else {
 		log.Printf("Not starting Graphite Pickle Protocol because graphite-pickle-listen-spec is blank.")
@@ -203,7 +204,7 @@ func (g *graphitePickleServiceManager) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Printf("Graphite Pickle protocol Listening on %s\n", processListenSpec(Cfg.GraphitePickleListenSpec))
+	fmt.Printf("Graphite Pickle protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
 	go g.graphitePickleServer()
 
@@ -294,15 +295,18 @@ func handleGraphitePickleProtocol(rcvr *receiver.Receiver, conn net.Conn, timeou
 	}
 
 	if err != nil {
-		log.Println("handleGraphitePickleProtocol(): Error reading:", err.Error())
+		if !strings.Contains(err.Error(), "use of closed") {
+			log.Println("handleGraphitePickleProtocol(): Error reading: %v", err.Error())
+		}
 	}
 }
 
 // --
 
 type graphiteUdpTextServiceManager struct {
-	rcvr *receiver.Receiver
-	conn net.Conn
+	rcvr       *receiver.Receiver
+	conn       net.Conn
+	listenSpec string
 }
 
 func (g *graphiteUdpTextServiceManager) Stop() {
@@ -325,11 +329,11 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 		udpAddr *net.UDPAddr
 	)
 
-	if Cfg.GraphiteUdpListenSpec != "" {
+	if g.listenSpec != "" {
 		if file != nil {
 			g.conn, err = net.FileConn(file)
 		} else {
-			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(Cfg.GraphiteUdpListenSpec))
+			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(g.listenSpec))
 			if err == nil {
 				g.conn, err = net.ListenUDP("udp", udpAddr)
 			}
@@ -342,7 +346,7 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 		return fmt.Errorf("Error starting Graphite UDP Text Protocol serviceManager: %v", err)
 	}
 
-	fmt.Printf("Graphite UDP protocol Listening on %s\n", processListenSpec(Cfg.GraphiteTextListenSpec))
+	fmt.Printf("Graphite UDP protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
 	// for UDP timeout must be 0
 	go handleGraphiteTextProtocol(g.rcvr, g.conn, 0)
@@ -353,8 +357,9 @@ func (g *graphiteUdpTextServiceManager) Start(file *os.File) error {
 // ---
 
 type graphiteTextServiceManager struct {
-	rcvr     *receiver.Receiver
-	listener *graceful.Listener
+	rcvr       *receiver.Receiver
+	listener   *graceful.Listener
+	listenSpec string
 }
 
 func (g *graphiteTextServiceManager) File() *os.File {
@@ -376,11 +381,11 @@ func (g *graphiteTextServiceManager) Start(file *os.File) error {
 		err error
 	)
 
-	if Cfg.GraphiteTextListenSpec != "" {
+	if g.listenSpec != "" {
 		if file != nil {
 			gl, err = net.FileListener(file)
 		} else {
-			gl, err = net.Listen("tcp", processListenSpec(Cfg.GraphiteTextListenSpec))
+			gl, err = net.Listen("tcp", processListenSpec(g.listenSpec))
 		}
 	} else {
 		log.Printf("Not starting Graphite Text protocol because graphite-test-listen-spec is blank")
@@ -393,7 +398,7 @@ func (g *graphiteTextServiceManager) Start(file *os.File) error {
 
 	g.listener = graceful.NewListener(gl)
 
-	fmt.Println("Graphite text protocol Listening on " + processListenSpec(Cfg.GraphiteTextListenSpec))
+	fmt.Println("Graphite text protocol Listening on " + processListenSpec(g.listenSpec))
 
 	go g.graphiteTextServer()
 
@@ -457,7 +462,9 @@ func handleGraphiteTextProtocol(rcvr *receiver.Receiver, conn net.Conn, timeout 
 	}
 
 	if err := connbuf.Err(); err != nil {
-		log.Println("handleGraphiteTextProtocol(): Error reading: %v", err)
+		if !strings.Contains(err.Error(), "use of closed") {
+			log.Println("handleGraphiteTextProtocol(): Error reading: %v", err)
+		}
 	}
 }
 
@@ -501,15 +508,18 @@ func handleStatsdTextProtocol(rcvr *receiver.Receiver, conn net.Conn, timeout in
 	}
 
 	if err := connbuf.Err(); err != nil {
-		log.Println("handleStatsdTextProtocol(): Error reading: %v", err)
+		if !strings.Contains(err.Error(), "use of closed") {
+			log.Println("handleStatsdTextProtocol(): Error reading: %v", err)
+		}
 	}
 }
 
 // --
 
 type statsdUdpTextServiceManager struct {
-	rcvr *receiver.Receiver
-	conn net.Conn
+	rcvr       *receiver.Receiver
+	conn       net.Conn
+	listenSpec string
 }
 
 func (g *statsdUdpTextServiceManager) Stop() {
@@ -532,11 +542,11 @@ func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
 		udpAddr *net.UDPAddr
 	)
 
-	if Cfg.StatsdUdpListenSpec != "" {
+	if g.listenSpec != "" {
 		if file != nil {
 			g.conn, err = net.FileConn(file)
 		} else {
-			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(Cfg.StatsdUdpListenSpec))
+			udpAddr, err = net.ResolveUDPAddr("udp", processListenSpec(g.listenSpec))
 			if err == nil {
 				g.conn, err = net.ListenUDP("udp", udpAddr)
 			}
@@ -549,7 +559,7 @@ func (g *statsdUdpTextServiceManager) Start(file *os.File) error {
 		return fmt.Errorf("Error starting Statsd UDP Text Protocol serviceManager: %v", err)
 	}
 
-	fmt.Printf("Statsd UDP protocol Listening on %s\n", processListenSpec(Cfg.StatsdUdpListenSpec))
+	fmt.Printf("Statsd UDP protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
 	// for UDP timeout must be 0
 	go handleStatsdTextProtocol(g.rcvr, g.conn, 0)

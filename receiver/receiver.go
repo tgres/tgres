@@ -120,6 +120,7 @@ func (r *Receiver) ClusterReady(ready bool) {
 }
 
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
+	// TODO - on exit, if the channel is already closed, this panics
 	r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
 }
 

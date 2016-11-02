@@ -13,28 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Tgres is a tool for receiving and reporting on simple time series
-// written in Go which uses PostgreSQL for storage.
 package main
 
 import (
-	"flag"
-	"github.com/tgres/tgres/daemon"
+	"testing"
 )
 
-func parseFlags() (textCfgPath, gracefulProtos, join string) {
-
-	// Parse the flags, if any
-	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
-	flag.StringVar(&join, "join", "", "List of add:port,addr:port,... of nodes to join")
-	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
-	flag.Parse()
-
-	return
-}
-
-func main() {
-	if cfg := daemon.Init(parseFlags()); cfg != nil {
-		daemon.Finish(cfg)
-	}
+func Test_main(t *testing.T) {
+	// TODO
 }

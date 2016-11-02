@@ -17,7 +17,6 @@
 package daemon
 
 import (
-	"flag"
 	"fmt"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/receiver"
@@ -27,128 +26,189 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var (
-	serviceMgr       *ServiceManager
 	logFile          *os.File
 	cycleLogCh            = make(chan int)
 	quitting         bool = false
 	gracefulChildPid int
 )
 
-func parseFlags() (textCfgPath, gracefulProtos, join string) {
+var getCwd = func() string {
+	// blank means wd could not be established
+	// it might be okay if paths are absolute
+	wd, _ := os.Getwd()
+	return wd
+}
 
-	// Parse the flags, if any
-	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
-	flag.StringVar(&join, "join", "", "List of add:port,addr:port,... of nodes to join")
-	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
-	flag.Parse()
+var savePid = func(pidPath string) error {
+	f, err := os.Create(pidPath)
+	if err == nil {
+		fmt.Fprintf(f, "%d\n", os.Getpid())
+		return f.Close()
+	}
+	return err
+}
 
+var initDb = func(connectString string) (serde.SerDe, error) {
+	return serde.InitDb(connectString, "")
+}
+
+// Figure out which address to bind to and which to advertize for the
+// cluster. (The two are not always the same e.g. in a container).
+var determineClusterBindAddress = func(db serde.SerDe) (bindAddr, advAddr string, err error) {
+	bindAddr = os.Getenv("TGRES_BIND")
+	if os.Getenv("TGRES_ADDRFROMDB") != "" {
+		var a *string
+		a, err = db.MyDbAddr()
+		if err != nil {
+			return "", "", err
+		}
+		if a == nil {
+			return "", "", fmt.Errorf("Database returned nil address.")
+		}
+		advAddr = *a
+	} else {
+		advAddr = bindAddr
+	}
 	return
 }
 
-func savePid(PidPath string) {
-	f, err := os.Create(PidPath)
-	if err != nil {
-		logFatalf("Unable to create pid file '%s': (%v)", PidPath, err)
-	}
-	fmt.Fprintf(f, "%d\n", os.Getpid())
-	log.Printf("Pid saved in %s.", PidPath)
-}
-
-func Init() { // not to be confused with init()
-
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	// TODO this should be in log.go
-	log.SetPrefix(fmt.Sprintf("[%d] ", os.Getpid()))
-	log.Printf("Tgres starting.")
-
-	cfgPath, gracefulProtos, join := parseFlags()
-
-	// This creates the Cfg variable
-	if err := ReadConfig(cfgPath); err != nil {
-		log.Fatal("Exiting.")
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := processConfig(configer(Cfg), wd); err != nil { // This validates the config
-		log.Fatalf("Error in config file %s: %v", cfgPath, err)
-	}
-
-	savePid(Cfg.PidPath)
-
-	// Initialize Database
-	db, err := serde.InitDb(Cfg.DbConnectString, "")
-	if err != nil {
-		log.Fatalf("Error connecting to the DB: %v", err)
-		return
-	}
-
-	log.Printf("Initialized DB connection.")
-
-	var (
-		c         *cluster.Cluster
-		tgresBind = os.Getenv("TGRES_BIND")
-		aaddr     *string
-	)
-	if os.Getenv("TGRES_ADDRFROMDB") != "" {
-		aaddr, err = db.MyDbAddr()
-		if err != nil {
-			log.Printf("Database error: %v", err)
-			return
-		}
-		log.Printf("Using %v as advertized address for the cluster.", *aaddr)
-	} else {
-		aaddr = &tgresBind
-	}
-
-	c, err = cluster.NewClusterBind(tgresBind, 0, *aaddr, 0, 0, tgresBind)
-	if err != nil {
-		log.Printf("Unable to create cluster: %v", err)
-		return
-	}
-
-	// Join other nodes, if any
-	var ips []string
+var determineClusterJoinAddress = func(join string, db serde.SerDe) (ips []string, err error) {
 	if join != "" {
 		ips = strings.Split(join, ",")
 	} else if os.Getenv("TGRES_ADDRFROMDB") != "" {
 		if ips, err = db.ListDbClientIps(); err != nil {
-			log.Printf("Error from db.ListDbClientIps(): %v", err)
-			return
+			return nil, err
 		}
 	}
-	if err := c.Join(ips); err != nil {
-		log.Printf("Joining nodes: %s", strings.Join(ips, ","))
-		log.Printf("Unable to join any cluster members: %v", err)
+	return ips, err
+}
+
+var initCluster = func(bindAddr, advAddr string, joinIps []string) (c *cluster.Cluster, err error) {
+	c, err = cluster.NewClusterBind(bindAddr, 0, advAddr, 0, 0, bindAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.Join(joinIps); err != nil {
+		return nil, fmt.Errorf("Unable to join cluster members: %q, %v", strings.Join(joinIps, ","), err)
+	}
+
+	return c, nil
+}
+
+var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *receiver.Receiver {
+	r := receiver.New(c, db, receiver.MatchingDSSpecFinder(cfg))
+	r.NWorkers = cfg.Workers
+	r.MaxCacheDuration = cfg.MaxCache.Duration
+	r.MinCacheDuration = cfg.MinCache.Duration
+	r.MaxCachedPoints = cfg.MaxCachedPoints
+	r.StatFlushDuration = cfg.StatFlush.Duration
+	r.StatsNamePrefix = cfg.StatsNamePrefix
+	return r
+}
+
+var startReceiver = func(r *receiver.Receiver) {
+	r.Start()
+}
+
+var waitForSignal = func(r *receiver.Receiver, sm *ServiceManager, cfgPath string) {
+	for {
+		// Wait for a SIGINT or SIGTERM.
+		ch := make(chan os.Signal)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		s := <-ch
+		log.Printf("Got signal: %v", s)
+		if s == syscall.SIGHUP {
+			if gracefulChildPid == 0 {
+				gracefulRestart(r, sm, cfgPath)
+			}
+		} else {
+			gracefulExit(r, sm)
+			break
+		}
+	}
+}
+
+func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be confused with init()
+
+	log.Printf("Tgres starting.")
+
+	// Read the config
+	cfg, err := readConfig(cfgPath)
+	if err != nil {
+		log.Printf("Unable to read config %q, exiting: %s.", cfgPath, err)
+		return
+	}
+	log.Printf("Using config file: '%s'.", cfgPath)
+
+	// Get current directory
+	wd := getCwd() // a separate function for testability
+	if wd == "" {
+		log.Printf("WARNING: Could not determine current working directory, this only works if all paths in config are absolute.")
+	}
+
+	// Validate the configuration
+	if err := processConfig(cfg, wd); err != nil { // This validates the config
+		log.Printf("Error in config file %s, exiting: %v", cfgPath, err)
 		return
 	}
 
-	// Create the receiver
-	rcvr := receiver.New(c, db, receiver.MatchingDSSpecFinder(Cfg))
-	rcvr.NWorkers = Cfg.Workers
-	rcvr.MaxCacheDuration = Cfg.MaxCache.Duration
-	rcvr.MinCacheDuration = Cfg.MinCache.Duration
-	rcvr.MaxCachedPoints = Cfg.MaxCachedPoints
-	rcvr.StatFlushDuration = Cfg.StatFlush.Duration
-	rcvr.StatsNamePrefix = Cfg.StatsNamePrefix
+	// Save PID
+	if err := savePid(cfg.PidPath); err != nil {
+		log.Printf("Unable to create pid file '%s', exiting: (%v)", cfg.PidPath, err)
+		return
+	}
+	log.Printf("Pid saved in %s.", cfg.PidPath)
+
+	// Connect to the DB (and create tables if needed, etc)
+	db, err := initDb(cfg.DbConnectString)
+	if err != nil {
+		log.Printf("Error connecting to the DB, exiting: %v", err)
+		return
+	}
+	log.Printf("Initialized DB connection.")
+
+	// Determine cluster bind address
+	var bindAddr, advAddr string
+	bindAddr, advAddr, err = determineClusterBindAddress(db)
+	if err != nil {
+		log.Printf("Cannot determine cluster bind / advertise addresses, exiting: %v", err)
+		return
+	}
+
+	// Determine ips of other nodes to join
+	var joinIps []string
+	joinIps, err = determineClusterJoinAddress(join, db)
+	if err != nil {
+		log.Printf("Cannot determine cluster node addresses to join, exiting: %v", err)
+		return
+	}
+
+	// Initialize cluster
+	var c *cluster.Cluster
+	c, err = initCluster(bindAddr, advAddr, joinIps)
+	if err != nil {
+		log.Printf("Error initializing cluster, exiting: %v", err)
+		return
+	}
+
+	// Create Receiver
+	rcvr := createReceiver(cfg, c, db)
 
 	// Create and run the Service Manager
-	serviceMgr = newServiceManager(rcvr)
+	serviceMgr := newServiceManager(rcvr, cfg)
 	if err := serviceMgr.run(gracefulProtos); err != nil {
 		log.Printf("Could not run the service manager: %v", err)
 		return
 	}
 
+	// Handle graceful file descriptors
 	if gracefulProtos != "" {
 		// Do the graceful dance - tell the parent to die, then
 		// wait for it to signal us back that the data has been
@@ -166,32 +226,23 @@ func Init() { // not to be confused with init()
 	}
 
 	// *finally* start the receiver (because graceful restart, parent must save first)
-	rcvr.Start()
+	startReceiver(rcvr)
+	log.Printf("Receiver started, Tgres is ready.")
 
-	// TODO - there should be a -f(oreground) flag?
-	// Also see not below about saving the starting working directory
-	//std2DevNull()
-	//os.Chdir("/")
+	// TODO Fade into background
+	// To implement this basically means performing an immediate graceful restart.
+	// if daemonize {
+	// 	std2DevNull()
+	// 	os.Chdir("/")
+	// }
 
-	// TODOthis too could be in the receiver for consistency?
-	for {
-		// Wait for a SIGINT or SIGTERM.
-		ch := make(chan os.Signal)
-		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		s := <-ch
-		log.Printf("Got signal: %v", s)
-		if s == syscall.SIGHUP {
-			if gracefulChildPid == 0 {
-				gracefulRestart(rcvr, cfgPath)
-			}
-		} else {
-			gracefulExit(rcvr)
-			break
-		}
-	}
+	// TODO this too could be in the receiver for consistency?
+	waitForSignal(rcvr, serviceMgr, cfgPath)
+
+	return
 }
 
-func Finish() {
+func Finish(cfg *Config) {
 	quitting = true
 	log.Printf("main: Waiting for all other goroutines to finish...")
 	log.Println("main: All goroutines finished, exiting.")
@@ -202,10 +253,10 @@ func Finish() {
 		logFile.Close()
 	}
 
-	os.Remove(Cfg.PidPath)
+	os.Remove(cfg.PidPath)
 }
 
-func gracefulRestart(rcvr *receiver.Receiver, cfgPath string) {
+func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *ServiceManager, cfgPath string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
@@ -236,13 +287,16 @@ func gracefulRestart(rcvr *receiver.Receiver, cfgPath string) {
 	}
 }
 
-func gracefulExit(rcvr *receiver.Receiver) {
+func gracefulExit(rcvr *receiver.Receiver, serviceMgr *ServiceManager) {
 
 	log.Printf("Gracefully exiting...")
 
 	quitting = true
 
-	rcvr.ClusterReady(false)
+	rcvr.ClusterReady(false) // triggers a transition
+
+	// Allow enough time for a transition to start
+	time.Sleep(500 * time.Millisecond) // TODO This is a hack
 
 	log.Printf("Waiting for all TCP connections to finish...")
 	serviceMgr.closeListeners()

@@ -31,9 +31,7 @@ import (
 	"time"
 )
 
-var Cfg *Config
-
-type Config struct {
+type Config struct { // Needs to be exported for TOML to work
 	PidPath                  string   `toml:"pid-file"`
 	LogPath                  string   `toml:"log-file"`
 	LogCycle                 duration `toml:"log-cycle-interval"`
@@ -130,16 +128,13 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 	return nil
 }
 
-func ReadConfig(cfgPath string) error {
-	Cfg = &Config{}
-	_, err := toml.DecodeFile(cfgPath, Cfg)
+var readConfig = func(cfgPath string) (*Config, error) {
+	cfg := &Config{}
+	_, err := toml.DecodeFile(cfgPath, cfg)
 	if err != nil {
-		log.Printf("Unable to read config: %s.", err)
-		return err
-	} else {
-		log.Printf("Read config file: '%s'.", cfgPath)
+		return nil, err
 	}
-	return nil
+	return cfg, nil
 }
 
 func (c *Config) processConfigPidFile(wd string) error {
@@ -147,6 +142,9 @@ func (c *Config) processConfigPidFile(wd string) error {
 		return fmt.Errorf("pid-file setting empty")
 	}
 	if !filepath.IsAbs(c.PidPath) {
+		if wd == "" {
+			return fmt.Errorf("pid-file must be absolute path if working directory cannot be determined")
+		}
 		c.PidPath = filepath.Join(wd, c.PidPath)
 	}
 	pidDir, _ := filepath.Split(c.PidPath)
@@ -164,6 +162,9 @@ func (c *Config) processConfigLogFile(wd string) error {
 		return fmt.Errorf("log-file setting empty")
 	}
 	if !filepath.IsAbs(c.LogPath) {
+		if wd == "" {
+			return fmt.Errorf("log-file must be absolute path if working directory cannot be determined")
+		}
 		c.LogPath = filepath.Join(wd, c.LogPath)
 	}
 	logDir, _ := filepath.Split(c.LogPath)
@@ -183,7 +184,7 @@ func (c *Config) processConfigLogCycleInterval() error {
 
 	logDir, _ := filepath.Split(c.LogPath)
 	log.Printf("All further status messages will be written to log file(s) in '%s'.", logDir)
-	logFileCycler()
+	logFileCycler(c.LogPath, c.LogCycle.Duration)
 	log.Print("Server starting.")
 
 	return nil
@@ -307,7 +308,7 @@ type configer interface {
 	processDSSpec() error
 }
 
-func processConfig(c configer, wd string) error {
+var processConfig = func(c configer, wd string) error {
 
 	if err := c.processConfigPidFile(wd); err != nil {
 		return err

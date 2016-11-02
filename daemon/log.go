@@ -23,6 +23,10 @@ import (
 	"time"
 )
 
+func init() {
+	log.SetPrefix(fmt.Sprintf("[%d] ", os.Getpid()))
+}
+
 var timeNow = func() time.Time {
 	return time.Now()
 }
@@ -31,23 +35,23 @@ var osRename = func(a, b string) error {
 	return os.Rename(a, b)
 }
 
-var renameLogFile = func() {
-	logDir, logFile := filepath.Split(Cfg.LogPath)
+var renameLogFile = func(logPath string) {
+	logDir, logFile := filepath.Split(logPath)
 	filename := timeNow().Format(logFile + "-20060102_150405")
 	fullpath := filepath.Join(logDir, filename)
 	log.Printf("Starting new log file, current log archived as: '%s'", fullpath)
-	osRename(Cfg.LogPath, fullpath)
+	osRename(logPath, fullpath)
 }
 
-var cycleLogFile = func() {
+var cycleLogFile = func(logPath string) {
 
 	if logFile != nil {
-		renameLogFile()
+		renameLogFile(logPath)
 	}
 
-	file, err := os.OpenFile(Cfg.LogPath, os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0666) // open with O_SYNC
+	file, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_SYNC, 0666) // open with O_SYNC
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: Unable to open log file '%s', %s\n", Cfg.LogPath, err)
+		fmt.Fprintf(os.Stderr, "FATAL: Unable to open log file '%s', %s\n", logPath, err)
 		os.Exit(1)
 	}
 
@@ -58,9 +62,9 @@ var cycleLogFile = func() {
 	logFile = file
 }
 
-var logFileCycler = func() {
+var logFileCycler = func(logPath string, logCycle time.Duration) {
 
-	cycleLogFile() // Initial cycle
+	cycleLogFile(logPath) // Initial cycle
 
 	go func() { // Wait for a cycle signal
 		for {
@@ -70,26 +74,17 @@ var logFileCycler = func() {
 				// but we should not exit in the middle of a clean up...
 				return
 			}
-			cycleLogFile()
+			cycleLogFile(logPath)
 		}
 	}()
 
 	go func() { // Periodic cycling
 		for {
-			time.Sleep(Cfg.LogCycle.Duration)
+			time.Sleep(logCycle)
 			cycleLogCh <- 1
 			if quitting {
 				return
 			}
 		}
 	}()
-}
-
-// Write to both stderr and log
-func logFatalf(format string, v ...interface{}) {
-	fmt.Fprintf(os.Stderr, format, v...)
-	if Cfg.PidPath != "" && gracefulChildPid == 0 {
-		os.Remove(Cfg.PidPath)
-	}
-	log.Fatalf(format, v...)
 }
