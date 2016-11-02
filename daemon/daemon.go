@@ -21,11 +21,13 @@ import (
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/receiver"
 	"github.com/tgres/tgres/serde"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -159,13 +161,6 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		return
 	}
 
-	// Save PID
-	if err := savePid(cfg.PidPath); err != nil {
-		log.Printf("Unable to create pid file '%s', exiting: (%v)", cfg.PidPath, err)
-		return
-	}
-	log.Printf("Pid saved in %s.", cfg.PidPath)
-
 	// Connect to the DB (and create tables if needed, etc)
 	db, err := initDb(cfg.DbConnectString)
 	if err != nil {
@@ -190,16 +185,8 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		return
 	}
 
-	// Initialize cluster
-	var c *cluster.Cluster
-	c, err = initCluster(bindAddr, advAddr, joinIps)
-	if err != nil {
-		log.Printf("Error initializing cluster, exiting: %v", err)
-		return
-	}
-
-	// Create Receiver
-	rcvr := createReceiver(cfg, c, db)
+	// Create Receiver (with nil cluster, because if graceful, then we must wait for parent to shutdown)
+	rcvr := createReceiver(cfg, nil, db)
 
 	// Create and run the Service Manager
 	serviceMgr := newServiceManager(rcvr, cfg)
@@ -225,7 +212,24 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		log.Printf("start(): Received %v, proceeding to load the data", s)
 	}
 
-	// *finally* start the receiver (because graceful restart, parent must save first)
+	// Initialize cluster
+	var c *cluster.Cluster
+	c, err = initCluster(bindAddr, advAddr, joinIps)
+	if err != nil {
+		log.Printf("Error initializing cluster, exiting: %v", err)
+		return
+	}
+	rcvr.SetCluster(c)
+
+	// Save PID (by now the graceful parent pid can be overwritten)
+	if err := savePid(cfg.PidPath); err != nil {
+		// This is not good, but isn't fatal
+		log.Printf("WARNING: Unable to create pid file '%s', exiting: (%v)", cfg.PidPath, err)
+	} else {
+		log.Printf("Pid saved in %q.", cfg.PidPath)
+	}
+
+	// *finally* start the receiver (because graceful restart, parent must save data first)
 	startReceiver(rcvr)
 	log.Printf("Receiver started, Tgres is ready.")
 
@@ -242,10 +246,39 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	return
 }
 
+// Only remove pid if it matches ours
+var checkRemovePid = func(pidPath string) bool {
+	bpid, err := ioutil.ReadFile(pidPath)
+	if err != nil {
+		return false
+	}
+	spid := string(bpid)
+	if strings.HasSuffix(spid, "\n") {
+		spid = spid[:len(spid)-1]
+	}
+	npid, err := strconv.ParseInt(spid, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	pid := os.Getpid()
+
+	if int(npid) != pid {
+		return false // not our pid
+	}
+
+	err = os.Remove(pidPath)
+	return err == nil
+}
+
 func Finish(cfg *Config) {
 	quitting = true
 	log.Printf("main: Waiting for all other goroutines to finish...")
 	log.Println("main: All goroutines finished, exiting.")
+
+	if checkRemovePid(cfg.PidPath) {
+		log.Printf("Removed pid-file %q", cfg.PidPath)
+	}
 
 	// Close log
 	log.SetOutput(os.Stderr)
@@ -253,7 +286,6 @@ func Finish(cfg *Config) {
 		logFile.Close()
 	}
 
-	os.Remove(cfg.PidPath)
 }
 
 func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPath string) {
@@ -264,8 +296,11 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPat
 	}
 
 	files, protos := serviceMgr.listenerFilesAndProtocols()
-
 	log.Printf("gracefulRestart(): Beginning graceful restart with sockets: %v and protos: %q", files, protos)
+
+	rcvr.ClusterReady(false) // triggers a transition
+	// Allow enough time for a transition to start
+	time.Sleep(500 * time.Millisecond) // TODO This is a hack
 
 	mypath, _ := filepath.Abs(os.Args[0]) // TODO we should really be the starting working directory
 	args := []string{
@@ -293,10 +328,11 @@ func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 
 	quitting = true
 
-	rcvr.ClusterReady(false) // triggers a transition
-
-	// Allow enough time for a transition to start
-	time.Sleep(500 * time.Millisecond) // TODO This is a hack
+	if gracefulChildPid == 0 {
+		rcvr.ClusterReady(false) // triggers a transition
+		// Allow enough time for a transition to start
+		time.Sleep(500 * time.Millisecond) // TODO This is a hack
+	}
 
 	log.Printf("Waiting for all TCP connections to finish...")
 	serviceMgr.closeListeners()

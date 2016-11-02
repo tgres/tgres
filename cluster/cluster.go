@@ -511,6 +511,11 @@ func (c *Cluster) Ready(status bool) error {
 	return nil
 }
 
+func (c *Cluster) Shutdown() error {
+	c.rpc.Close()
+	return c.Memberlist.Shutdown()
+}
+
 // Ready returns the status of a node.
 func (n *Node) Ready() bool {
 	md, err := n.extractMeta()
