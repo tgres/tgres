@@ -233,14 +233,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	startReceiver(rcvr)
 	log.Printf("Receiver started, Tgres is ready.")
 
-	// TODO Fade into background
-	// To implement this basically means performing an immediate graceful restart.
-	// if daemonize {
-	// 	std2DevNull()
-	// 	os.Chdir("/")
-	// }
-
-	// TODO this too could be in the receiver for consistency?
+	// Wait for HUP or TERM, etc.
 	waitForSignal(rcvr, serviceMgr, cfgPath)
 
 	return
@@ -288,7 +281,7 @@ func Finish(cfg *Config) {
 
 }
 
-func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPath string) {
+func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPath, join string) {
 
 	if !filepath.IsAbs(os.Args[0]) {
 		log.Printf("ERROR: Graceful restart only possible when %q started with absolute path, ignoring this request.", os.Args[0])
@@ -306,6 +299,10 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPat
 	args := []string{
 		"-c", cfgPath,
 		"-graceful", protos}
+
+	if join != "" {
+		args = append(args, "-join", join)
+	}
 
 	cmd := exec.Command(mypath, args...)
 	cmd.Stdout = os.Stdout
@@ -344,18 +341,5 @@ func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 	if gracefulChildPid != 0 {
 		// let the child know the data is flushed
 		syscall.Kill(gracefulChildPid, syscall.SIGUSR1)
-	}
-}
-
-var std2DevNull = func() error {
-	f, e := os.OpenFile("/dev/null", os.O_RDWR, 0)
-	if e == nil {
-		fd := int(f.Fd())
-		syscall.Dup2(fd, int(os.Stdin.Fd()))
-		syscall.Dup2(fd, int(os.Stdout.Fd()))
-		syscall.Dup2(fd, int(os.Stderr.Fd()))
-		return nil
-	} else {
-		return e
 	}
 }
