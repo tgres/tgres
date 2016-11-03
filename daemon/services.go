@@ -62,9 +62,6 @@ func processListenSpec(listenSpec string) string {
 }
 
 func (r *serviceManager) run(gracefulProtos string) error {
-
-	log.Printf("ZZZ -------- in serviceManager.run()")
-
 	// TODO If a listen-spec changes in the config and a graceful
 	// restart is issued, the new config will not take effect as the
 	// open file is reused.

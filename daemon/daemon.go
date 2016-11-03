@@ -119,7 +119,7 @@ var startReceiver = func(r *receiver.Receiver) {
 	r.Start()
 }
 
-var waitForSignal = func(r *receiver.Receiver, sm *serviceManager, cfgPath string) {
+var waitForSignal = func(r *receiver.Receiver, sm *serviceManager, cfgPath, join string) {
 	for {
 		// Wait for a SIGINT or SIGTERM.
 		ch := make(chan os.Signal)
@@ -128,7 +128,7 @@ var waitForSignal = func(r *receiver.Receiver, sm *serviceManager, cfgPath strin
 		log.Printf("Got signal: %v", s)
 		if s == syscall.SIGHUP {
 			if gracefulChildPid == 0 {
-				gracefulRestart(r, sm, cfgPath)
+				gracefulRestart(r, sm, cfgPath, join)
 			}
 		} else {
 			gracefulExit(r, sm)
@@ -213,6 +213,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	}
 
 	// Initialize cluster
+	// We had to wait until after graceful, so that the new cluster can bind to sockets
 	var c *cluster.Cluster
 	c, err = initCluster(bindAddr, advAddr, joinIps)
 	if err != nil {
@@ -234,7 +235,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	log.Printf("Receiver started, Tgres is ready.")
 
 	// Wait for HUP or TERM, etc.
-	waitForSignal(rcvr, serviceMgr, cfgPath)
+	waitForSignal(rcvr, serviceMgr, cfgPath, join)
 
 	return
 }

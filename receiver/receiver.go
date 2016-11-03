@@ -121,6 +121,7 @@ func (r *Receiver) ClusterReady(ready bool) {
 
 func (r *Receiver) SetCluster(c *cluster.Cluster) {
 	r.cluster = c
+	r.dsc.clstr = c
 }
 
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
