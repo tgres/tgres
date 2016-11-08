@@ -51,6 +51,10 @@ var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 }
 
 var doStart = func(r *Receiver) {
+	log.Printf("Receiver: Caching data sources...")
+	r.dsc.PreLoad()
+	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byId))
+
 	log.Printf("Receiver: starting...")
 
 	var startWg sync.WaitGroup
@@ -77,9 +81,10 @@ var stopDispatcher = func(r *Receiver) {
 var doStop = func(r *Receiver, clstr clusterer) {
 	stopDispatcher(r)
 	stopAllWorkers(r)
-	log.Printf("Leaving cluster.")
+	log.Printf("Leaving cluster...")
 	clstr.Leave(1 * time.Second)
 	clstr.Shutdown()
+	log.Printf("Left cluster.")
 }
 
 var stopWorkers = func(workerChs []chan *incomingDpWithDs, workerWg *sync.WaitGroup) {
@@ -134,7 +139,8 @@ var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker(%d)", i)}, r, r.workerChs[i], r.dsc, r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints)
+		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, r)
+
 	}
 }
 
@@ -145,8 +151,8 @@ var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 	log.Printf("Starting %d flushers...", r.NWorkers)
 	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
-		r.flusherChs[i] = make(chan *dsFlushRequest)
-		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("flusher(%d)", i)}, r.serde, r, r.flusherChs[i])
+		r.flusherChs[i] = make(chan *dsFlushRequest, 1024)
+		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("flusher_%d", i)}, r.serde, r, r.flusherChs[i])
 	}
 }
 
@@ -159,5 +165,5 @@ var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {
 var startPacedMetricWorker = func(r *Receiver, startWg *sync.WaitGroup) {
 	log.Printf("Starting pacedMetricWorker...")
 	startWg.Add(1)
-	go pacedMetricWorker(&wrkCtl{wg: &r.pacedMetricWg, startWg: startWg, id: "pacedMetricWorker"}, r.pacedMetricCh, r, r, time.Second)
+	go pacedMetricWorker(&wrkCtl{wg: &r.pacedMetricWg, startWg: startWg, id: "pacedMetricWorker"}, r.pacedMetricCh, r, r, time.Second, r)
 }

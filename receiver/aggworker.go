@@ -95,7 +95,22 @@ var aggWorkerProcessOrForward = func(ac *aggregator.Command, aggDd *distDatumAgg
 	return forwarded
 }
 
-var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
+func reportAggChannelFillPercent(aggCh chan *aggregator.Command, sr statReporter) {
+	fillStatName := "receiver.aggworker.channel.fill_percent"
+	lenStatName := "receiver.aggworker.channel.len"
+	cp := float64(cap(aggCh))
+	for {
+		time.Sleep(time.Second)
+		ln := float64(len(aggCh))
+		if cp > 0 {
+			fillPct := (ln / cp) * 100
+			sr.reportStatGauge(fillStatName, fillPct)
+		}
+		sr.reportStatGauge(lenStatName, ln)
+	}
+}
+
+var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, sr statReporter, dpq *Receiver) {
 
 	wc.onEnter()
 	defer wc.onExit()
@@ -106,6 +121,8 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 
 	flushCh := make(chan time.Time, 1)
 	go aggWorkerPeriodicFlushSignal(wc.ident(), flushCh, statFlushDuration)
+
+	go reportAggChannelFillPercent(aggCh, sr)
 
 	log.Printf("%s: started.", wc.ident())
 	wc.onStarted()
@@ -140,7 +157,7 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 			}
 
 			forwarded := aggWorkerProcessOrForward(ac, aggDd, clstr, snd)
-			scr.reportStatCount("receiver.aggregations_forwarded", float64(forwarded))
+			sr.reportStatCount("receiver.aggworker.agg.forwarded", float64(forwarded))
 		}
 	}
 }

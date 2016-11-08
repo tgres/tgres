@@ -22,6 +22,7 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
+	"golang.org/x/time/rate"
 	"os"
 	"reflect"
 	"sync"
@@ -143,7 +144,7 @@ func Test_Receiver_reportStatCount(t *testing.T) {
 
 func Test_Receiver_flushDs(t *testing.T) {
 	// So we need to test that this calls queueblocking...
-	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1)}
+	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1), flushLimiter: rate.NewLimiter(10, 10)}
 	r.flusherChs[0] = make(chan *dsFlushRequest)
 	called := 0
 	var wg sync.WaitGroup

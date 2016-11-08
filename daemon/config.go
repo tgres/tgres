@@ -39,6 +39,7 @@ type Config struct { // Needs to be exported for TOML to work
 	MaxCachedPoints          int      `toml:"max-cached-points"`
 	MaxCache                 duration `toml:"max-cache-duration"`
 	MinCache                 duration `toml:"min-cache-duration"`
+	MaxFlushesPerSecond      int      `toml:"max-flushes-per-second"`
 	GraphiteTextListenSpec   string   `toml:"graphite-text-listen-spec"`
 	GraphiteUdpListenSpec    string   `toml:"graphite-udp-listen-spec"`
 	GraphitePickleListenSpec string   `toml:"graphite-pickle-listen-spec"`
@@ -228,6 +229,14 @@ func (c *Config) processMinCacheDuration() error {
 	return nil
 }
 
+func (c *Config) processMaxFlushesPerSecond() error {
+	if c.MaxFlushesPerSecond == 0 {
+		return fmt.Errorf("max-flushes-per-second missing, must be integer")
+	}
+	log.Printf("Data Source flushes will be rate limited to %d per second (max-flushes-per-second).", c.MaxFlushesPerSecond)
+	return nil
+}
+
 func (c *Config) processStatFlushInterval() error {
 	if c.StatFlush.Duration == 0 {
 		return fmt.Errorf("stat-flush-interval is missing")
@@ -302,6 +311,7 @@ type configer interface {
 	processMaxCachedPoints() error
 	processMaxCacheDuration() error
 	processMinCacheDuration() error
+	processMaxFlushesPerSecond() error
 	processStatFlushInterval() error
 	processStatsNamePrefix() error
 	processWorkers() error
@@ -329,6 +339,9 @@ var processConfig = func(c configer, wd string) error {
 		return err
 	}
 	if err := c.processMinCacheDuration(); err != nil {
+		return err
+	}
+	if err := c.processMaxFlushesPerSecond(); err != nil {
 		return err
 	}
 	if err := c.processStatFlushInterval(); err != nil {

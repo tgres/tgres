@@ -41,16 +41,21 @@ import (
 	"log"
 	"net"
 	"net/rpc"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-var startTime time.Time
+var (
+	debug     bool
+	startTime time.Time
+)
 
 func init() {
 	startTime = time.Now()
+	debug = os.Getenv("TGRES_CLUSTER_DEBUG") != ""
 }
 
 const updateNodeTO = 30 * time.Second
@@ -512,7 +517,7 @@ func (c *Cluster) Ready(status bool) error {
 }
 
 func (c *Cluster) Shutdown() error {
-	c.rpc.Close()
+	//c.rpc.Close() // seems like Closing it only causes errors
 	return c.Memberlist.Shutdown()
 }
 
@@ -679,10 +684,12 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 			if newNode == nil || oldNode.Name() != newNode.Name() {
 				ln := c.LocalNode()
 				if ln.Name() == oldNode.Name() { // we are the ex-node
-					if newNode != nil {
+					if newNode != nil && debug {
 						log.Printf("Transition(): Id %s:%d (%s) is moving away to node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), newNode.Name())
 					}
-					log.Printf("Transition(): Calling Relinquish for %s:%d (%s).", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
+					if debug {
+						log.Printf("Transition(): Calling Relinquish for %s:%d (%s).", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName())
+					}
 					if err = dde.dd.Relinquish(); err != nil {
 						log.Printf("Transition(): Warning: Relinquish() failed for id %s:%d (%s) with: %v", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), err)
 					} else if newNode != nil {
@@ -692,8 +699,10 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 						log.Printf("Transition(): Sending relinquish of id %s:%d to node %s", dde.dd.Type(), dde.dd.Id(), newNode.Name())
 						c.snd <- m
 					}
-				} else if newNode != nil && ln.Name() == newNode.Name() { // we are the new node
-					log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
+				} else if oldNode != nil && newNode != nil && ln.Name() == newNode.Name() { // we are the new node
+					if debug {
+						log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
+					}
 					// Add to the list of dds to wait on, but only if there existed nodes
 					if oldNode.Name() != "<nil>" {
 						waitDds[fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id())] = dde.dd

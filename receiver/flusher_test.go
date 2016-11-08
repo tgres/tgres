@@ -63,6 +63,10 @@ func (f *fakeSr) reportStatCount(string, float64) {
 	f.called++
 }
 
+func (f *fakeSr) reportStatGauge(string, float64) {
+	f.called++
+}
+
 func Test_flusher(t *testing.T) {
 
 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}

@@ -88,6 +88,21 @@ func (d *dsCache) insert(rds *receiverDs) {
 	d.byId[rds.Id()] = rds
 }
 
+func (d *dsCache) PreLoad() error {
+	dss, err := d.db.FetchDataSources()
+	if err != nil {
+		return err
+	}
+
+	for _, ds := range dss {
+		rds := &receiverDs{DataSource: ds, dsf: d.dsf}
+		d.insert(rds)
+		d.register(rds)
+	}
+
+	return nil
+}
+
 func (d *dsCache) loadOrCreateDS(name string) (*rrd.DataSource, error) {
 	if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
 		return d.db.CreateOrReturnDataSource(name, dsSpec)

@@ -67,8 +67,13 @@ func Test_dsCache_insert(t *testing.T) {
 }
 
 type fakeSerde struct {
-	flushCalled, createCalled int
-	fakeErr                   bool
+	flushCalled, createCalled, fetchCalled int
+	fakeErr                                bool
+}
+
+func (f *fakeSerde) FetchDataSources() ([]*rrd.DataSource, error) {
+	f.fetchCalled++
+	return make([]*rrd.DataSource, 0), nil
 }
 
 func (f *fakeSerde) FlushDataSource(ds *rrd.DataSource) error {
@@ -131,8 +136,9 @@ type fakeDsFlusher struct {
 	called int
 }
 
-func (f *fakeDsFlusher) flushDs(rds *receiverDs, block bool) {
+func (f *fakeDsFlusher) flushDs(rds *receiverDs, block bool) bool {
 	f.called++
+	return true
 }
 
 func Test_receiverDs_Relinquish(t *testing.T) {

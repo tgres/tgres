@@ -328,7 +328,7 @@ func Test_theDispatcher(t *testing.T) {
 	dimCalled := 0
 	dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) { dimCalled++ }
 	dpidpCalled := 0
-	dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+	dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 		dpidpCalled++
 	}
 

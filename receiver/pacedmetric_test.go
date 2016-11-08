@@ -125,8 +125,10 @@ func Test_pacedMetricWorker(t *testing.T) {
 		}
 	}
 
+	sr := &fakeSr{}
+
 	wc.startWg.Add(1)
-	go pacedMetricWorker(wc, pmCh, acq, dpq, 2*time.Millisecond)
+	go pacedMetricWorker(wc, pmCh, acq, dpq, 2*time.Millisecond, sr)
 	wc.startWg.Wait()
 
 	pmCh <- &pacedMetric{pacedSum, "bar", 123}

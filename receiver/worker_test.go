@@ -39,7 +39,7 @@ func Test_workerPeriodicFlushSignal(t *testing.T) {
 		}
 	}()
 
-	go workerPeriodicFlushSignal(ch, 0, 10*time.Millisecond)
+	go workerPeriodicFlushSignal(ch, 10*time.Millisecond)
 	<-ch
 
 	time.Sleep(20 * time.Millisecond)
@@ -62,8 +62,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	f := &fakeDsFlusher{}
 
 	// recent
-	recent := make(map[int64]bool)
-	recent[7] = true
+	recent := make(map[int64]*receiverDs)
 
 	// dsc
 	db := &fakeSerde{}
@@ -71,7 +70,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	c := &fakeCluster{}
 	dsc := newDsCache(db, df, c, nil, true)
 
-	workerPeriodicFlush("workerperiodic", f, recent, dsc, 0, 10*time.Millisecond, 10)
+	workerPeriodicFlush("workerperiodic", f, recent, 0, 10*time.Millisecond, 10)
 
 	if !strings.Contains(string(fl.last), "annot lookup") {
 		t.Errorf("workerPeriodicFlush: non-existent ds did not log 'annot lookup'")
@@ -80,12 +79,12 @@ func Test_workerPeriodicFlush(t *testing.T) {
 		t.Errorf("workerPeriodicFlush: the recent entry should have been deleted even if it cannot be looked up")
 	}
 
-	recent[7] = true
 	ds := rrd.NewDataSource(7, "foo", 0, 0, time.Time{}, 0)
 	rds := &receiverDs{DataSource: ds}
+	recent[7] = rds
 	dsc.insert(rds)
 
-	workerPeriodicFlush("workerperiodic2", f, recent, dsc, 0, 10*time.Millisecond, 10)
+	workerPeriodicFlush("workerperiodic2", f, recent, 0, 10*time.Millisecond, 10)
 
 	if f.called > 0 {
 		t.Errorf("workerPeriodicFlush: no flush should have happened")
@@ -99,10 +98,10 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	ds.ProcessIncomingDataPoint(123, time.Unix(3000, 0))
 	rds = &receiverDs{DataSource: ds}
 	dsc.insert(rds)
-	recent[7] = true
+	recent[7] = rds
 	debug = true
 
-	workerPeriodicFlush("workerperiodic3", f, recent, dsc, 0, 10*time.Millisecond, 0)
+	workerPeriodicFlush("workerperiodic3", f, recent, 0, 10*time.Millisecond, 0)
 	if f.called == 0 {
 		t.Errorf("workerPeriodicFlush: should have been flushed")
 	}
@@ -123,26 +122,23 @@ func Test_theWorker(t *testing.T) {
 	dsf := &fakeDsFlusher{}
 	workerCh := make(chan *incomingDpWithDs)
 
-	// dsc
-	db := &fakeSerde{}
-	df := &dftDSFinder{}
-	c := &fakeCluster{}
-	dsc := newDsCache(db, df, c, nil, true)
-
 	saveFn1, saveFn2 := workerPeriodicFlushSignal, workerPeriodicFlush
 
 	wpfsCalled := 0
-	workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
+	workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, napTime time.Duration) {
 		wpfsCalled++
 		periodicFlushCheck <- true
 	}
 	wpfCalled := 0
-	workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+	workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*receiverDs, minCacheDur, maxCacheDur time.Duration, maxPoints int) map[int64]*receiverDs {
 		wpfCalled++
+		return nil
 	}
 
+	sr := &fakeSr{}
+
 	wc.startWg.Add(1)
-	go worker(wc, dsf, workerCh, dsc, 0, 0, 10)
+	go worker(wc, dsf, workerCh, 0, 0, 10, sr)
 	wc.startWg.Wait()
 
 	time.Sleep(50 * time.Millisecond) // because go workerPeriodicFlushSignal()

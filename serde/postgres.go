@@ -141,9 +141,16 @@ func (p *pgSerDe) MyDbAddr() (*string, error) {
 
 func (p *pgSerDe) prepareSqlStatements() error {
 	var err error
-	if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sts ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5", p.prefix)); err != nil {
+
+	if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts AS ts (dp[$1:$2], rra_id, n) VALUES($3, $4, $5) "+
+		"ON CONFLICT(rra_id, n) DO UPDATE SET dp[$1:$2] = $3 WHERE ts.rra_id = $4 AND ts.n = $5", p.prefix)); err != nil {
 		return err
 	}
+	// legacy UPDATE version
+	// if p.sql1, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sts ts SET dp[$1:$2] = $3 WHERE rra_id = $4 AND n = $5", p.prefix)); err != nil {
+	// 	return err
+	// }
+
 	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2, latest = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
@@ -164,10 +171,11 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		"RETURNING id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2) ON CONFLICT(rra_id, n) DO NOTHING",
-		p.prefix)); err != nil {
-		return err
-	}
+	// With sql1 UPSERT this is no longer necessary
+	// if p.sql6, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sts (rra_id, n) VALUES ($1, $2) ON CONFLICT(rra_id, n) DO NOTHING",
+	// 	p.prefix)); err != nil {
+	// 	return err
+	// }
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, duration_ms = $4 WHERE id = $5", p.prefix)); err != nil {
 		return err
 	}
@@ -761,7 +769,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 // RRA. This method also attempt to create the TS empty rows with ON
 // CONFLICT DO NOTHING. (There is no reason to ever load TS data
 // because of the nature of an RRD - we accumulate data points and
-// surgically write them to the proper slots in the TS table).Since
+// surgically write them to the proper slots in the TS table). Since
 // PostgreSQL 9.5 introduced upserts and we changed CreateDataSource
 // to CreateOrReturnDataSource the code in this module is a little
 // functionally overlapping and should probably be re-worked,
@@ -813,15 +821,16 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 		}
 		rras = append(rras, rra)
 
-		rraSize, rraWidth := rra.Size(), rra.Width()
-		for n := int64(0); n <= (rraSize/rraWidth + rraSize%rraWidth/rraWidth); n++ {
-			r, err := p.sql6.Query(rra.Id(), n)
-			if err != nil {
-				log.Printf("CreateOrReturnDataSource(): error creating TSs: %v", err)
-				return nil, err
-			}
-			r.Close()
-		}
+		// sql1 UPSERT obsoletes the need for this
+		// rraSize, rraWidth := rra.Size(), rra.Width()
+		// for n := int64(0); n <= (rraSize/rraWidth + rraSize%rraWidth/rraWidth); n++ {
+		// 	r, err := p.sql6.Query(rra.Id(), n)
+		// 	if err != nil {
+		// 		log.Printf("CreateOrReturnDataSource(): error creating TSs: %v", err)
+		// 		return nil, err
+		// 	}
+		// 	r.Close()
+		// }
 
 		rraRows.Close()
 	}

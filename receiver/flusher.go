@@ -16,9 +16,11 @@
 package receiver
 
 import (
+	"fmt"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"log"
+	"time"
 )
 
 type dsFlushRequest struct {
@@ -39,9 +41,26 @@ func (f flusherChannels) queueBlocking(rds *receiverDs, block bool) {
 	}
 }
 
-var flusher = func(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
+func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statReporter, ident string) {
+	fillStatName := fmt.Sprintf("receiver.flushers.%s.channel.fill_percent", ident)
+	lenStatName := fmt.Sprintf("receiver.flushers.%s.channel.len", ident)
+	cp := float64(cap(flusherCh))
+	for {
+		time.Sleep(time.Second)
+		ln := float64(len(flusherCh))
+		if cp > 0 {
+			fillPct := (ln / cp) * 100
+			sr.reportStatGauge(fillStatName, fillPct)
+		}
+		sr.reportStatGauge(lenStatName, ln)
+	}
+}
+
+var flusher = func(wc wController, db serde.DataSourceFlusher, sr statReporter, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
+
+	go reportFlusherChannelFillPercent(flusherCh, sr, wc.ident())
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
@@ -59,7 +78,7 @@ var flusher = func(wc wController, db serde.DataSourceFlusher, scr statCountRepo
 		if fr.resp != nil {
 			fr.resp <- (err == nil)
 		}
-		scr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
-		scr.reportStatCount("serde.flushes", 1)
+		sr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
+		sr.reportStatCount("serde.flushes", 1)
 	}
 }

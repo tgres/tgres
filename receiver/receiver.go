@@ -22,8 +22,12 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/serde"
+	"golang.org/x/time/rate"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +60,8 @@ type Receiver struct {
 	ReportStats                        bool
 	ReportStatsPrefix                  string
 	pacedMetricCh                      chan *pacedMetric
+	flushLimiter                       *rate.Limiter
+	stopped                            bool
 }
 
 // IncomingDP is incoming data, i.e. this is the form in which input
@@ -88,7 +94,6 @@ func New(clstr *cluster.Cluster, serde serde.SerDe, finder MatchingDSSpecFinder)
 		finder = &dftDSFinder{}
 	}
 	r := &Receiver{
-		cluster:           clstr,
 		serde:             serde,
 		NWorkers:          4,
 		MaxCacheDuration:  5 * time.Second,
@@ -97,13 +102,16 @@ func New(clstr *cluster.Cluster, serde serde.SerDe, finder MatchingDSSpecFinder)
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
 		Rcache:            dsl.NewReadCache(serde),
-		dpCh:              make(chan *IncomingDP, 65536),         // so we can survive a graceful restart
-		aggCh:             make(chan *aggregator.Command, 65536), // ditto
+		dpCh:              make(chan *IncomingDP, 65536), // to be on the safe side
+		aggCh:             make(chan *aggregator.Command, 1024),
+		pacedMetricCh:     make(chan *pacedMetric, 1024),
 		ReportStats:       true,
 		ReportStatsPrefix: "tgres",
-		pacedMetricCh:     make(chan *pacedMetric, 256),
 	}
 	r.dsc = newDsCache(serde, finder, clstr, r, false)
+	if clstr != nil {
+		r.SetCluster(clstr)
+	}
 	return r
 }
 
@@ -112,6 +120,7 @@ func (r *Receiver) Start() {
 }
 
 func (r *Receiver) Stop() {
+	r.stopped = true
 	doStop(r, r.cluster)
 }
 
@@ -122,11 +131,25 @@ func (r *Receiver) ClusterReady(ready bool) {
 func (r *Receiver) SetCluster(c *cluster.Cluster) {
 	r.cluster = c
 	r.dsc.clstr = c
+	name := strings.Replace(c.LocalNode().Name(), ".", "_", -1)
+	if name == "" {
+		name = "UNKNOWN"
+	}
+	name = misc.SanitizeName(name)
+	if ok, _ := regexp.MatchString("[0-9]", name[0:1]); ok { // starts with a digit
+		name = "_" + name // prepend an underscore
+	}
+	r.ReportStatsPrefix += ("." + name)
+}
+
+func (r *Receiver) SetMaxFlushRate(mfr int) {
+	r.flushLimiter = rate.NewLimiter(rate.Limit(mfr), mfr)
 }
 
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
-	// TODO - on exit, if the channel is already closed, this panics
-	r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
+	if !r.stopped {
+		r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
+	}
 }
 
 // TODO we could have shorthands such as:
@@ -135,31 +158,50 @@ func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
 // QueueAppendValue()
 // ... but for now QueueAggregatorCommand seems sufficient
 func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
-	r.aggCh <- agg
+	if !r.stopped {
+		r.aggCh <- agg
+	}
 }
 
+func (r *Receiver) QueueSum(name string, v float64) {
+	if !r.stopped {
+		r.pacedMetricCh <- &pacedMetric{pacedSum, name, v}
+	}
+}
+
+func (r *Receiver) QueueGauge(name string, v float64) {
+	if !r.stopped {
+		r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
+	}
+}
+
+// Reporting internal to Tgres: count
 func (r *Receiver) reportStatCount(name string, f float64) {
 	if r != nil && r.ReportStats && f != 0 {
 		r.QueueSum(r.ReportStatsPrefix+"."+name, f)
 	}
 }
 
-func (r *Receiver) QueueSum(name string, v float64) {
-	r.pacedMetricCh <- &pacedMetric{pacedSum, name, v}
+// Reporting internal to Tgres: gauge
+func (r *Receiver) reportStatGauge(name string, f float64) {
+	if r != nil && r.ReportStats {
+		r.QueueGauge(r.ReportStatsPrefix+"."+name, f)
+	}
 }
 
-func (r *Receiver) QueueGauge(name string, v float64) {
-	r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
-}
-
-func (r *Receiver) flushDs(rds *receiverDs, block bool) {
+func (r *Receiver) flushDs(rds *receiverDs, block bool) bool {
+	if r.flushLimiter != nil && !r.flushLimiter.Allow() {
+		r.reportStatCount("serde.flushes_rate_limited", 1)
+		return false
+	}
 	r.flusherChs.queueBlocking(rds, block)
 	rds.ClearRRAs(false)
 	rds.lastFlushRT = time.Now()
+	return true
 }
 
 type dsFlusherBlocking interface {
-	flushDs(*receiverDs, bool)
+	flushDs(*receiverDs, bool) bool
 }
 
 type dataPointQueuer interface {
@@ -170,8 +212,9 @@ type aggregatorCommandQueuer interface {
 	QueueAggregatorCommand(*aggregator.Command)
 }
 
-type statCountReporter interface {
+type statReporter interface {
 	reportStatCount(string, float64)
+	reportStatGauge(string, float64)
 }
 
 type clusterer interface {

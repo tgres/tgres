@@ -1,13 +1,16 @@
 
 # This is a TOML file: https://github.com/toml-lang/toml
 
-pid-file =             "tgres.pid"
-log-file =             "log/tgres.log"
-log-cycle-interval =   "24h"
-max-cached-points  =   4096
-max-cache-duration =   "5s"
-min-cache-duration =   "1s"
-workers            =   4
+max-cached-points       = 4096
+max-cache-duration      = "20s"
+min-cache-duration      = "10s"
+max-flushes-per-second  = 100   # this setting trumps all the above
+
+workers                 = 4
+
+pid-file =                 "tgres.pid"
+log-file =                 "log/tgres.log"
+log-cycle-interval =       "24h"
 
 http-listen-spec            = "0.0.0.0:8888"
 graphite-line-listen-spec   = "0.0.0.0:2003"

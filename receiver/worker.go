@@ -16,71 +16,78 @@
 package receiver
 
 import (
+	"fmt"
 	"log"
-	"math/rand"
 	"time"
 )
 
-var workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, minCacheDur, maxCacheDur time.Duration) {
-	for {
-		// Sleep randomly between min and max cache durations (is this wise?)
-		i := int(maxCacheDur.Nanoseconds()-minCacheDur.Nanoseconds()) / 1000000
-		dur := time.Duration(rand.Intn(i+1))*time.Millisecond + minCacheDur
-		time.Sleep(dur)
-		periodicFlushCheck <- true
-	}
-}
-
-var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]bool, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
-	for dsId, _ := range recent {
-		rds := dss.getById(dsId)
-		if rds == nil {
-			log.Printf("%s: Cannot lookup ds id (%d) to flush (possible if it moved to another node).", ident, dsId)
-			delete(recent, dsId)
-			continue
-		}
+var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*receiverDs, minCacheDur, maxCacheDur time.Duration, maxPoints, maxFlushes int) map[int64]*receiverDs {
+	leftover := make(map[int64]*receiverDs)
+	n := 0
+	for id, rds := range recent {
 		if rds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
 			if debug {
-				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, rds.Id())
+				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, id)
 			}
-			dsf.flushDs(rds, false)
-			delete(recent, rds.Id())
+			if dsf.flushDs(rds, false) {
+				delete(recent, id)
+			} else {
+				leftover[id] = rds
+			}
 		}
+		n++
+		if n > maxFlushes {
+			break
+		}
+	}
+	return leftover
+}
+
+func reportWorkerChannelFillPercent(workerCh chan *incomingDpWithDs, sr statReporter, ident string) {
+	fillStatName := fmt.Sprintf("receiver.workers.%s.channel.fill_percent", ident)
+	lenStatName := fmt.Sprintf("receiver.workers.%s.channel.len", ident)
+	cp := float64(cap(workerCh))
+	for {
+		time.Sleep(time.Second)
+		ln := float64(len(workerCh))
+		if cp > 0 {
+			fillPct := (ln / cp) * 100
+			sr.reportStatGauge(fillStatName, fillPct)
+		}
+		sr.reportStatGauge(lenStatName, ln)
 	}
 }
 
-var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, sr statReporter) {
 	wc.onEnter()
 	defer wc.onExit()
 
-	recent := make(map[int64]bool)
+	var recent = make(map[int64]*receiverDs)
+	var leftover map[int64]*receiverDs
 
-	periodicFlushCheck := make(chan bool)
-	go workerPeriodicFlushSignal(periodicFlushCheck, minCacheDur, maxCacheDur)
+	periodicFlushTicker := time.NewTicker(time.Second) // TODO flush interval should be configurable
+
+	go reportWorkerChannelFillPercent(workerCh, sr, wc.ident())
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
 
+	maxFlushes := len(workerCh) / 2
 	for {
 		select {
-		case <-periodicFlushCheck:
-			workerPeriodicFlush(wc.ident(), dsf, recent, dss, minCacheDur, maxCacheDur, maxPoints)
+		case <-periodicFlushTicker.C:
+			if len(leftover) > 0 {
+				leftover = workerPeriodicFlush(wc.ident(), dsf, leftover, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
+			} else {
+				leftover = workerPeriodicFlush(wc.ident(), dsf, recent, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
+			}
 		case dpds, ok := <-workerCh:
 			if !ok {
 				return
 			}
 			rds := dpds.rds // at this point ds has to be already set
 			if err := rds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
-				if rds.shouldBeFlushed(maxPoints, minCacheDur, maxCacheDur) {
-					// flush just this one ds
-					if debug {
-						log.Printf("%s: Requesting flush of ds id: %d", wc.ident(), rds.Id())
-					}
-					dsf.flushDs(rds, false)
-					delete(recent, rds.Id())
-				} else {
-					recent[rds.Id()] = true
-				}
+				recent[rds.Id()] = rds
 			} else {
 				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), rds.Name(), err)
 			}

@@ -83,9 +83,9 @@ var dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerCh
 	return
 }
 
-var dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 
-	scr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
+	sr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
 
 	if math.IsNaN(dp.Value) {
 		// NaN is meaningless, e.g. "the thermometer is
@@ -107,11 +107,32 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statCountReporter, ds
 
 	if rds != nil {
 		forwarded := dispatcherProcessOrForward(rds, clstr, workerChs, dp, snd)
-		scr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
+		sr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
 	}
 }
 
-var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
+func reportDispatcherChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter) {
+	cp := float64(cap(dpCh))
+	for {
+		time.Sleep(time.Second)
+		ln := float64(len(dpCh))
+		if cp > 0 {
+			fillPct := (ln / cp) * 100
+			sr.reportStatGauge("receiver.dispatcher.channel.fill_percent", fillPct)
+			if fillPct > 75 {
+				log.Printf("WARNING: dispatcher channel %d percent full!", fillPct)
+			}
+		}
+		sr.reportStatGauge("receiver.dispatcher.channel.len", ln)
+
+		// Overrun queue
+		sr.reportStatGauge("receiver.dispatcher.overrun_queue.len", float64(queue.size()))
+		pctOfDisp := (float64(queue.size()) / cp) * 100
+		sr.reportStatGauge("receiver.dispatcher.overrun_queue.pct", pctOfDisp)
+	}
+}
+
+var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -121,6 +142,11 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 	// Channel for event forwards to other nodes and us
 	snd, rcv := clstr.RegisterMsgType()
 	go dispatcherIncomingDPMessages(rcv, dpCh)
+
+	queue := &dpQueue{}
+
+	// Monitor channel fill
+	go reportDispatcherChannelFillPercent(dpCh, queue, sr)
 
 	log.Printf("dispatcher: marking cluster node as Ready.")
 	clstr.Ready(true)
@@ -146,6 +172,43 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sc
 			break
 		}
 
-		dispatcherProcessIncomingDP(dp, scr, dss, workerChs, clstr, snd)
+		queueOnly := float32(len(dpCh))/float32(cap(dpCh)) > 0.5
+		dp = checkSetAside(dp, queue, queueOnly)
+
+		if dp != nil {
+			dispatcherProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+		}
 	}
+}
+
+type dpQueue []*IncomingDP
+
+func (q *dpQueue) push(dp *IncomingDP) {
+	*q = append(*q, dp)
+}
+
+func (q *dpQueue) pop() (dp *IncomingDP) {
+	dp, *q = (*q)[0], (*q)[1:]
+	return dp
+}
+
+func (q *dpQueue) size() int {
+	return len(*q)
+}
+
+// If skip is true, just append to the queue and return
+// nothing. Otherwise, if there is something in the queue, return
+// it. Otherwise, just pass it right through.
+func checkSetAside(dp *IncomingDP, queue *dpQueue, skip bool) *IncomingDP {
+
+	if skip {
+		queue.push(dp)
+		return nil
+	}
+
+	if queue.size() > 0 {
+		return queue.pop()
+	}
+
+	return dp
 }

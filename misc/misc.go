@@ -27,7 +27,7 @@ import (
 var (
 	sanitizeRegexSpace       = regexp.MustCompile("\\s+")
 	sanitizeRegexSlash       = regexp.MustCompile("/")
-	sanitizeRegexNonAlphaNum = regexp.MustCompile("[^a-zA-Z_\\-0-9\\.]")
+	sanitizeRegexNonAlphaNum = regexp.MustCompile("[^a-zA-Z_\\-0-9]\\.")
 )
 
 func SanitizeName(name string) string {

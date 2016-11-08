@@ -39,12 +39,19 @@ func Test_startAllWorkers(t *testing.T) {
 
 func Test_doStart(t *testing.T) {
 	delay := 100 * time.Millisecond
-	r := &Receiver{dpCh: make(chan *IncomingDP)}
+
+	clstr := &fakeCluster{cChange: make(chan bool)}
+	db := &fakeSerde{}
+	df := &dftDSFinder{}
+	dsc := newDsCache(db, df, clstr, nil, true)
+
+	r := &Receiver{dpCh: make(chan *IncomingDP), dsc: dsc}
+
 	saveDisp := dispatcher
 	saveSaw := startAllWorkers
 	called := 0
 	stopped := false
-	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statCountReporter, dss *dsCache, workerChs workerChannels) {
+	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statReporter, dss *dsCache, workerChs workerChannels) {
 		wc.onEnter()
 		defer wc.onExit()
 		called++
@@ -242,7 +249,7 @@ func Test_stopAllWorkers(t *testing.T) {
 func Test_startWorkers(t *testing.T) {
 	nWorkers := 0
 	saveWorker := worker
-	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, dss *dsCache, minCacheDur, maxCacheDur time.Duration, maxPoints int) {
+	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, sr statReporter) {
 		wc.onEnter()
 		defer wc.onExit()
 		nWorkers++
@@ -263,7 +270,7 @@ func Test_startWorkers(t *testing.T) {
 func Test_startFlushers(t *testing.T) {
 	nFlushers := 0
 	saveFlusher := flusher
-	flusher = func(wc wController, db serde.DataSourceFlusher, scr statCountReporter, flusherCh chan *dsFlushRequest) {
+	flusher = func(wc wController, db serde.DataSourceFlusher, scr statReporter, flusherCh chan *dsFlushRequest) {
 		wc.onEnter()
 		defer wc.onExit()
 		nFlushers++
@@ -284,7 +291,7 @@ func Test_startFlushers(t *testing.T) {
 func Test_startAggWorker(t *testing.T) {
 	started := 0
 	saveAW := aggWorker
-	aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statCountReporter, dpq *Receiver) {
+	aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statReporter, dpq *Receiver) {
 		wc.onEnter()
 		defer wc.onExit()
 		started++
@@ -304,7 +311,7 @@ func Test_startAggWorker(t *testing.T) {
 func Test_startPacedMetricWorker(t *testing.T) {
 	started := 0
 	savePMW := pacedMetricWorker
-	pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration) {
+	pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration, sr statReporter) {
 		wc.onEnter()
 		defer wc.onExit()
 		started++

@@ -23,12 +23,17 @@ import (
 	"time"
 )
 
+type DataSourcesFetcher interface {
+	FetchDataSources() ([]*rrd.DataSource, error)
+}
+
 type DataSourceFlusher interface {
 	// Flush a DS
 	FlushDataSource(ds *rrd.DataSource) error
 }
 
 type DataSourceSerDe interface {
+	DataSourcesFetcher
 	DataSourceFlusher
 	// Create a DS with name, and/or return it
 	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
@@ -41,7 +46,6 @@ type SerDe interface {
 	FetchDataSource(id int64) (*rrd.DataSource, error)
 	FetchDataSourceByName(name string) (*rrd.DataSource, error)
 
-	FetchDataSources() ([]*rrd.DataSource, error)
 	FetchDataSourceNames() (map[string]int64, error)
 
 	// Query
