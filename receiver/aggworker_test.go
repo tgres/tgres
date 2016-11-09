@@ -348,3 +348,13 @@ func Test_distDatumAggregator(t *testing.T) {
 	}
 
 }
+
+func Test_reportAggChannelFillPercent(t *testing.T) {
+	ch := make(chan *aggregator.Command, 10)
+	sr := &fakeSr{}
+	go reportAggChannelFillPercent(ch, sr, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if sr.called == 0 {
+		t.Errorf("reportAggChannelFillPercent: statReporter should have been called a bunch of times")
+	}
+}

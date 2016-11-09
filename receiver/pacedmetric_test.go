@@ -149,3 +149,13 @@ func Test_pacedMetricWorker(t *testing.T) {
 
 	pacedMetricFlush, pacedMetricPeriodicFlushSignal = saveFn1, saveFn2
 }
+
+func Test_reportPaceMetricChannelFillPercent(t *testing.T) {
+	ch := make(chan *pacedMetric, 10)
+	sr := &fakeSr{}
+	go reportPacedMetricChannelFillPercent(ch, sr, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if sr.called == 0 {
+		t.Errorf("reportPacedMetricChannelFillPercent: statReporter should have been called a bunch of times")
+	}
+}
