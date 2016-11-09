@@ -139,7 +139,7 @@ var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, r)
+		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, time.Second, r)
 
 	}
 }

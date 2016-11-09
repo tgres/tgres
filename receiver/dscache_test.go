@@ -133,12 +133,13 @@ func Test_getByNameOrLoadOrCreate(t *testing.T) {
 
 // This is a receiver
 type fakeDsFlusher struct {
-	called int
+	called    int
+	fdsReturn bool
 }
 
 func (f *fakeDsFlusher) flushDs(rds *receiverDs, block bool) bool {
 	f.called++
-	return true
+	return f.fdsReturn
 }
 
 func Test_receiverDs_Relinquish(t *testing.T) {

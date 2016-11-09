@@ -249,7 +249,7 @@ func Test_stopAllWorkers(t *testing.T) {
 func Test_startWorkers(t *testing.T) {
 	nWorkers := 0
 	saveWorker := worker
-	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, sr statReporter) {
+	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, flushInt time.Duration, sr statReporter) {
 		wc.onEnter()
 		defer wc.onExit()
 		nWorkers++

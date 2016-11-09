@@ -26,28 +26,6 @@ import (
 	"time"
 )
 
-func Test_workerPeriodicFlushSignal(t *testing.T) {
-
-	ch := make(chan bool)
-	ch2 := make(chan bool)
-	called := 0
-	go func() {
-		for {
-			<-ch
-			called++
-			ch2 <- true
-		}
-	}()
-
-	go workerPeriodicFlushSignal(ch, 10*time.Millisecond)
-	<-ch
-
-	time.Sleep(20 * time.Millisecond)
-	if called == 0 {
-		t.Errorf("workerPeriodicFlushSignal: should be called at least once")
-	}
-}
-
 func Test_workerPeriodicFlush(t *testing.T) {
 
 	// fake logger
@@ -59,7 +37,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	}()
 
 	// dsf
-	f := &fakeDsFlusher{}
+	f := &fakeDsFlusher{fdsReturn: true}
 
 	// recent
 	recent := make(map[int64]*receiverDs)
@@ -70,21 +48,12 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	c := &fakeCluster{}
 	dsc := newDsCache(db, df, c, nil, true)
 
-	workerPeriodicFlush("workerperiodic", f, recent, 0, 10*time.Millisecond, 10)
-
-	if !strings.Contains(string(fl.last), "annot lookup") {
-		t.Errorf("workerPeriodicFlush: non-existent ds did not log 'annot lookup'")
-	}
-	if len(recent) != 0 {
-		t.Errorf("workerPeriodicFlush: the recent entry should have been deleted even if it cannot be looked up")
-	}
-
 	ds := rrd.NewDataSource(7, "foo", 0, 0, time.Time{}, 0)
 	rds := &receiverDs{DataSource: ds}
 	recent[7] = rds
 	dsc.insert(rds)
 
-	workerPeriodicFlush("workerperiodic2", f, recent, 0, 10*time.Millisecond, 10)
+	workerPeriodicFlush("workerperiodic2", f, recent, 0, 10*time.Millisecond, 10, 1)
 
 	if f.called > 0 {
 		t.Errorf("workerPeriodicFlush: no flush should have happened")
@@ -101,10 +70,33 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	recent[7] = rds
 	debug = true
 
-	workerPeriodicFlush("workerperiodic3", f, recent, 0, 10*time.Millisecond, 0)
+	leftover := workerPeriodicFlush("workerperiodic3", f, recent, 0, 10*time.Millisecond, 0, 1)
 	if f.called == 0 {
-		t.Errorf("workerPeriodicFlush: should have been flushed")
+		t.Errorf("workerPeriodicFlush: should have called flushDs")
 	}
+	if len(recent) != 0 {
+		t.Errorf("workerPeriodicFlush: should have deleted the point after flushDs")
+	}
+	if len(leftover) != 0 {
+		t.Errorf("workerPeriodicFlush: leftover should be empty")
+	}
+
+	f.fdsReturn = false
+	f.called = 0
+	recent[7] = rds
+	ds.ProcessIncomingDataPoint(123, time.Unix(4000, 0))
+	ds.ProcessIncomingDataPoint(123, time.Unix(5000, 0))
+	leftover = workerPeriodicFlush("workerperiodic4", f, recent, 0, 10*time.Millisecond, 0, 0)
+	if f.called == 0 {
+		t.Errorf("workerPeriodicFlush: should have called flushDs")
+	}
+	if len(recent) != 0 {
+		t.Errorf("workerPeriodicFlush: should have deleted the point on flushDs (2)")
+	}
+	if len(leftover) == 0 {
+		t.Errorf("workerPeriodicFlush: leftover should NOT be empty, it should have the point from recent")
+	}
+
 }
 
 func Test_theWorker(t *testing.T) {
@@ -119,39 +111,25 @@ func Test_theWorker(t *testing.T) {
 
 	ident := "FOO"
 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: ident}
-	dsf := &fakeDsFlusher{}
+	dsf := &fakeDsFlusher{fdsReturn: true}
 	workerCh := make(chan *incomingDpWithDs)
 
-	saveFn1, saveFn2 := workerPeriodicFlushSignal, workerPeriodicFlush
+	saveFn1 := workerPeriodicFlush
 
-	wpfsCalled := 0
-	workerPeriodicFlushSignal = func(periodicFlushCheck chan bool, napTime time.Duration) {
-		wpfsCalled++
-		periodicFlushCheck <- true
-	}
 	wpfCalled := 0
-	workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*receiverDs, minCacheDur, maxCacheDur time.Duration, maxPoints int) map[int64]*receiverDs {
+	workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*receiverDs, minCacheDur, maxCacheDur time.Duration, maxPoints, maxFlush int) map[int64]*receiverDs {
 		wpfCalled++
-		return nil
+		return map[int64]*receiverDs{1: nil, 2: nil}
 	}
 
 	sr := &fakeSr{}
 
 	wc.startWg.Add(1)
-	go worker(wc, dsf, workerCh, 0, 0, 10, sr)
+	go worker(wc, dsf, workerCh, 0, 0, 10, 10*time.Millisecond, sr)
 	wc.startWg.Wait()
-
-	time.Sleep(50 * time.Millisecond) // because go workerPeriodicFlushSignal()
-	if wpfsCalled == 0 {
-		t.Errorf("worker: workerPeriodicFlushSignal should be called")
-	}
 
 	if !strings.Contains(string(fl.last), ident) {
 		t.Errorf("worker: missing worker started log entry for ident: %s", ident)
-	}
-
-	if wpfCalled == 0 {
-		t.Errorf("worker: at least one periodic flush should have happened")
 	}
 
 	debug = true
@@ -165,15 +143,15 @@ func Test_theWorker(t *testing.T) {
 	workerCh <- &incomingDpWithDs{dp, rds}
 	dp = &IncomingDP{Name: "foo", TimeStamp: time.Unix(3000, 0), Value: 123}
 	workerCh <- &incomingDpWithDs{dp, rds}
-	dp = &IncomingDP{Name: "foo", TimeStamp: time.Unix(4000, 0), Value: 123}
-	workerCh <- &incomingDpWithDs{dp, rds}
 
-	if dsf.called < 1 {
-		t.Errorf("worker: flushDs should be called at least once: %d", dsf.called)
+	pc := ds.PointCount()
+	if pc == 0 {
+		t.Errorf("After dps being sent to workerCh, ds should have some points: %d", pc)
 	}
 
-	if !strings.Contains(string(fl.last), "Requesting flush") {
-		t.Errorf("worker: missing 'Requesting flush' log entry")
+	time.Sleep(50 * time.Millisecond) // wait for a flush or two
+	if wpfCalled == 0 {
+		t.Errorf("worker: at least one periodic flush should have happened")
 	}
 
 	// trigger an error
@@ -188,5 +166,15 @@ func Test_theWorker(t *testing.T) {
 	}
 
 	// restore funcs
-	workerPeriodicFlushSignal, workerPeriodicFlush = saveFn1, saveFn2
+	workerPeriodicFlush = saveFn1
+}
+
+func Test_reportWorkerChannelFillPercent(t *testing.T) {
+	workerCh := make(chan *incomingDpWithDs, 10)
+	sr := &fakeSr{}
+	go reportWorkerChannelFillPercent(workerCh, sr, "iDenT", time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if sr.called == 0 {
+		t.Errorf("reportWorkerChannelFillPercent: statReporter should have been called a bunch of times")
+	}
 }

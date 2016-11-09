@@ -29,11 +29,10 @@ var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[i
 			if debug {
 				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, id)
 			}
-			if dsf.flushDs(rds, false) {
-				delete(recent, id)
-			} else {
+			if !dsf.flushDs(rds, false) {
 				leftover[id] = rds
 			}
+			delete(recent, id)
 		}
 		n++
 		if n > maxFlushes {
@@ -43,12 +42,12 @@ var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[i
 	return leftover
 }
 
-func reportWorkerChannelFillPercent(workerCh chan *incomingDpWithDs, sr statReporter, ident string) {
+func reportWorkerChannelFillPercent(workerCh chan *incomingDpWithDs, sr statReporter, ident string, nap time.Duration) {
 	fillStatName := fmt.Sprintf("receiver.workers.%s.channel.fill_percent", ident)
 	lenStatName := fmt.Sprintf("receiver.workers.%s.channel.len", ident)
 	cp := float64(cap(workerCh))
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(nap)
 		ln := float64(len(workerCh))
 		if cp > 0 {
 			fillPct := (ln / cp) * 100
@@ -58,16 +57,17 @@ func reportWorkerChannelFillPercent(workerCh chan *incomingDpWithDs, sr statRepo
 	}
 }
 
-var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, sr statReporter) {
+var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs,
+	minCacheDur, maxCacheDur time.Duration, maxPoints int, flushInt time.Duration, sr statReporter) {
 	wc.onEnter()
 	defer wc.onExit()
 
 	var recent = make(map[int64]*receiverDs)
 	var leftover map[int64]*receiverDs
 
-	periodicFlushTicker := time.NewTicker(time.Second) // TODO flush interval should be configurable
+	periodicFlushTicker := time.NewTicker(flushInt)
 
-	go reportWorkerChannelFillPercent(workerCh, sr, wc.ident())
+	go reportWorkerChannelFillPercent(workerCh, sr, wc.ident(), time.Second)
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
