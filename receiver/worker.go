@@ -72,7 +72,7 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
 
-	maxFlushes := len(workerCh) / 2
+	maxFlushes := cap(workerCh) / 2
 	for {
 		select {
 		case <-periodicFlushTicker.C:
