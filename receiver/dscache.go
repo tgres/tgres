@@ -88,7 +88,7 @@ func (d *dsCache) insert(rds *receiverDs) {
 	d.byId[rds.Id()] = rds
 }
 
-func (d *dsCache) PreLoad() error {
+func (d *dsCache) preLoad() error {
 	dss, err := d.db.FetchDataSources()
 	if err != nil {
 		return err

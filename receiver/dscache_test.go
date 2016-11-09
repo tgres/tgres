@@ -66,14 +66,43 @@ func Test_dsCache_insert(t *testing.T) {
 	}
 }
 
+func Test_dsCache_preLoad(t *testing.T) {
+	db := &fakeSerde{}
+	d := newDsCache(db, nil, nil, nil, true)
+
+	d.preLoad()
+	if db.fetchCalled == 0 {
+		t.Errorf("db.fetchCalled == 0")
+	}
+
+	ds := rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
+	db.returnDss = []*rrd.DataSource{ds}
+	d.preLoad()
+	if len(d.byName) == 0 {
+		t.Errorf("len(d.byName) == 0")
+	}
+
+	db.fakeErr = true
+	if err := d.preLoad(); err == nil {
+		t.Errorf("preLoad: err == nil")
+	}
+}
+
 type fakeSerde struct {
 	flushCalled, createCalled, fetchCalled int
 	fakeErr                                bool
+	returnDss                              []*rrd.DataSource
 }
 
 func (f *fakeSerde) FetchDataSources() ([]*rrd.DataSource, error) {
 	f.fetchCalled++
-	return make([]*rrd.DataSource, 0), nil
+	if f.fakeErr {
+		return nil, fmt.Errorf("some error")
+	}
+	if len(f.returnDss) == 0 {
+		return make([]*rrd.DataSource, 0), nil
+	}
+	return f.returnDss, nil
 }
 
 func (f *fakeSerde) FlushDataSource(ds *rrd.DataSource) error {

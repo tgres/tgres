@@ -89,7 +89,7 @@ type incomingDpWithDs struct {
 	rds *receiverDs
 }
 
-func New(clstr *cluster.Cluster, serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
+func New(clstr clusterer, serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	if finder == nil {
 		finder = &dftDSFinder{}
 	}
@@ -128,18 +128,19 @@ func (r *Receiver) ClusterReady(ready bool) {
 	r.cluster.Ready(ready)
 }
 
-func (r *Receiver) SetCluster(c *cluster.Cluster) {
+func (r *Receiver) SetCluster(c clusterer) {
 	r.cluster = c
 	r.dsc.clstr = c
 	name := strings.Replace(c.LocalNode().Name(), ".", "_", -1)
-	if name == "" {
-		name = "UNKNOWN"
-	}
 	name = misc.SanitizeName(name)
 	if ok, _ := regexp.MatchString("[0-9]", name[0:1]); ok { // starts with a digit
 		name = "_" + name // prepend an underscore
 	}
-	r.ReportStatsPrefix += ("." + name)
+	if r.ReportStatsPrefix != "" {
+		r.ReportStatsPrefix += ("." + name)
+	} else {
+		r.ReportStatsPrefix = name
+	}
 }
 
 func (r *Receiver) SetMaxFlushRate(mfr int) {

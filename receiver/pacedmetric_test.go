@@ -77,7 +77,7 @@ func Test_pacedMetricPeriodicFlushSignal(t *testing.T) {
 	var flushCh = make(chan bool, 1)
 	go pacedMetricPeriodicFlushSignal(flushCh, 2*time.Millisecond, "signaltest")
 
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	if len(flushCh) != 1 {
 		t.Errorf("len(flushCh) != 1")
 	}

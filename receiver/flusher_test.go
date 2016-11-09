@@ -94,3 +94,13 @@ func Test_flusher(t *testing.T) {
 	close(fc)
 	wc.wg.Wait()
 }
+
+func Test_reportFlusherChannelFillPercent(t *testing.T) {
+	ch := make(chan *dsFlushRequest, 10)
+	sr := &fakeSr{}
+	go reportFlusherChannelFillPercent(ch, sr, "IdenT", time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if sr.called == 0 {
+		t.Errorf("reportFlusherChannelFillPercent: statReporter should have been called a bunch of times")
+	}
+}

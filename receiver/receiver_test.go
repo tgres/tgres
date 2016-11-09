@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"github.com/hashicorp/memberlist"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
@@ -56,9 +57,10 @@ func Test_workerChannels_queue(t *testing.T) {
 }
 
 func Test_New(t *testing.T) {
-	r := New(nil, nil, nil)
-	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres" {
-		t.Errorf(`New: r.NWorkers != 4 || r.ReportStatsPrefix != "tgres"`)
+	c := &fakeCluster{}
+	r := New(c, nil, nil)
+	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres.nil" {
+		t.Errorf(`New: r.NWorkers != 4 (%d) || r.ReportStatsPrefix != "tgres" (%s)`, r.NWorkers, r.ReportStatsPrefix)
 	}
 }
 
@@ -91,6 +93,36 @@ func Test_Receiver_ClusterReady(t *testing.T) {
 	r.ClusterReady(true)
 	if c.nReady != 1 {
 		t.Errorf("ClusterReady: c.nReady != 1 - didn't call Ready()?")
+	}
+}
+
+func Test_Receiver_SetMaxFlushRate(t *testing.T) {
+	r := &Receiver{}
+	r.SetMaxFlushRate(100)
+	if r.flushLimiter == nil {
+		t.Errorf("r.flushLimiter == nil")
+	}
+}
+
+func Test_Receiver_SetCluster(t *testing.T) {
+	c := &fakeCluster{}
+	name := "1ibegin_with_a_digit"
+	c.ln = &cluster.Node{Node: &memberlist.Node{Name: name}}
+	dsc := &dsCache{}
+	r := &Receiver{dsc: dsc}
+	r.SetCluster(c)
+	if r.ReportStatsPrefix != "_"+name {
+		t.Errorf("r.ReportStatsPrefix != \"_\"+name")
+	}
+	r.ReportStatsPrefix = "foo"
+	r.SetCluster(c)
+	if r.ReportStatsPrefix != "foo._"+name {
+		t.Errorf("r.ReportStatsPrefix != foo.name")
+	}
+	c = &fakeCluster{}
+	r.SetCluster(c)
+	if r.ReportStatsPrefix != "foo._"+name+".nil" {
+		t.Errorf(`r.ReportStatsPrefix != "foo._"+name+".nil"`)
 	}
 }
 
@@ -133,6 +165,7 @@ func Test_Receiver_reportStatCount(t *testing.T) {
 	(*Receiver)(nil).reportStatCount("", 0) // noop
 	r.reportStatCount("", 0)                // noop (f == 0)
 	r.reportStatCount("", 1)                // called++
+	r.reportStatGauge("", 1)                // called++
 	r.ReportStats = false
 	r.reportStatCount("", 1) // noop (ReportStats false)
 	r.QueueSum("", 0)        // called++
@@ -164,6 +197,8 @@ func Test_Receiver_flushDs(t *testing.T) {
 	ds.ProcessIncomingDataPoint(10, time.Unix(100, 0))
 	ds.ProcessIncomingDataPoint(10, time.Unix(101, 0))
 	rds := &receiverDs{DataSource: ds}
+	r.SetMaxFlushRate(1)
+	r.flushDs(rds, false)
 	r.flushDs(rds, false)
 	close(r.flusherChs[0])
 	wg.Wait()

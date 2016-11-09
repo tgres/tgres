@@ -405,3 +405,70 @@ func Test_theDispatcher(t *testing.T) {
 	dispatcherIncomingDPMessages = saveFn1
 	dispatcherProcessIncomingDP = saveFn2
 }
+
+func Test_reportDispatcherChannelFillPercent(t *testing.T) {
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
+
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+
+	ch := make(chan *IncomingDP, 10)
+	sr := &fakeSr{}
+	for i := 0; i < 9; i++ {
+		ch <- &IncomingDP{}
+	}
+	queue := &dpQueue{}
+	queue.push(&IncomingDP{})
+	go reportDispatcherChannelFillPercent(ch, queue, sr, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if sr.called == 0 {
+		t.Errorf("reportDispatcherChannelFillPercent: statReporter should have been called a bunch of times")
+	}
+	if !strings.Contains(string(fl.last), "WARNING") {
+		t.Errorf("reportDispatcherChannelFillPercent: there should be a warning about dispatcher channel nearly full")
+	}
+}
+
+func Test_queue(t *testing.T) {
+
+	queue := &dpQueue{}
+	dp := &IncomingDP{}
+	queue.push(dp)
+	if queue.pop() != dp {
+		t.Errorf("queue: pop returned wrong dp")
+	}
+	if queue.size() != 0 {
+		t.Errorf("queue: should be empty")
+	}
+	queue.push(&IncomingDP{})
+	if queue.size() != 1 {
+		t.Errorf("queue: size != 1")
+	}
+}
+
+func Test_checkSetAside(t *testing.T) {
+	queue := &dpQueue{}
+	dp := &IncomingDP{}
+
+	r := checkSetAside(dp, queue, true)
+	if r != nil {
+		t.Errorf("with skip, checkSetAside should return nil")
+	}
+	if queue.size() != 1 {
+		t.Errorf("checkSetAside: queue size != 1")
+	}
+	r = checkSetAside(nil, queue, false)
+	if r != dp {
+		t.Errorf("checkSetAside returned wrong point")
+	}
+	if queue.size() != 0 {
+		t.Errorf("checkSetAside: queue size != 0")
+	}
+	r = checkSetAside(nil, queue, false)
+	if r != nil {
+		t.Errorf("with skip false and empty queue, checkSetAside should return our point: nil")
+	}
+}

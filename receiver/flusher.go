@@ -41,12 +41,12 @@ func (f flusherChannels) queueBlocking(rds *receiverDs, block bool) {
 	}
 }
 
-func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statReporter, ident string) {
+func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statReporter, ident string, nap time.Duration) {
 	fillStatName := fmt.Sprintf("receiver.flushers.%s.channel.fill_percent", ident)
 	lenStatName := fmt.Sprintf("receiver.flushers.%s.channel.len", ident)
 	cp := float64(cap(flusherCh))
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(nap)
 		ln := float64(len(flusherCh))
 		if cp > 0 {
 			fillPct := (ln / cp) * 100
@@ -60,7 +60,7 @@ var flusher = func(wc wController, db serde.DataSourceFlusher, sr statReporter, 
 	wc.onEnter()
 	defer wc.onExit()
 
-	go reportFlusherChannelFillPercent(flusherCh, sr, wc.ident())
+	go reportFlusherChannelFillPercent(flusherCh, sr, wc.ident(), time.Second)
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()

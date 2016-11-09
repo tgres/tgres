@@ -111,16 +111,16 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsC
 	}
 }
 
-func reportDispatcherChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter) {
+func reportDispatcherChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
 	cp := float64(cap(dpCh))
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(nap) // TODO this should be a ticker really
 		ln := float64(len(dpCh))
 		if cp > 0 {
 			fillPct := (ln / cp) * 100
 			sr.reportStatGauge("receiver.dispatcher.channel.fill_percent", fillPct)
 			if fillPct > 75 {
-				log.Printf("WARNING: dispatcher channel %d percent full!", fillPct)
+				log.Printf("WARNING: dispatcher channel %v percent full!", fillPct)
 			}
 		}
 		sr.reportStatGauge("receiver.dispatcher.channel.len", ln)
@@ -146,7 +146,7 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 	queue := &dpQueue{}
 
 	// Monitor channel fill
-	go reportDispatcherChannelFillPercent(dpCh, queue, sr)
+	go reportDispatcherChannelFillPercent(dpCh, queue, sr, time.Second)
 
 	log.Printf("dispatcher: marking cluster node as Ready.")
 	clstr.Ready(true)
