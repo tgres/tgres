@@ -25,6 +25,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -152,7 +153,24 @@ func parseTime(s string) (*time.Time, error) {
 	}
 }
 
+// This is not perfect, but it's better than nothing. It seeks
+// identifiers containing a dot and surrounds them with quotes - this
+// prevents errors for series names parts of which begin with a digit,
+// which is not valid Go syntax.
+func quoteIdentifiers(target string) string {
+	result := target
+	parts := regexp.MustCompile("(\"?[a-zA-Z0-9_\\-\\.*]*\"?)").FindAllString(target, -1)
+	for _, part := range parts {
+		if strings.Contains(part, ".") && !strings.HasPrefix(part, "\"") {
+			result = quoteIdentifiers(strings.Replace(result, part, fmt.Sprintf("%q", part), -1))
+			break
+		}
+	}
+	return result
+}
+
 func processTarget(rcvr *receiver.Receiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
+	target = quoteIdentifiers(target)
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
 	dc := dsl.NewDslCtx(rcvr.Rcache, query, from, to, maxPoints)

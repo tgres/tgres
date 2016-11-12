@@ -22,11 +22,9 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/serde"
 	"golang.org/x/time/rate"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -131,15 +129,15 @@ func (r *Receiver) ClusterReady(ready bool) {
 func (r *Receiver) SetCluster(c clusterer) {
 	r.cluster = c
 	r.dsc.clstr = c
-	name := strings.Replace(c.LocalNode().Name(), ".", "_", -1)
-	name = misc.SanitizeName(name)
-	if ok, _ := regexp.MatchString("[0-9]", name[0:1]); ok { // starts with a digit
-		name = "_" + name // prepend an underscore
-	}
-	if r.ReportStatsPrefix != "" {
-		r.ReportStatsPrefix += ("." + name)
-	} else {
-		r.ReportStatsPrefix = name
+	ln := c.LocalNode()
+	if ln != nil {
+		// if this is a cluster, append the node address to the prefix
+		addr := strings.Replace(ln.Addr.String(), ".", "_", -1)
+		if r.ReportStatsPrefix != "" {
+			r.ReportStatsPrefix += ("." + addr)
+		} else {
+			r.ReportStatsPrefix = addr
+		}
 	}
 }
 
