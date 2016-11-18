@@ -652,6 +652,10 @@ func (dde *ddEntry) DD() DistDatum {
 // transferring to this node. Generally a node should be buffering all
 // the data it receives during a transition.
 func (c *Cluster) Transition(timeout time.Duration) error {
+	defer func() {
+		recover()
+		log.Printf("WARNING: Transition panicked!")
+	}() // there may be a bug in memberlist?
 	var wg sync.WaitGroup
 
 	c.Lock()
