@@ -653,9 +653,10 @@ func (dde *ddEntry) DD() DistDatum {
 // the data it receives during a transition.
 func (c *Cluster) Transition(timeout time.Duration) error {
 	defer func() {
-		recover()
-		log.Printf("WARNING: Transition panicked!")
-	}() // there may be a bug in memberlist?
+		if e := recover(); e != nil {
+			log.Printf("WARNING: Transition panic!")
+		}
+	}()
 	var wg sync.WaitGroup
 
 	c.Lock()
@@ -667,6 +668,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		return err
 	}
 
+	var waitDdsLock sync.RWMutex
 	waitDds := make(map[string]DistDatum)
 
 	for _, dde := range c.dds {
@@ -708,9 +710,11 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 						log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
 					}
 					// Add to the list of dds to wait on, but only if there existed nodes
+					waitDdsLock.Lock()
 					if oldNode.Name() != "<nil>" {
 						waitDds[fmt.Sprintf("%s:%d", dde.dd.Type(), dde.dd.Id())] = dde.dd
 					}
+					waitDdsLock.Unlock()
 				}
 			}
 			dde.nodes = newNodes // Assign the correct nodes in the end
@@ -762,7 +766,9 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 					log.Printf("Transition(): Warning: Acquire() failed for id %s:%d (%s) with: %v", dd.Type(), dd.Id(), dd.GetName(), err)
 				}
 			}
+			waitDdsLock.Lock()
 			delete(waitDds, key)
+			waitDdsLock.Unlock()
 			if len(waitDds) > 0 {
 				log.Printf("Transition(): Still waiting on %d relinquish messages: %v", len(waitDds), waitDds)
 			}
