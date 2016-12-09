@@ -16,7 +16,6 @@
 package receiver
 
 import (
-	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
 	"os"
@@ -24,6 +23,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tgres/tgres/rrd"
 )
 
 func Test_workerPeriodicFlush(t *testing.T) {
@@ -63,8 +64,8 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	ds = rrd.NewDataSource(7, "foo", 0, 0, time.Time{}, 0)
 	rra, _ := rrd.NewRoundRobinArchive(1, 0, "WMEAN", 10*time.Second, 100, 30, 0.5, time.Unix(1000, 0))
 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
-	ds.ProcessIncomingDataPoint(123, time.Unix(2000, 0))
-	ds.ProcessIncomingDataPoint(123, time.Unix(3000, 0))
+	ds.ProcessDataPoint(123, time.Unix(2000, 0))
+	ds.ProcessDataPoint(123, time.Unix(3000, 0))
 	rds = &receiverDs{DataSource: ds}
 	dsc.insert(rds)
 	recent[7] = rds
@@ -84,8 +85,8 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	f.fdsReturn = false
 	f.called = 0
 	recent[7] = rds
-	ds.ProcessIncomingDataPoint(123, time.Unix(4000, 0))
-	ds.ProcessIncomingDataPoint(123, time.Unix(5000, 0))
+	ds.ProcessDataPoint(123, time.Unix(4000, 0))
+	ds.ProcessDataPoint(123, time.Unix(5000, 0))
 	leftover = workerPeriodicFlush("workerperiodic4", f, recent, 0, 10*time.Millisecond, 0, 0)
 	if f.called == 0 {
 		t.Errorf("workerPeriodicFlush: should have called flushDs")

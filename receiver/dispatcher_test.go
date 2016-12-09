@@ -17,9 +17,6 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/hashicorp/memberlist"
-	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
 	"os"
@@ -27,6 +24,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/memberlist"
+	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
 )
 
 type fakeLogger struct {
@@ -224,8 +225,8 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	ds = rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
 	rra, _ := rrd.NewRoundRobinArchive(1, 0, "WMEAN", 10*time.Second, 100, 30, 0.5, time.Unix(1000, 0))
 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
-	ds.ProcessIncomingDataPoint(123, time.Unix(2000, 0))
-	ds.ProcessIncomingDataPoint(123, time.Unix(3000, 0))
+	ds.ProcessDataPoint(123, time.Unix(2000, 0))
+	ds.ProcessDataPoint(123, time.Unix(3000, 0))
 	rds = &receiverDs{DataSource: ds}
 
 	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)

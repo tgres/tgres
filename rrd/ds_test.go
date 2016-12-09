@@ -232,7 +232,7 @@ func Test_DataSource_updateRange(t *testing.T) {
 	}
 }
 
-func Test_DataSource_ProcessIncomingDataPoint(t *testing.T) {
+func Test_DataSource_ProcessDataPoint(t *testing.T) {
 
 	ds := &DataSource{step: 10 * time.Second}
 	ds.SetRRAs([]*RoundRobinArchive{
@@ -241,36 +241,36 @@ func Test_DataSource_ProcessIncomingDataPoint(t *testing.T) {
 	ds.Reset()
 	ds.rras[0].Reset()
 
-	ds.ProcessIncomingDataPoint(100, time.Unix(104, 0))
+	ds.ProcessDataPoint(100, time.Unix(104, 0))
 	if !math.IsNaN(ds.value) || ds.duration != 0 || !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0 {
-		t.Errorf("ProcessIncomingDataPoint: on first call, !math.IsNaN(ds.value) || ds.duration != 0 || !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0")
+		t.Errorf("ProcessDataPoint: on first call, !math.IsNaN(ds.value) || ds.duration != 0 || !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0")
 	}
 	if ds.lastDs != 100 || !ds.lastUpdate.Equal(time.Unix(104, 0)) {
-		t.Errorf("ProcessIncomingDataPoint: on first call, ds.lastDs != 100 || !ds.lastUpdate.Equal(time.Unix(104, 0))")
+		t.Errorf("ProcessDataPoint: on first call, ds.lastDs != 100 || !ds.lastUpdate.Equal(time.Unix(104, 0))")
 	}
 
-	ds.ProcessIncomingDataPoint(100, time.Unix(156, 0))
+	ds.ProcessDataPoint(100, time.Unix(156, 0))
 	if ds.value != 100 || ds.duration != 6*time.Second || ds.rras[0].value != 100 || ds.rras[0].duration != 10*time.Second {
-		t.Errorf("ProcessIncomingDataPoint: on second call, ds.value != 100 || ds.duration != 6s || ds.rras[0].value != 100 || ds.rras[0].duration != 10s: %v %v %v %v",
+		t.Errorf("ProcessDataPoint: on second call, ds.value != 100 || ds.duration != 6s || ds.rras[0].value != 100 || ds.rras[0].duration != 10s: %v %v %v %v",
 			ds.value, ds.duration, ds.rras[0].value, ds.rras[0].duration)
 	}
 
 	// heartbeat
 	ds = &DataSource{step: 10 * time.Second, heartbeat: time.Second}
 	ds.Reset()
-	ds.ProcessIncomingDataPoint(100, time.Unix(104, 0))
+	ds.ProcessDataPoint(100, time.Unix(104, 0))
 	if !math.IsNaN(ds.lastDs) {
-		t.Errorf("ProcessIncomingDataPoint: heartbeat exceeded but !math.IsNaN(ds.lastDs)")
+		t.Errorf("ProcessDataPoint: heartbeat exceeded but !math.IsNaN(ds.lastDs)")
 	}
 
 	// Inf
-	if err := ds.ProcessIncomingDataPoint(math.Inf(1), time.Unix(104, 0)); err == nil {
-		t.Errorf("ProcessIncomingDataPoint: no error on Inf value")
+	if err := ds.ProcessDataPoint(math.Inf(1), time.Unix(104, 0)); err == nil {
+		t.Errorf("ProcessDataPoint: no error on Inf value")
 	}
 
 	// Before last update
-	if err := ds.ProcessIncomingDataPoint(100, time.Unix(1, 0)); err == nil {
-		t.Errorf("ProcessIncomingDataPoint: no error on data point prior to last update")
+	if err := ds.ProcessDataPoint(100, time.Unix(1, 0)); err == nil {
+		t.Errorf("ProcessDataPoint: no error on data point prior to last update")
 	}
 }
 

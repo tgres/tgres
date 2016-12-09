@@ -217,10 +217,10 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 	}
 }
 
-// ProcessIncomingDataPoint checks the values and updates the DS
+// ProcessDataPoint checks the values and updates the DS
 // PDP. If this the very first call for this DS (lastUpdate is 0),
 // then it only sets lastUpdate and returns.
-func (ds *DataSource) ProcessIncomingDataPoint(value float64, ts time.Time) error {
+func (ds *DataSource) ProcessDataPoint(value float64, ts time.Time) error {
 
 	if math.IsInf(value, 0) {
 		return fmt.Errorf("±Inf is not a valid data point value: %v", value)

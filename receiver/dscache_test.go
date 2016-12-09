@@ -16,10 +16,11 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/rrd"
-	"github.com/tgres/tgres/serde"
 	"testing"
 	"time"
+
+	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 func Test_dsCache_newDsCache(t *testing.T) {
@@ -184,7 +185,7 @@ func Test_receiverDs_Relinquish(t *testing.T) {
 		t.Errorf("if lastupdate is zero, ds should not be flushed")
 	}
 
-	ds.ProcessIncomingDataPoint(123, time.Unix(1000, 0))
+	ds.ProcessDataPoint(123, time.Unix(1000, 0))
 	err = rds.Relinquish()
 	if err != nil {
 		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
@@ -237,14 +238,14 @@ func Test_receiverDs_shouldBeFlushed(t *testing.T) {
 	}
 
 	// this will cause a LastUpdate != 0
-	ds.ProcessIncomingDataPoint(123, time.Now().Add(-2*time.Hour))
+	ds.ProcessDataPoint(123, time.Now().Add(-2*time.Hour))
 
 	// so far we still have 0 points, so nothing to flush
 	if rds.shouldBeFlushed(0, 0, 0) {
 		t.Errorf("with PointCount 0, rds.shouldBeFlushed == true")
 	}
 
-	ds.ProcessIncomingDataPoint(123, time.Now().Add(-time.Hour))
+	ds.ProcessDataPoint(123, time.Now().Add(-time.Hour))
 
 	if !rds.shouldBeFlushed(0, 0, 24*time.Hour) {
 		t.Errorf("with maxCachedPoints == 0, rds.shouldBeFlushed != true")

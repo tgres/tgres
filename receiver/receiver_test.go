@@ -19,16 +19,17 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"github.com/hashicorp/memberlist"
-	"github.com/tgres/tgres/aggregator"
-	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/rrd"
-	"golang.org/x/time/rate"
 	"os"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/memberlist"
+	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
+	"golang.org/x/time/rate"
 )
 
 // init sets debug
@@ -194,8 +195,8 @@ func Test_Receiver_flushDs(t *testing.T) {
 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
 	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
-	ds.ProcessIncomingDataPoint(10, time.Unix(100, 0))
-	ds.ProcessIncomingDataPoint(10, time.Unix(101, 0))
+	ds.ProcessDataPoint(10, time.Unix(100, 0))
+	ds.ProcessDataPoint(10, time.Unix(101, 0))
 	rds := &receiverDs{DataSource: ds}
 	r.SetMaxFlushRate(1)
 	r.flushDs(rds, false)

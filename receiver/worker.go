@@ -86,7 +86,7 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 				return
 			}
 			rds := dpds.rds // at this point ds has to be already set
-			if err := rds.ProcessIncomingDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
+			if err := rds.ProcessDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
 				recent[rds.Id()] = rds
 			} else {
 				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), rds.Name(), err)
