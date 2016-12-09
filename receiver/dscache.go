@@ -16,11 +16,12 @@
 package receiver
 
 import (
+	"sync"
+	"time"
+
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
-	"sync"
-	"time"
 )
 
 // A collection of data sources kept by an integer id as well as a
@@ -28,7 +29,6 @@ import (
 type dsCache struct {
 	rwLocker
 	byName map[string]*receiverDs
-	byId   map[int64]*receiverDs
 	db     serde.DataSourceSerDe
 	dsf    dsFlusherBlocking
 	finder MatchingDSSpecFinder
@@ -47,7 +47,6 @@ type rwLocker interface {
 // (e.g. always in the same goroutine).
 func newDsCache(db serde.DataSourceSerDe, finder MatchingDSSpecFinder, clstr clusterer, dsf dsFlusherBlocking, locking bool) *dsCache {
 	d := &dsCache{
-		byId:   make(map[int64]*receiverDs),
 		byName: make(map[string]*receiverDs),
 		db:     db,
 		finder: finder,
@@ -69,15 +68,6 @@ func (d *dsCache) getByName(name string) *receiverDs {
 	return d.byName[name]
 }
 
-// GetById rlocks and gets a DS pointer.
-func (d *dsCache) getById(id int64) *receiverDs {
-	if d.rwLocker != nil {
-		d.RLock()
-		defer d.RUnlock()
-	}
-	return d.byId[id]
-}
-
 // Insert locks and inserts a DS.
 func (d *dsCache) insert(rds *receiverDs) {
 	if d.rwLocker != nil {
@@ -85,7 +75,6 @@ func (d *dsCache) insert(rds *receiverDs) {
 		defer d.Unlock()
 	}
 	d.byName[rds.Name()] = rds
-	d.byId[rds.Id()] = rds
 }
 
 func (d *dsCache) preLoad() error {

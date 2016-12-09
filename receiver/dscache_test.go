@@ -41,17 +41,6 @@ func Test_dsCache_getByName(t *testing.T) {
 	}
 }
 
-func Test_dsCache_getById(t *testing.T) {
-	d := newDsCache(nil, nil, nil, nil, true)
-	d.byId[1] = &receiverDs{stale: true}
-	if rds := d.getById(1); rds == nil || !rds.stale {
-		t.Errorf("getById did not return correct value")
-	}
-	if rds := d.getById(7); rds != nil {
-		t.Errorf("getById did not return nil")
-	}
-}
-
 func Test_dsCache_insert(t *testing.T) {
 	d := newDsCache(nil, nil, nil, nil, true)
 
@@ -59,9 +48,7 @@ func Test_dsCache_insert(t *testing.T) {
 	rds := &receiverDs{DataSource: ds}
 
 	d.insert(rds)
-	if rds2 := d.getById(7); rds2 != rds {
-		t.Errorf("insert: getById did not return correct value")
-	}
+
 	if rds2 := d.getByName("foo"); rds2 != rds {
 		t.Errorf("insert: getByName did not return correct value")
 	}

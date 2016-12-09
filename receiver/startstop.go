@@ -20,10 +20,11 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/aggregator"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/tgres/tgres/aggregator"
 )
 
 type wrkCtl struct {
@@ -53,7 +54,7 @@ var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 var doStart = func(r *Receiver) {
 	log.Printf("Receiver: Caching data sources...")
 	r.dsc.preLoad()
-	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byId))
+	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byName))
 
 	log.Printf("Receiver: starting...")
 

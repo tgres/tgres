@@ -19,15 +19,16 @@
 package receiver
 
 import (
+	"os"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/serde"
 	"golang.org/x/time/rate"
-	"os"
-	"strings"
-	"sync"
-	"time"
 )
 
 var debug bool
