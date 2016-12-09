@@ -201,7 +201,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		1: {
 			begin:  time.Unix(20, 0),
@@ -217,7 +217,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			rraDps: map[int64]float64{3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		3: {
 			begin:  time.Unix(30, 0),
@@ -225,7 +225,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			rraDps: map[int64]float64{0: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		4: { // WMEAN
 			begin:  time.Unix(20, 0),
@@ -242,7 +242,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			rraDps: map[int64]float64{3: 32.0},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		6: { // MIN
 			cf:     MIN,
@@ -260,7 +260,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			rraDps: map[int64]float64{3: 5},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		8: { // MAX
 			cf:     MAX,
@@ -278,7 +278,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  4 * time.Second,
 			rraDps: map[int64]float64{3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		10: { // LAST
 			cf:     LAST,
@@ -296,7 +296,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			rraDps: map[int64]float64{3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		12: {
 			begin:  time.Unix(14, 0),
@@ -304,7 +304,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{2: 50, 3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		13: {
 			begin:  time.Unix(10, 0),
@@ -312,7 +312,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{2: 50, 3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		14: {
 			begin:  time.Unix(4, 0),
@@ -320,7 +320,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  10 * time.Second,
 			rraDps: map[int64]float64{1: 50, 2: 50, 3: 50},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 		15: {
 			begin:  time.Unix(4, 0),
@@ -337,7 +337,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsDur:  6 * time.Second,
 			xff:    0.7,
 			rraDps: map[int64]float64{0: math.NaN()},
-			rraVal: math.NaN(),
+			rraVal: 0,
 			rraDur: 0},
 	}
 

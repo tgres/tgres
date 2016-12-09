@@ -202,8 +202,8 @@ func Test_DataSource_updateRange(t *testing.T) {
 	if !reflect.DeepEqual(ds.rras[0].dps, exp1) {
 		t.Errorf("updateRange: expecting rra[0].dps: %v, got %v", exp1, ds.rras[0].dps)
 	}
-	if !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 {
-		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].value) || ds.rras[1].duration != 0")
+	if ds.rras[0].value != 0 || ds.rras[0].duration != 0 {
+		t.Errorf("updateRange: ds.rras[0].value != 0 || ds.rras[1].duration != 0")
 	}
 
 	exp2 := map[int64]float64{6: 100, 7: 100}
@@ -227,8 +227,8 @@ func Test_DataSource_updateRange(t *testing.T) {
 	if !reflect.DeepEqual(ds.rras[0].dps, exp3) {
 		t.Errorf("updateRange: expecting rra[0].dps: %v, got %v", exp3, ds.rras[0].dps)
 	}
-	if !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 {
-		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].value) || ds.rras[1].duration != 0")
+	if ds.rras[0].value != 0 || ds.rras[0].duration != 0 {
+		t.Errorf("updateRange: ds.rras[0].value != 0 || ds.rras[1].duration != 0")
 	}
 }
 
@@ -242,8 +242,8 @@ func Test_DataSource_ProcessDataPoint(t *testing.T) {
 	ds.rras[0].Reset()
 
 	ds.ProcessDataPoint(100, time.Unix(104, 0))
-	if !math.IsNaN(ds.value) || ds.duration != 0 || !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0 {
-		t.Errorf("ProcessDataPoint: on first call, !math.IsNaN(ds.value) || ds.duration != 0 || !math.IsNaN(ds.rras[0].value) || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0")
+	if ds.value != 0 || ds.duration != 0 || ds.rras[0].value != 0 || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0 {
+		t.Errorf("ProcessDataPoint: on first call, ds.value != 0 || ds.duration != 0 || ds.rras[0].value != 0 || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0")
 	}
 	if ds.lastDs != 100 || !ds.lastUpdate.Equal(time.Unix(104, 0)) {
 		t.Errorf("ProcessDataPoint: on first call, ds.lastDs != 100 || !ds.lastUpdate.Equal(time.Unix(104, 0))")

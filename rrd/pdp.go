@@ -65,19 +65,16 @@ import (
 //  ||====+====+====||
 //   0    1    2    3     4  ---> time
 //
-// A datapoint must be all NaN for its value to be NaN.
+// A datapoint must be all NaN for its value to be NaN. If duration is
+// 0, then the value is irrelevant.
+//
+// To create an "empty" Pdp, simply use its zero value.
 type Pdp struct {
 	value    float64
 	duration time.Duration
 }
 
-// NewPdp returns a pointer to a new PDP with value of NaN and
-// duration of 0.
-func NewPdp() *Pdp {
-	return &Pdp{value: math.NaN()}
-}
-
-func (p *Pdp) Value() float64          { return p.value }
+func (p *Pdp) Value() float64          { return p.value } // TODO If duration is 0, should this return a NaN?
 func (p *Pdp) Duration() time.Duration { return p.duration }
 
 // SetValue sets both value and duration of the PDP
@@ -98,10 +95,11 @@ func (p *Pdp) AddValue(val float64, dur time.Duration) {
 	}
 }
 
-// AddValueMax adds a value using max.
+// AddValueMax adds a value using max. A non-NaN value is considered
+// greater than zero value (duration 0) or NaN.
 func (p *Pdp) AddValueMax(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
-		if math.IsNaN(p.value) {
+		if math.IsNaN(p.value) || p.duration == 0 {
 			p.value = val // val "wins" over NaN
 		} else if p.value < val {
 			p.value = val
@@ -110,10 +108,11 @@ func (p *Pdp) AddValueMax(val float64, dur time.Duration) {
 	}
 }
 
-// AddValueMin adds a value using min.
+// AddValueMin adds a value using min. A non-NaN value is considered
+// lesser than zero value (duration 0) or NaN.
 func (p *Pdp) AddValueMin(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
-		if math.IsNaN(p.value) {
+		if math.IsNaN(p.value) || p.duration == 0 {
 			p.value = val // val "wins" over NaN
 		} else if p.value > val {
 			p.value = val
@@ -122,7 +121,8 @@ func (p *Pdp) AddValueMin(val float64, dur time.Duration) {
 	}
 }
 
-// AddValueLast replaces the current value.
+// AddValueLast replaces the current value. This is different from
+// SetValue in that it's a noop if val is NaN or dur is 0.
 func (p *Pdp) AddValueLast(val float64, dur time.Duration) {
 	if !math.IsNaN(val) && dur > 0 {
 		p.value = val
@@ -130,11 +130,11 @@ func (p *Pdp) AddValueLast(val float64, dur time.Duration) {
 	}
 }
 
-// Reset sets the value to NaN, duration to 0 and returns the value of
-// the PDP (before it was set to NaN).
+// Reset sets the value to zero value and returns the value of
+// the PDP before Reset.
 func (p *Pdp) Reset() float64 {
 	result := p.value
-	p.value = math.NaN()
+	p.value = 0 // this is superfluous, the value is irrelevant when duration is 0
 	p.duration = 0
 	return result
 }

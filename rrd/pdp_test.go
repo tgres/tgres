@@ -21,15 +21,8 @@ import (
 	"time"
 )
 
-func TestPdp_NewPdp(t *testing.T) {
-	dp := NewPdp()
-	if !math.IsNaN(dp.value) {
-		t.Errorf("NewPdp() return dp not NaN")
-	}
-}
-
 func TestPdp_Accessors(t *testing.T) {
-	dp := NewPdp()
+	dp := &Pdp{}
 	dp.value = 123
 	if dp.Value() != dp.value {
 		t.Errorf("dp.Value(): %v  != dp.value: %v", dp.Value(), dp.value)
@@ -41,7 +34,7 @@ func TestPdp_Accessors(t *testing.T) {
 
 func TestPdp_SetValue(t *testing.T) {
 	for v, d := range map[float64]time.Duration{456: 876, math.NaN(): 987, math.Inf(-1): 789} {
-		dp := NewPdp()
+		dp := Pdp{}
 		dp.SetValue(v, d)
 		if dp.Duration() != d {
 			t.Errorf("dp.SetValue() did not set duration")
@@ -68,7 +61,7 @@ func TestPdp_AddValue(t *testing.T) {
 			234:         0,                  // not 0, 0
 			math.Inf(1): 876,                // +Inf, not 0
 		} {
-			dp := NewPdp()
+			dp := &Pdp{}
 
 			var (
 				ev float64       // expected value
@@ -96,8 +89,8 @@ func TestPdp_AddValue(t *testing.T) {
 
 			// Reset()
 			dp.Reset()
-			if !math.IsNaN(dp.value) || dp.duration != 0 {
-				t.Errorf("Reset: dp.value != NaN || dp.duration != 0: (%v, %v)", dp.value, dp.duration)
+			if dp.value != 0 || dp.duration != 0 {
+				t.Errorf("Reset: dp.value != 0 || dp.duration != 0: (%v, %v)", dp.value, dp.duration)
 			}
 
 			// AddValueMax()
