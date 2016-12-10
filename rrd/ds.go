@@ -30,20 +30,18 @@ type DataSource struct {
 	step       time.Duration        // Step (PDP) size
 	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values. 0 -> no heartbeat.
 	lastUpdate time.Time            // Last time we received an update (series time - can be in the past or future)
-	lastDs     float64              // Last final value we saw
 	rras       []*RoundRobinArchive // Array of Round Robin Archives
 }
 
 // NewDataSource returns a pointer to a new DataSource. This function
 // is meant primarily for internal use such as serde implementations.
-func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time, lds float64) *DataSource {
+func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time) *DataSource {
 	return &DataSource{
 		id:         id,
 		name:       name,
 		step:       step,
 		heartbeat:  hb,
 		lastUpdate: lu,
-		lastDs:     lds,
 	}
 }
 
@@ -52,7 +50,6 @@ func (ds *DataSource) Id() int64                         { return ds.id }
 func (ds *DataSource) Step() time.Duration               { return ds.step }
 func (ds *DataSource) Heartbeat() time.Duration          { return ds.heartbeat }
 func (ds *DataSource) LastUpdate() time.Time             { return ds.lastUpdate }
-func (ds *DataSource) LastDs() float64                   { return ds.lastDs }
 func (ds *DataSource) RRAs() []*RoundRobinArchive        { return ds.rras }
 func (ds *DataSource) SetRRAs(rras []*RoundRobinArchive) { ds.rras = rras }
 
@@ -240,7 +237,6 @@ func (ds *DataSource) ProcessDataPoint(value float64, ts time.Time) error {
 	}
 
 	ds.lastUpdate = ts
-	ds.lastDs = value
 
 	return nil
 }
@@ -282,7 +278,6 @@ func (ds *DataSource) Copy() *DataSource {
 		step:       ds.step,
 		heartbeat:  ds.heartbeat,
 		lastUpdate: ds.lastUpdate,
-		lastDs:     ds.lastDs,
 		rras:       make([]*RoundRobinArchive, len(ds.rras)),
 	}
 

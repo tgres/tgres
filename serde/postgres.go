@@ -45,15 +45,16 @@ package serde
 import (
 	"database/sql"
 	"fmt"
-	_ "github.com/lib/pq"
-	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/rrd"
 	"log"
 	"math"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
+
+	_ "github.com/lib/pq"
+	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/rrd"
 )
 
 var debug bool
@@ -163,7 +164,7 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
 		// PG 9.5 required. NB: DO NOTHING causes RETURNING to return nothing, so we're using this dummy UPDATE to work around.
 		"ON CONFLICT (name) DO UPDATE SET step_ms = ds.step_ms "+
-		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms", p.prefix)); err != nil {
+		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
@@ -176,14 +177,14 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	// 	p.prefix)); err != nil {
 	// 	return err
 	// }
-	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, last_ds = $2, value = $3, duration_ms = $4 WHERE id = $5", p.prefix)); err != nil {
+	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds AS ds WHERE name = $1",
+	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE name = $1",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -199,7 +200,6 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        step_ms BIGINT NOT NULL,
        heartbeat_ms BIGINT NOT NULL,
        lastupdate TIMESTAMPTZ,
-       last_ds NUMERIC DEFAULT NULL,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        duration_ms BIGINT NOT NULL DEFAULT 0);
 
@@ -469,14 +469,13 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 
 func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	var (
-		last_ds                  *float64
 		lastupdate               *time.Time
 		durationMs, stepMs, hbMs int64
 		value                    float64
 		id                       int64
 		name                     string
 	)
-	err := rows.Scan(&id, &name, &stepMs, &hbMs, &lastupdate, &last_ds, &value, &durationMs)
+	err := rows.Scan(&id, &name, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -485,15 +484,11 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 	if lastupdate == nil {
 		lastupdate = &time.Time{}
 	}
-	if last_ds == nil {
-		last_ds = new(float64)
-	}
 
 	ds := rrd.NewDataSource(id, name,
 		time.Duration(stepMs)*time.Millisecond,
 		time.Duration(hbMs)*time.Millisecond,
-		*lastupdate,
-		*last_ds)
+		*lastupdate)
 
 	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
 	return ds, err
@@ -604,7 +599,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 
 func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 
-	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, last_ds, value, duration_ms FROM %[1]sds ds`
+	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
@@ -751,10 +746,10 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, LastDs: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.LastDs(), ds.Value(), ds.Duration())
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.LastDs(), ds.Value(), durationMs, ds.Id()); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.Value(), durationMs, ds.Id()); err != nil {
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
