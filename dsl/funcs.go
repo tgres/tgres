@@ -17,7 +17,6 @@ package dsl
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/misc"
 	"log"
 	"math"
 	"regexp"
@@ -25,6 +24,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tgres/tgres/misc"
+	"github.com/tgres/tgres/serde"
 )
 
 // We have two confusingly similar types here - SeriesMap and
@@ -52,7 +54,7 @@ import (
 //  - is how we give Series names - the key is the name
 //  - does not support duplicates - same series would need different names
 
-type SeriesMap map[string]Series
+type SeriesMap map[string]serde.Series
 
 func (sm SeriesMap) SortedKeys() []string {
 	keys := make([]string, 0, len(sm))
@@ -527,7 +529,7 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 // CurrentValue()). It is useful for bunching Series together to call
 // Next() and Close() on all of them (e.g. in avg() or sum()).
 
-type SeriesSlice []Series
+type SeriesSlice []serde.Series
 type SeriesList struct {
 	SeriesSlice
 	alias string
@@ -785,7 +787,7 @@ func argsAsString(args []interface{}) string {
 // e.g. Max(), Avr(), StdDev(), etc.
 
 type seriesWithSummaries struct {
-	Series
+	serde.Series
 }
 
 func (f *seriesWithSummaries) Max() (max float64) {
@@ -1052,7 +1054,7 @@ func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 	for name, series := range result {
 		parts := strings.Split(name, ".")
 		var alias_parts []string
-		for _, num := range(nodes) {
+		for _, num := range nodes {
 			n := int(num.(float64))
 			if n >= len(parts) {
 				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
@@ -1175,7 +1177,7 @@ func dslIsNonNull(args map[string]interface{}) (SeriesMap, error) {
 // absolute()
 
 type seriesAbsolute struct {
-	Series
+	serde.Series
 }
 
 func (f *seriesAbsolute) CurrentValue() float64 {
@@ -1196,7 +1198,7 @@ func dslAbsolute(args map[string]interface{}) (SeriesMap, error) {
 // scale()
 
 type seriesScale struct {
-	Series
+	serde.Series
 	factor float64
 }
 
@@ -1220,7 +1222,7 @@ func dslScale(args map[string]interface{}) (SeriesMap, error) {
 // derivative()
 
 type seriesDerivative struct {
-	Series
+	serde.Series
 	last float64
 }
 
@@ -1245,7 +1247,7 @@ func dslDerivative(args map[string]interface{}) (SeriesMap, error) {
 // integral()
 
 type seriesIntegral struct {
-	Series
+	serde.Series
 	total float64
 }
 
@@ -1273,7 +1275,7 @@ func dslIntegral(args map[string]interface{}) (SeriesMap, error) {
 // logarithm()
 
 type seriesLogarithm struct {
-	Series
+	serde.Series
 	base float64
 }
 
@@ -1294,7 +1296,7 @@ func dslLogarithm(args map[string]interface{}) (SeriesMap, error) {
 // nonNegativeDerivative()
 
 type seriesNonNegativeDerivative struct {
-	Series
+	serde.Series
 	last     float64
 	maxValue float64
 }
@@ -1341,7 +1343,7 @@ func dslNonNegativeDerivative(args map[string]interface{}) (SeriesMap, error) {
 // offset()
 
 type seriesOffset struct {
-	Series
+	serde.Series
 	offset float64
 }
 
@@ -1362,7 +1364,7 @@ func dslOffset(args map[string]interface{}) (SeriesMap, error) {
 // offsetToZero()
 
 type seriesOffsetToZero struct {
-	Series
+	serde.Series
 	offset float64
 }
 
@@ -1392,7 +1394,7 @@ func dslOffsetToZero(args map[string]interface{}) (SeriesMap, error) {
 // we're not actually generating graphs.
 
 type seriesTimeShift struct {
-	Series
+	serde.Series
 	timeShift time.Duration
 }
 
@@ -1442,7 +1444,7 @@ func dslTimeShift(args map[string]interface{}) (SeriesMap, error) {
 // transformNull()
 
 type seriesTransformNull struct {
-	Series
+	serde.Series
 	dft float64
 }
 
@@ -1467,7 +1469,7 @@ func dslTransformNull(args map[string]interface{}) (SeriesMap, error) {
 // nPercentile()
 
 type seriesNPercentile struct {
-	Series
+	serde.Series
 	n          float64
 	percentile float64
 }
@@ -1737,7 +1739,7 @@ func dslMostDeviant(args map[string]interface{}) (SeriesMap, error) {
 // movingAverage()
 
 type seriesMovingAverage struct {
-	Series
+	serde.Series
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1803,7 +1805,7 @@ func dslMovingAverage(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar as movingAverage?
 
 type seriesMovingMedian struct {
-	Series
+	serde.Series
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1876,7 +1878,7 @@ func dslMovingMedian(args map[string]interface{}) (SeriesMap, error) {
 // removeAbovePercentile()
 
 type seriesRemoveAbovePercentile struct {
-	Series
+	serde.Series
 	n          float64
 	percentile float64
 	computed   bool
@@ -1919,7 +1921,7 @@ func dslRemoveAbovePercentile(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeBelowPercentile()
 
 type seriesRemoveBelowPercentile struct {
-	Series
+	serde.Series
 	n          float64
 	percentile float64
 	computed   bool
@@ -1961,7 +1963,7 @@ func dslRemoveBelowPercentile(args map[string]interface{}) (SeriesMap, error) {
 // removeAboveValue()
 
 type seriesRemoveAboveValue struct {
-	Series
+	serde.Series
 	n float64
 }
 
@@ -1987,7 +1989,7 @@ func dslRemoveAboveValue(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeAboveValue()
 
 type seriesRemoveBelowValue struct {
-	Series
+	serde.Series
 	n float64
 }
 
@@ -2036,7 +2038,7 @@ func stdDevFloat64(data []float64) float64 {
 // movingStdDev()
 // TODO threshold not yet implemented
 type seriesMovingStdDev struct {
-	Series
+	serde.Series
 	// avg over n points or time duration for n points, the slice size
 	// is the marker
 	window    []float64
@@ -2113,8 +2115,8 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	weightSeries := args["seriesListWeight"].(SeriesMap)
 	n := int(args["node"].(float64))
 
-	avgByPart := make(map[string]Series, 0)
-	weightByPart := make(map[string]Series, 0)
+	avgByPart := make(map[string]serde.Series, 0)
+	weightByPart := make(map[string]serde.Series, 0)
 
 	for k, v := range avgSeries {
 		parts := strings.Split(k, ".")
@@ -2157,7 +2159,7 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 // changed()
 
 type seriesChanged struct {
-	Series
+	serde.Series
 	last float64
 }
 
@@ -2203,7 +2205,7 @@ func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
 // holtWintersForecast
 
 type seriesHoltWintersForecast struct {
-	Series
+	serde.Series
 	data      []float64
 	result    []float64
 	upper     []float64

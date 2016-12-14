@@ -27,54 +27,48 @@ import (
 // A collection of data sources kept by an integer id as well as a
 // string name.
 type dsCache struct {
-	rwLocker
-	byName map[string]*receiverDs
+	sync.RWMutex
+	byName map[string]*cachedDs
 	db     serde.DataSourceSerDe
 	dsf    dsFlusherBlocking
 	finder MatchingDSSpecFinder
 	clstr  clusterer
 }
 
-type rwLocker interface {
-	sync.Locker
-	RLock()
-	RUnlock()
-}
-
 // Returns a new dsCache object. If locking is true, the resulting
 // dsCache will maintain a lock, otherwise there is no locking,
 // but the caller needs to ensure that it is never used concurrently
 // (e.g. always in the same goroutine).
-func newDsCache(db serde.DataSourceSerDe, finder MatchingDSSpecFinder, clstr clusterer, dsf dsFlusherBlocking, locking bool) *dsCache {
+func newDsCache(db serde.DataSourceSerDe, finder MatchingDSSpecFinder, clstr clusterer, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
-		byName: make(map[string]*receiverDs),
+		byName: make(map[string]*cachedDs),
 		db:     db,
 		finder: finder,
 		clstr:  clstr,
 		dsf:    dsf,
 	}
-	if locking {
-		d.rwLocker = &sync.RWMutex{}
-	}
 	return d
 }
 
 // getByName rlocks and gets a DS pointer.
-func (d *dsCache) getByName(name string) *receiverDs {
-	if d.rwLocker != nil {
-		d.RLock()
-		defer d.RUnlock()
-	}
+func (d *dsCache) getByName(name string) *cachedDs {
+	d.RLock()
+	defer d.RUnlock()
 	return d.byName[name]
 }
 
 // Insert locks and inserts a DS.
-func (d *dsCache) insert(rds *receiverDs) {
-	if d.rwLocker != nil {
-		d.Lock()
-		defer d.Unlock()
-	}
-	d.byName[rds.Name()] = rds
+func (d *dsCache) insert(cds *cachedDs) {
+	d.Lock()
+	defer d.Unlock()
+	d.byName[cds.Name()] = cds
+}
+
+// Delete a DS
+func (d *dsCache) delete(name string) {
+	d.Lock()
+	defer d.Unlock()
+	delete(d.byName, name)
 }
 
 func (d *dsCache) preLoad() error {
@@ -84,85 +78,82 @@ func (d *dsCache) preLoad() error {
 	}
 
 	for _, ds := range dss {
-		rds := &receiverDs{DataSource: ds, dsf: d.dsf}
-		d.insert(rds)
-		d.register(rds)
+		d.insert(&cachedDs{MetaDataSource: ds})
+		d.register(ds)
 	}
 
 	return nil
 }
 
-func (d *dsCache) loadOrCreateDS(name string) (*rrd.DataSource, error) {
-	if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
-		return d.db.CreateOrReturnDataSource(name, dsSpec)
-	}
-	return nil, nil // We couldn't find anything, which is not an error
-}
-
-// getByNameOrLoadOrCreate gets, or loads from db (and possibly creates) a ds
-func (d *dsCache) getByNameOrLoadOrCreate(name string) (*receiverDs, error) {
-	rds := d.getByName(name)
-	if rds == nil || rds.stale {
-		rds = nil
-		ds, err := d.loadOrCreateDS(name)
-		if err != nil {
-			return nil, err
-		}
-		if ds != nil {
-			rds = &receiverDs{DataSource: ds, dsf: d.dsf}
-			d.insert(rds)
-			d.register(rds)
+// get a cached ds
+func (d *dsCache) fetchDataSourceByName(name string) (*cachedDs, error) {
+	cds := d.getByName(name)
+	if cds == nil {
+		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
+			ds, err := d.db.FetchOrCreateDataSource(name, dsSpec)
+			if err != nil {
+				return nil, err
+			}
+			if ds != nil {
+				cds = &cachedDs{MetaDataSource: ds}
+				d.insert(cds)
+				d.register(ds)
+			}
 		}
 	}
-	return rds, nil
+	return cds, nil
 }
 
 // register the rds as a DistDatum with the cluster
-func (d *dsCache) register(rds *receiverDs) {
+func (d *dsCache) register(ds *rrd.MetaDataSource) {
 	if d.clstr != nil {
+		dds := &distDs{MetaDataSource: ds, dsc: d}
 		d.clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
-			return []cluster.DistDatum{rds}, nil
+			return []cluster.DistDatum{dds}, nil
 		})
 	}
 }
 
-type receiverDs struct {
-	*rrd.DataSource
+type cachedDs struct {
+	*rrd.MetaDataSource
 	lastFlushRT time.Time // Last time this DS was flushed (actual real time).
-	dsf         dsFlusherBlocking
-	stale       bool // Reload me from db at next opportunity
+}
+
+func (cds *cachedDs) shouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
+	if cds.LastUpdate().IsZero() {
+		return false
+	}
+	pc := cds.PointCount()
+	if pc > maxCachedPoints {
+		return cds.lastFlushRT.Add(minCache).Before(time.Now())
+	} else if pc > 0 {
+		return cds.lastFlushRT.Add(maxCache).Before(time.Now())
+	}
+	return false
+}
+
+type distDs struct {
+	*rrd.MetaDataSource
+	dsc *dsCache
 }
 
 // cluster.DistDatum interface
 
-func (rds *receiverDs) Relinquish() error {
-	if !rds.LastUpdate().IsZero() {
-		rds.dsf.flushDs(rds, true)
-		rds.stale = true
+func (ds *distDs) Relinquish() error {
+	if !ds.LastUpdate().IsZero() {
+		ds.dsc.dsf.flushDs(ds.MetaDataSource, true)
+		ds.dsc.delete(ds.Name())
 	}
 	return nil
 }
 
-func (rds *receiverDs) Acquire() error {
-	rds.stale = true // it will get loaded afresh when needed
+func (ds *distDs) Acquire() error {
+	ds.dsc.delete(ds.Name())
 	return nil
 }
 
-func (rds *receiverDs) Id() int64       { return rds.DataSource.Id() }
-func (rds *receiverDs) Type() string    { return "DataSource" }
-func (rds *receiverDs) GetName() string { return rds.DataSource.Name() }
+func (ds *distDs) Id() int64       { return ds.MetaDataSource.Id() }
+func (ds *distDs) Type() string    { return "DataSource" }
+func (ds *distDs) GetName() string { return ds.MetaDataSource.Name() }
 
 // end cluster.DistDatum interface
-
-func (rds *receiverDs) shouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
-	if rds.LastUpdate().IsZero() {
-		return false
-	}
-	pc := rds.PointCount()
-	if pc > maxCachedPoints {
-		return rds.lastFlushRT.Add(minCache).Before(time.Now())
-	} else if pc > 0 {
-		return rds.lastFlushRT.Add(maxCache).Before(time.Now())
-	}
-	return false
-}

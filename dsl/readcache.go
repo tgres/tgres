@@ -15,57 +15,27 @@
 
 package dsl
 
-import (
-	"github.com/tgres/tgres/rrd"
-	"time"
-)
+import "github.com/tgres/tgres/serde"
 
 type ReadCache struct {
-	db   seriesQuerierDataSourceFetcher
+	serde.SerDe
 	dsns *DataSourceNames
 }
 
-type dataSourceFetcher interface {
-	FetchDataSourceNames() (map[string]int64, error)
-	FetchDataSource(id int64) (*rrd.DataSource, error)
-}
-
-type seriesQuerier interface {
-	SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (Series, error)
-}
-
-type seriesQuerierDataSourceFetcher interface {
-	dataSourceFetcher
-	seriesQuerier
-}
-
-func NewReadCache(db seriesQuerierDataSourceFetcher) *ReadCache {
-	return &ReadCache{db: db, dsns: &DataSourceNames{}}
-}
-
-func (r *ReadCache) Reload() error {
-	return r.dsns.reload(r.db)
-}
-
-func (r *ReadCache) getDSById(id int64) *rrd.DataSource {
-	ds, _ := r.db.FetchDataSource(id)
-	return ds
+func NewReadCache(db serde.SerDe) *ReadCache {
+	return &ReadCache{SerDe: db, dsns: &DataSourceNames{}}
 }
 
 func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {
 	result := r.dsns.dsIdsFromIdent(ident)
 	if len(result) == 0 {
-		r.dsns.reload(r.db)
+		r.dsns.reload(r)
 		result = r.dsns.dsIdsFromIdent(ident)
 	}
 	return result
 }
 
-func (r *ReadCache) seriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (Series, error) {
-	return r.db.SeriesQuery(ds, from, to, maxPoints)
-}
-
 func (r *ReadCache) FsFind(pattern string) []*FsFindNode {
-	r.dsns.reload(r.db)
+	r.dsns.reload(r)
 	return r.dsns.fsFind(pattern)
 }

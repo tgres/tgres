@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/tgres/tgres/serde"
 )
 
 // for Graphite-like listings
@@ -60,7 +62,7 @@ func (dsns *DataSourceNames) addPrefixes(name string) {
 	}
 }
 
-func (dsns *DataSourceNames) reload(db dataSourceFetcher) error {
+func (dsns *DataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
 	names, err := db.FetchDataSourceNames()
 	if err != nil {
 		return err

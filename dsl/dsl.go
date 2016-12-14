@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tgres/tgres/serde"
 )
 
 type DslCtx struct {
@@ -70,12 +72,15 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
 }
 
-func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]Series, error) {
+func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]serde.Series, error) {
 	ids := dc.rcache.dsIdsFromIdent(ident)
-	result := make(map[string]Series)
+	result := make(map[string]serde.Series)
 	for name, id := range ids {
-		ds := dc.rcache.getDSById(id)
-		dps, err := dc.rcache.seriesQuery(ds, from, to, dc.maxPoints)
+		ds, err := dc.rcache.FetchDataSourceById(id)
+		if err != nil {
+			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
+		}
+		dps, err := dc.rcache.SeriesQuery(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}

@@ -18,9 +18,6 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/receiver"
-	"github.com/tgres/tgres/serde"
 	"io/ioutil"
 	"log"
 	"os"
@@ -31,6 +28,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/receiver"
+	"github.com/tgres/tgres/serde"
 )
 
 var (
@@ -56,13 +57,13 @@ var savePid = func(pidPath string) error {
 	return err
 }
 
-var initDb = func(connectString string) (serde.SerDe, error) {
+var initDb = func(connectString string) (serde.DbSerDe, error) {
 	return serde.InitDb(connectString, "")
 }
 
 // Figure out which address to bind to and which to advertize for the
 // cluster. (The two are not always the same e.g. in a container).
-var determineClusterBindAddress = func(db serde.SerDe) (bindAddr, advAddr string, err error) {
+var determineClusterBindAddress = func(db serde.DbAddresser) (bindAddr, advAddr string, err error) {
 	bindAddr = os.Getenv("TGRES_BIND")
 	if os.Getenv("TGRES_ADDRFROMDB") != "" {
 		var a *string
@@ -80,7 +81,7 @@ var determineClusterBindAddress = func(db serde.SerDe) (bindAddr, advAddr string
 	return
 }
 
-var determineClusterJoinAddress = func(join string, db serde.SerDe) (ips []string, err error) {
+var determineClusterJoinAddress = func(join string, db serde.DbAddresser) (ips []string, err error) {
 	if join != "" {
 		ips = strings.Split(join, ",")
 	} else if os.Getenv("TGRES_ADDRFROMDB") != "" {

@@ -17,10 +17,11 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/cluster"
 	"log"
 	"math"
 	"time"
+
+	"github.com/tgres/tgres/cluster"
 )
 
 var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) {
@@ -62,10 +63,11 @@ var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd cha
 	return nil
 }
 
-var dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
-	for _, node := range clstr.NodesForDistDatum(rds) {
+var dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+
+	for _, node := range clstr.NodesForDistDatum(&distDs{MetaDataSource: cds.MetaDataSource, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
-			workerChs.queue(dp, rds)
+			workerChs.queue(dp, cds)
 		} else {
 			if err := dispatcherForwardDPToNode(dp, node, snd); err != nil {
 				log.Printf("dispatcher: Error forwarding a data point: %v", err)
@@ -74,10 +76,10 @@ var dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerCh
 			}
 			forwarded++
 			// Always clear RRAs to prevent it from being saved
-			if pc := rds.PointCount(); pc > 0 {
+			if pc := cds.PointCount(); pc > 0 {
 				log.Printf("dispatcher: WARNING: Clearing DS with PointCount > 0: %v", pc)
 			}
-			rds.ClearRRAs(true)
+			cds.ClearRRAs(true)
 		}
 	}
 	return
@@ -95,18 +97,18 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsC
 		return
 	}
 
-	rds, err := dsc.getByNameOrLoadOrCreate(dp.Name)
+	cds, err := dsc.fetchDataSourceByName(dp.Name)
 	if err != nil {
 		log.Printf("dispatcher: dsCache error: %v", err)
 		return
 	}
-	if rds == nil {
+	if cds == nil {
 		log.Printf("dispatcher: No spec matched name: %q, ignoring data point", dp.Name)
 		return
 	}
 
-	if rds != nil {
-		forwarded := dispatcherProcessOrForward(rds, clstr, workerChs, dp, snd)
+	if cds != nil {
+		forwarded := dispatcherProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
 		sr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
 	}
 }

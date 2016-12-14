@@ -17,25 +17,26 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/rrd"
-	"github.com/tgres/tgres/serde"
 	"log"
 	"time"
+
+	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 type dsFlushRequest struct {
-	ds   *rrd.DataSource
+	ds   *rrd.MetaDataSource
 	resp chan bool
 }
 
 type flusherChannels []chan *dsFlushRequest
 
-func (f flusherChannels) queueBlocking(rds *receiverDs, block bool) {
-	fr := &dsFlushRequest{ds: rds.DataSource.Copy()}
+func (f flusherChannels) queueBlocking(ds *rrd.MetaDataSource, block bool) {
+	fr := &dsFlushRequest{ds: ds.Copy()}
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
-	f[rds.Id()%int64(len(f))] <- fr
+	f[ds.Id()%int64(len(f))] <- fr
 	if block {
 		<-fr.resp
 	}

@@ -25,28 +25,37 @@ import (
 // intermediate state (PDP).
 type DataSource struct {
 	Pdp
-	id         int64                // Id
-	name       string               // Series name
 	step       time.Duration        // Step (PDP) size
 	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values. 0 -> no heartbeat.
 	lastUpdate time.Time            // Last time we received an update (series time - can be in the past or future)
 	rras       []*RoundRobinArchive // Array of Round Robin Archives
 }
 
+// MetaDataSource contains additional attributes for storing and
+// finding a DS
+type MetaDataSource struct {
+	*DataSource
+	name string // Series name
+	id   int64  // Id
+}
+
+func (ds *MetaDataSource) Name() string { return ds.name }
+func (ds *MetaDataSource) Id() int64    { return ds.id }
+
 // NewDataSource returns a pointer to a new DataSource. This function
 // is meant primarily for internal use such as serde implementations.
-func NewDataSource(id int64, name string, step, hb time.Duration, lu time.Time) *DataSource {
-	return &DataSource{
-		id:         id,
-		name:       name,
-		step:       step,
-		heartbeat:  hb,
-		lastUpdate: lu,
+func NewMetaDataSource(id int64, name string, step, hb time.Duration, lu time.Time) *MetaDataSource {
+
+	return &MetaDataSource{
+		DataSource: &DataSource{step: step,
+			heartbeat:  hb,
+			lastUpdate: lu,
+		},
+		id:   id,
+		name: name,
 	}
 }
 
-func (ds *DataSource) Name() string                      { return ds.name }
-func (ds *DataSource) Id() int64                         { return ds.id }
 func (ds *DataSource) Step() time.Duration               { return ds.step }
 func (ds *DataSource) Heartbeat() time.Duration          { return ds.heartbeat }
 func (ds *DataSource) LastUpdate() time.Time             { return ds.lastUpdate }
@@ -268,17 +277,19 @@ func (ds *DataSource) ClearRRAs(clearLU bool) {
 	}
 }
 
-// Copy returns a copy of the DataSource.
-func (ds *DataSource) Copy() *DataSource {
+// Copy returns a copy of the MetaDataSource.
+func (ds *MetaDataSource) Copy() *MetaDataSource {
 
-	new_ds := &DataSource{
-		Pdp:        Pdp{value: ds.value, duration: ds.duration},
-		id:         ds.id,
-		name:       ds.name,
-		step:       ds.step,
-		heartbeat:  ds.heartbeat,
-		lastUpdate: ds.lastUpdate,
-		rras:       make([]*RoundRobinArchive, len(ds.rras)),
+	new_ds := &MetaDataSource{
+		DataSource: &DataSource{
+			Pdp:        Pdp{value: ds.value, duration: ds.duration},
+			step:       ds.step,
+			heartbeat:  ds.heartbeat,
+			lastUpdate: ds.lastUpdate,
+			rras:       make([]*RoundRobinArchive, len(ds.rras)),
+		},
+		id:   ds.id,
+		name: ds.name,
 	}
 
 	for n, rra := range ds.rras {

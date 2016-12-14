@@ -21,17 +21,18 @@ import (
 	"time"
 )
 
-var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*receiverDs, minCacheDur, maxCacheDur time.Duration, maxPoints, maxFlushes int) map[int64]*receiverDs {
-	leftover := make(map[int64]*receiverDs)
+var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*cachedDs, minCacheDur, maxCacheDur time.Duration, maxPoints, maxFlushes int) map[int64]*cachedDs {
+	leftover := make(map[int64]*cachedDs)
 	n := 0
-	for id, rds := range recent {
-		if rds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
+	for id, cds := range recent {
+		if cds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
 			if debug {
 				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, id)
 			}
-			if !dsf.flushDs(rds, false) {
-				leftover[id] = rds
+			if !dsf.flushDs(cds.MetaDataSource, false) {
+				leftover[id] = cds
 			}
+			cds.lastFlushRT = time.Now()
 			delete(recent, id)
 		}
 		n++
@@ -62,8 +63,8 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 	wc.onEnter()
 	defer wc.onExit()
 
-	var recent = make(map[int64]*receiverDs)
-	var leftover map[int64]*receiverDs
+	var recent = make(map[int64]*cachedDs)
+	var leftover map[int64]*cachedDs
 
 	periodicFlushTicker := time.NewTicker(flushInt)
 
@@ -85,11 +86,11 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 			if !ok {
 				return
 			}
-			rds := dpds.rds // at this point ds has to be already set
-			if err := rds.ProcessDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
-				recent[rds.Id()] = rds
+			cds := dpds.cds
+			if err := cds.ProcessDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
+				recent[cds.Id()] = cds
 			} else {
-				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), rds.Name(), err)
+				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), cds.Name(), err)
 			}
 		}
 

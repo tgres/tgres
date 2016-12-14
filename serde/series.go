@@ -13,13 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dsl
+package serde
 
 import (
 	"time"
 )
 
-// Series is the interface behind all the series operations in the DSL.
 type Series interface {
 	Next() bool
 	Close() error

@@ -24,11 +24,24 @@ import (
 func TestPdp_Accessors(t *testing.T) {
 	dp := &Pdp{}
 	dp.value = 123
+	if !math.IsNaN(dp.Value()) {
+		t.Errorf("dp.Value(): must be NaN when duration is 0: %v", dp.Value())
+	}
+	dp.duration = time.Second
 	if dp.Value() != dp.value {
 		t.Errorf("dp.Value(): %v  != dp.value: %v", dp.Value(), dp.value)
 	}
 	if dp.Duration() != dp.Duration() {
 		t.Errorf("dp.Duration(): %v  != dp.duration: %v", dp.Duration(), dp.duration)
+	}
+}
+
+func TestPdp_ResetRc(t *testing.T) {
+	dp := &Pdp{}
+	dp.value = 123
+	rv := dp.Reset()
+	if !math.IsNaN(rv) {
+		t.Errorf("dp.Reset(): must be NaN when duration is 0: %v", rv)
 	}
 }
 
@@ -89,8 +102,8 @@ func TestPdp_AddValue(t *testing.T) {
 
 			// Reset()
 			dp.Reset()
-			if dp.value != 0 || dp.duration != 0 {
-				t.Errorf("Reset: dp.value != 0 || dp.duration != 0: (%v, %v)", dp.value, dp.duration)
+			if dp.value != 0 || dp.duration != 0 || !math.IsNaN(dp.Value()) {
+				t.Errorf("Reset: dp.value != 0 || dp.duration != 0: (%v, %v) || || !math.IsNaN(dp.Value()", dp.value, dp.duration)
 			}
 
 			// AddValueMax()

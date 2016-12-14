@@ -53,7 +53,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/rrd"
 )
 
@@ -73,7 +72,7 @@ func sqlOpen(a, b string) (*sql.DB, error) {
 	return sql.Open(a, b)
 }
 
-func InitDb(connect_string, prefix string) (SerDe, error) {
+func InitDb(connect_string, prefix string) (*pgSerDe, error) {
 	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
 		return nil, err
 	} else {
@@ -87,7 +86,7 @@ func InitDb(connect_string, prefix string) (SerDe, error) {
 		if err := p.prepareSqlStatements(); err != nil {
 			return nil, err
 		}
-		return SerDe(p), nil
+		return p, nil
 	}
 }
 
@@ -278,7 +277,7 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 // This implements the Series interface
 
 type dbSeries struct {
-	ds  *rrd.DataSource
+	ds  *rrd.MetaDataSource
 	rra *rrd.RoundRobinArchive
 
 	// Current Value
@@ -467,7 +466,7 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 	}
 }
 
-func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
+func dataSourceFromRow(rows *sql.Rows) (*rrd.MetaDataSource, error) {
 	var (
 		lastupdate               *time.Time
 		durationMs, stepMs, hbMs int64
@@ -485,7 +484,7 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.DataSource, error) {
 		lastupdate = &time.Time{}
 	}
 
-	ds := rrd.NewDataSource(id, name,
+	ds := rrd.NewMetaDataSource(id, name,
 		time.Duration(stepMs)*time.Millisecond,
 		time.Duration(hbMs)*time.Millisecond,
 		*lastupdate)
@@ -549,11 +548,11 @@ func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
 	return result, nil
 }
 
-func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
+func (p *pgSerDe) FetchDataSourceById(id int64) (*rrd.MetaDataSource, error) {
 
 	rows, err := p.sql8.Query(id)
 	if err != nil {
-		log.Printf("FetchDataSource(): error querying database: %v", err)
+		log.Printf("FetchDataSourceById(): error querying database: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -562,7 +561,7 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds)
 		if err != nil {
-			log.Printf("FetchDataSource(): error fetching RRAs: %v", err)
+			log.Printf("FetchDataSourceById(): error fetching RRAs: %v", err)
 			return nil, err
 		} else {
 			ds.SetRRAs(rras)
@@ -573,7 +572,7 @@ func (p *pgSerDe) FetchDataSource(id int64) (*rrd.DataSource, error) {
 	return nil, nil
 }
 
-func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
+func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.MetaDataSource, error) {
 
 	rows, err := p.sql9.Query(name)
 	if err != nil {
@@ -597,7 +596,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.DataSource, error) {
 	return nil, nil
 }
 
-func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
+func (p *pgSerDe) FetchDataSources() ([]*rrd.MetaDataSource, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
 
@@ -608,7 +607,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 	}
 	defer rows.Close()
 
-	result := make([]*rrd.DataSource, 0)
+	result := make([]*rrd.MetaDataSource, 0)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds)
@@ -624,7 +623,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.DataSource, error) {
 	return result, nil
 }
 
-func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.DataSource) ([]*rrd.RoundRobinArchive, error) {
+func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.MetaDataSource) ([]*rrd.RoundRobinArchive, error) {
 
 	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
 
@@ -735,7 +734,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 	return nil
 }
 
-func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
+func (p *pgSerDe) FlushDataSource(ds *rrd.MetaDataSource) error {
 	for _, rra := range ds.RRAs() {
 		if rra.PointCount() > 0 {
 			if err := p.flushRoundRobinArchive(rra); err != nil {
@@ -759,31 +758,31 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.DataSource) error {
 	return nil
 }
 
-// CreateOrReturnDataSource loads or returns an existing DS. This is
+// FetchOrCreateDataSource loads or returns an existing DS. This is
 // done by using upserts first on the ds table, then for each
 // RRA. This method also attempt to create the TS empty rows with ON
 // CONFLICT DO NOTHING. (There is no reason to ever load TS data
 // because of the nature of an RRD - we accumulate data points and
 // surgically write them to the proper slots in the TS table). Since
 // PostgreSQL 9.5 introduced upserts and we changed CreateDataSource
-// to CreateOrReturnDataSource the code in this module is a little
+// to FetchOrCreateDataSource the code in this module is a little
 // functionally overlapping and should probably be re-worked,
 // e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
 // pre-inserting rows in ts here.
-func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error) {
+func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.MetaDataSource, error) {
 	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
-		log.Printf("CreateOrReturnDataSource(): error querying database: %v", err)
+		log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		log.Printf("CreateOrReturnDataSource(): unable to lookup/create")
+		log.Printf("FetchOrCreateDataSource(): unable to lookup/create")
 		return nil, fmt.Errorf("unable to lookup/create")
 	}
 	ds, err := dataSourceFromRow(rows)
 	if err != nil {
-		log.Printf("CreateOrReturnDataSource(): error: %v", err)
+		log.Printf("FetchOrCreateDataSource(): error: %v", err)
 		return nil, err
 	}
 
@@ -805,13 +804,13 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 		}
 		rraRows, err := p.sql5.Query(ds.Id(), cf, steps, size, rraSpec.Xff)
 		if err != nil {
-			log.Printf("CreateOrReturnDataSource(): error creating RRAs: %v", err)
+			log.Printf("FetchOrCreateDataSource(): error creating RRAs: %v", err)
 			return nil, err
 		}
 		rraRows.Next()
 		rra, err := roundRobinArchiveFromRow(rraRows, ds.Step())
 		if err != nil {
-			log.Printf("CreateOrReturnDataSource(): error2: %v", err)
+			log.Printf("FetchOrCreateDataSource(): error2: %v", err)
 			return nil, err
 		}
 		rras = append(rras, rra)
@@ -821,7 +820,7 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 		// for n := int64(0); n <= (rraSize/rraWidth + rraSize%rraWidth/rraWidth); n++ {
 		// 	r, err := p.sql6.Query(rra.Id(), n)
 		// 	if err != nil {
-		// 		log.Printf("CreateOrReturnDataSource(): error creating TSs: %v", err)
+		// 		log.Printf("FetchOrCreateDataSource(): error creating TSs: %v", err)
 		// 		return nil, err
 		// 	}
 		// 	r.Close()
@@ -832,12 +831,12 @@ func (p *pgSerDe) CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.Da
 	ds.SetRRAs(rras)
 
 	if debug {
-		log.Printf("CreateOrReturnDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate(), ds)
+		log.Printf("FetchOrCreateDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate(), ds)
 	}
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (dsl.Series, error) {
+func (p *pgSerDe) SeriesQuery(ds *rrd.MetaDataSource, from, to time.Time, maxPoints int64) (Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 
@@ -851,5 +850,5 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints 
 	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
 	// to be the earliest of "to" or "LastUpdate".
 	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
-	return dsl.Series(dps), nil
+	return Series(dps), nil
 }

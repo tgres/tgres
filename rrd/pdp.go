@@ -74,7 +74,12 @@ type Pdp struct {
 	duration time.Duration
 }
 
-func (p *Pdp) Value() float64          { return p.value } // TODO If duration is 0, should this return a NaN?
+func (p *Pdp) Value() float64 {
+	if p.duration == 0 {
+		return math.NaN()
+	}
+	return p.value
+}
 func (p *Pdp) Duration() time.Duration { return p.duration }
 
 // SetValue sets both value and duration of the PDP
@@ -133,8 +138,8 @@ func (p *Pdp) AddValueLast(val float64, dur time.Duration) {
 // Reset sets the value to zero value and returns the value of
 // the PDP before Reset.
 func (p *Pdp) Reset() float64 {
-	result := p.value
-	p.value = 0 // this is superfluous, the value is irrelevant when duration is 0
+	result := p.Value()
+	p.value = 0 // superfluous, but just in case
 	p.duration = 0
 	return result
 }

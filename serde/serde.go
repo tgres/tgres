@@ -18,41 +18,59 @@
 package serde
 
 import (
-	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/rrd"
 	"time"
+
+	"github.com/tgres/tgres/rrd"
 )
 
+type DataSourceNamesFetcher interface {
+	FetchDataSourceNames() (map[string]int64, error)
+}
+
+type DataSourceFetcher interface {
+	FetchDataSourceById(id int64) (*rrd.MetaDataSource, error)
+}
+
 type DataSourcesFetcher interface {
-	FetchDataSources() ([]*rrd.DataSource, error)
+	FetchDataSources() ([]*rrd.MetaDataSource, error)
+}
+
+type DataSourcesFetchOrCreator interface {
+	FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.MetaDataSource, error)
 }
 
 type DataSourceFlusher interface {
-	// Flush a DS
-	FlushDataSource(ds *rrd.DataSource) error
+	FlushDataSource(ds *rrd.MetaDataSource) error
+}
+
+type SeriesQuerier interface {
+	SeriesQuery(ds *rrd.MetaDataSource, from, to time.Time, maxPoints int64) (Series, error)
 }
 
 type DataSourceSerDe interface {
 	DataSourcesFetcher
 	DataSourceFlusher
-	// Create a DS with name, and/or return it
-	CreateOrReturnDataSource(name string, dsSpec *DSSpec) (*rrd.DataSource, error)
+	DataSourcesFetchOrCreator
+}
+
+type DbAddresser interface {
+	// Use the database to infer outside IPs of other connected clients
+	ListDbClientIps() ([]string, error)
+	MyDbAddr() (*string, error)
 }
 
 // This thing knows how to load/save series in some storage
 type SerDe interface {
 	DataSourceSerDe
+	DataSourceFetcher
+	DataSourceNamesFetcher
+	SeriesQuerier
+}
 
-	FetchDataSource(id int64) (*rrd.DataSource, error)
-	FetchDataSourceByName(name string) (*rrd.DataSource, error)
-
-	FetchDataSourceNames() (map[string]int64, error)
-
-	// Query
-	SeriesQuery(ds *rrd.DataSource, from, to time.Time, maxPoints int64) (dsl.Series, error)
-	// Use the database to infer outside IPs of other connected clients
-	ListDbClientIps() ([]string, error)
-	MyDbAddr() (*string, error)
+// This is a relational DB server
+type DbSerDe interface {
+	SerDe
+	DbAddresser
 }
 
 // DSSpec describes a DataSource. DSSpec is a schema that is used to

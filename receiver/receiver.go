@@ -27,6 +27,7 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"golang.org/x/time/rate"
 )
@@ -79,13 +80,13 @@ type IncomingDP struct {
 
 type workerChannels []chan *incomingDpWithDs
 
-func (w workerChannels) queue(dp *IncomingDP, rds *receiverDs) {
-	w[rds.Id()%int64(len(w))] <- &incomingDpWithDs{dp, rds}
+func (w workerChannels) queue(dp *IncomingDP, cds *cachedDs) {
+	w[cds.Id()%int64(len(w))] <- &incomingDpWithDs{dp, cds}
 }
 
 type incomingDpWithDs struct {
 	dp  *IncomingDP
-	rds *receiverDs
+	cds *cachedDs
 }
 
 func New(clstr clusterer, serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
@@ -107,7 +108,7 @@ func New(clstr clusterer, serde serde.SerDe, finder MatchingDSSpecFinder) *Recei
 		ReportStats:       true,
 		ReportStatsPrefix: "tgres",
 	}
-	r.dsc = newDsCache(serde, finder, clstr, r, false)
+	r.dsc = newDsCache(serde, finder, clstr, r)
 	if clstr != nil {
 		r.SetCluster(clstr)
 	}
@@ -189,19 +190,18 @@ func (r *Receiver) reportStatGauge(name string, f float64) {
 	}
 }
 
-func (r *Receiver) flushDs(rds *receiverDs, block bool) bool {
+func (r *Receiver) flushDs(ds *rrd.MetaDataSource, block bool) bool {
 	if r.flushLimiter != nil && !r.flushLimiter.Allow() {
 		r.reportStatCount("serde.flushes_rate_limited", 1)
 		return false
 	}
-	r.flusherChs.queueBlocking(rds, block)
-	rds.ClearRRAs(false)
-	rds.lastFlushRT = time.Now()
+	r.flusherChs.queueBlocking(ds, block)
+	ds.ClearRRAs(false)
 	return true
 }
 
 type dsFlusherBlocking interface {
-	flushDs(*receiverDs, bool) bool
+	flushDs(*rrd.MetaDataSource, bool) bool
 }
 
 type dataPointQueuer interface {

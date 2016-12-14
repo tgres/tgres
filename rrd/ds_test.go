@@ -33,7 +33,7 @@ func Test_DataSource(t *testing.T) {
 
 	// NewDataSource
 	id, name, step, hb, lu = 1, "foo.bar", 10*time.Second, 300*time.Second, time.Now()
-	ds := NewDataSource(id, name, step, hb, lu)
+	ds := NewMetaDataSource(id, name, step, hb, lu)
 
 	if id != ds.id || name != ds.name || step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate {
 		t.Errorf("NewDataSource: id != ds.id || name != ds.name || step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate")
@@ -82,7 +82,7 @@ func Test_DataSource_BestRRA(t *testing.T) {
 
 	// NewDataSource
 	id, name, step, hb, lu = 1, "foo.bar", 10*time.Second, 300*time.Second, time.Now()
-	ds := NewDataSource(id, name, step, hb, lu)
+	ds := NewMetaDataSource(id, name, step, hb, lu)
 
 	ten, twenty := 10*time.Second, 20*time.Second
 
@@ -297,16 +297,18 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 
 func Test_DataSource_Copy(t *testing.T) {
 
-	ds := &DataSource{
-		Pdp: Pdp{
-			value:    123,
-			duration: 4 * time.Second,
+	ds := &MetaDataSource{
+		DataSource: &DataSource{
+			Pdp: Pdp{
+				value:    123,
+				duration: 4 * time.Second,
+			},
+			step:       10 * time.Second,
+			heartbeat:  45 * time.Second,
+			lastUpdate: time.Now(),
 		},
-		id:         34534,
-		name:       "dfssslksdmlfkm",
-		step:       10 * time.Second,
-		heartbeat:  45 * time.Second,
-		lastUpdate: time.Now(),
+		id:   34534,
+		name: "dfssslksdmlfkm",
 	}
 	ds.SetRRAs([]*RoundRobinArchive{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10, dps: map[int64]float64{6: 100, 7: 100, 8: 100}},
