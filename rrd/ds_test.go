@@ -25,27 +25,19 @@ import (
 func Test_DataSource(t *testing.T) {
 
 	var (
-		id       int64
-		name     string
 		step, hb time.Duration
 		lu       time.Time
 	)
 
 	// NewDataSource
-	id, name, step, hb, lu = 1, "foo.bar", 10*time.Second, 300*time.Second, time.Now()
-	ds := NewMetaDataSource(id, name, step, hb, lu)
+	step, hb, lu = 10*time.Second, 300*time.Second, time.Now()
+	ds := NewDataSource(&DSSpec{Step: step, Heartbeat: hb, LastUpdate: lu})
 
-	if id != ds.id || name != ds.name || step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate {
-		t.Errorf("NewDataSource: id != ds.id || name != ds.name || step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate")
+	if step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate {
+		t.Errorf("NewDataSource: step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate")
 	}
 
 	// Accessors
-	if ds.Name() != ds.name {
-		t.Errorf("ds.Name() != ds.name")
-	}
-	if ds.Id() != ds.id {
-		t.Errorf("ds.Id() != ds.id")
-	}
 	if ds.Step() != ds.step {
 		t.Errorf("ds.Step() != ds.step")
 	}
@@ -56,13 +48,13 @@ func Test_DataSource(t *testing.T) {
 		t.Errorf("ds.LastUpdate() != ds.lastUpdate")
 	}
 
-	rras := []*RoundRobinArchive{&RoundRobinArchive{}}
+	rras := []RoundRobinArchiver{&RoundRobinArchive{}}
 	ds.SetRRAs(rras)
 	if !reflect.DeepEqual(ds.RRAs(), rras) {
 		t.Errorf("ds.RRAs() != ds.rras")
 	}
 
-	ds.SetRRAs([]*RoundRobinArchive{&RoundRobinArchive{dps: map[int64]float64{1: 1, 2: 2, 3: 3}}})
+	ds.SetRRAs([]RoundRobinArchiver{&RoundRobinArchive{dps: map[int64]float64{1: 1, 2: 2, 3: 3}}})
 	// PointCount
 	pc := ds.PointCount()
 	if pc != 3 {
@@ -72,17 +64,16 @@ func Test_DataSource(t *testing.T) {
 
 func Test_DataSource_BestRRA(t *testing.T) {
 	var (
-		id, points             int64
-		name                   string
+		points                 int64
 		step, hb               time.Duration
 		lu, latest, start, end time.Time
-		rras                   []*RoundRobinArchive
-		best                   *RoundRobinArchive
+		rras                   []RoundRobinArchiver
+		best                   RoundRobinArchiver
 	)
 
 	// NewDataSource
-	id, name, step, hb, lu = 1, "foo.bar", 10*time.Second, 300*time.Second, time.Now()
-	ds := NewMetaDataSource(id, name, step, hb, lu)
+	step, hb, lu = 10*time.Second, 300*time.Second, time.Now()
+	ds := NewDataSource(&DSSpec{Step: step, Heartbeat: hb, LastUpdate: lu})
 
 	ten, twenty := 10*time.Second, 20*time.Second
 
@@ -91,23 +82,23 @@ func Test_DataSource_BestRRA(t *testing.T) {
 	start = time.Unix(9500, 0)
 	end = time.Unix(9600, 0)
 	points = int64(10)
-	rras = []*RoundRobinArchive{&RoundRobinArchive{latest: latest, step: ten, size: 100}}
+	rras = []RoundRobinArchiver{&RoundRobinArchive{latest: latest, step: ten, size: 100}}
 	ds.SetRRAs(rras)
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != ten {
+	if best == nil || best.Step() != ten {
 		t.Errorf("BestRRA: The % step should have been selected as the only available within range, instead we got %#v", ten, best)
 	}
 
 	// Does not Include, go for longest
 	start = time.Unix(5500, 0)
 	end = time.Unix(5600, 0)
-	rras = []*RoundRobinArchive{
+	rras = []RoundRobinArchiver{
 		&RoundRobinArchive{latest: latest, step: ten, size: 100},
 		&RoundRobinArchive{latest: latest, step: twenty, size: 100},
 	}
 	ds.SetRRAs(rras)
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != twenty {
+	if best == nil || best.Step() != twenty {
 		t.Errorf("BestRRA: The % step should have been selected as the longest, instead we got %#v", twenty, best)
 	}
 
@@ -115,7 +106,7 @@ func Test_DataSource_BestRRA(t *testing.T) {
 	start = time.Unix(9500, 0)
 	end = time.Unix(9600, 0)
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != ten {
+	if best == nil || best.Step() != ten {
 		t.Errorf("BestRRA: The % step should have been selected as the nearest resolution, instead we got %#v", ten, best)
 	}
 
@@ -123,7 +114,7 @@ func Test_DataSource_BestRRA(t *testing.T) {
 	start = time.Unix(10100, 0)
 	end = time.Unix(10200, 0)
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != ten {
+	if best == nil || best.Step() != ten {
 		t.Errorf("BestRRA: The % step should have been selected even if start > latest, instead we got %#v", ten, best)
 	}
 
@@ -132,25 +123,25 @@ func Test_DataSource_BestRRA(t *testing.T) {
 	end = time.Unix(9600, 0)
 	points = 3
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != twenty {
+	if best == nil || best.Step() != twenty {
 		t.Errorf("BestRRA: The % step should have been selected as the nearest resolution, instead we got %#v", twenty, best)
 	}
 
 	// And now no points
 	points = 0
 	// order RRA so as to catch the best > rra comparison
-	rras = []*RoundRobinArchive{
+	rras = []RoundRobinArchiver{
 		&RoundRobinArchive{latest: latest, step: twenty, size: 100},
 		&RoundRobinArchive{latest: latest, step: ten, size: 100},
 	}
 	ds.SetRRAs(rras)
 	best = ds.BestRRA(start, end, points)
-	if best == nil || best.step != ten {
+	if best == nil || best.Step() != ten {
 		t.Errorf("BestRRA: The % step should have been selected as the smallest resolution (no points), instead we got %#v", ten, best)
 	}
 
 	// Test nil
-	ds.SetRRAs([]*RoundRobinArchive{})
+	ds.SetRRAs([]RoundRobinArchiver{})
 	best = ds.BestRRA(start, end, points)
 	if best != nil {
 		t.Errorf("BestRRA should have returned nil, got: %#v", best)
@@ -184,7 +175,7 @@ func Test_DataSource_updateRange(t *testing.T) {
 	// mid-pdp and spans multiple RRA slots.
 
 	ds := &DataSource{step: 10 * time.Second}
-	ds.SetRRAs([]*RoundRobinArchive{
+	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 10 * time.Second, size: 10},
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
@@ -193,24 +184,24 @@ func Test_DataSource_updateRange(t *testing.T) {
 	ds.updateRange(begin, end, 100.0)
 
 	exp1 := map[int64]float64{1: 100, 2: 100, 3: 100, 4: 100, 5: 100}
-	if !reflect.DeepEqual(ds.rras[0].dps, exp1) {
-		t.Errorf("updateRange: expecting rra[0].dps: %v, got %v", exp1, ds.rras[0].dps)
+	if !reflect.DeepEqual(ds.rras[0].Dps(), exp1) {
+		t.Errorf("updateRange: expecting rra[0].Dps(): %v, got %v", exp1, ds.rras[0].Dps())
 	}
-	if ds.rras[0].value != 0 || ds.rras[0].duration != 0 {
-		t.Errorf("updateRange: ds.rras[0].value != 0 || ds.rras[1].duration != 0")
+	if !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 {
+		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].Value()) || ds.rras[1].Duration() != 0")
 	}
 
 	exp2 := map[int64]float64{6: 100, 7: 100}
-	if !reflect.DeepEqual(ds.rras[1].dps, exp2) {
-		t.Errorf("updateRange: expecting rra1.dps: %v, got %v", exp2, ds.rras[1].dps)
+	if !reflect.DeepEqual(ds.rras[1].Dps(), exp2) {
+		t.Errorf("updateRange: expecting rra1.Dps(): %v, got %v", exp2, ds.rras[1].Dps())
 	}
-	if ds.rras[1].value != 100 || ds.rras[1].duration != 10*time.Second {
-		t.Errorf("updateRange: ds.rras[1].value != 100 || ds.rras[1].duration != 10*time.Second")
+	if ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second {
+		t.Errorf("updateRange: ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second")
 	}
 
 	// Now do this again with the end aligned on PDP
 	ds = &DataSource{step: 10 * time.Second}
-	ds.SetRRAs([]*RoundRobinArchive{
+	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
 
@@ -218,40 +209,37 @@ func Test_DataSource_updateRange(t *testing.T) {
 	ds.updateRange(begin, end, 100.0)
 
 	exp3 := map[int64]float64{6: 100, 7: 100, 8: 100}
-	if !reflect.DeepEqual(ds.rras[0].dps, exp3) {
-		t.Errorf("updateRange: expecting rra[0].dps: %v, got %v", exp3, ds.rras[0].dps)
+	if !reflect.DeepEqual(ds.rras[0].Dps(), exp3) {
+		t.Errorf("updateRange: expecting rra[0].Dps(): %v, got %v", exp3, ds.rras[0].Dps())
 	}
-	if ds.rras[0].value != 0 || ds.rras[0].duration != 0 {
-		t.Errorf("updateRange: ds.rras[0].value != 0 || ds.rras[1].duration != 0")
+	if !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 {
+		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].Value()) || ds.rras[1].Duration() != 0")
 	}
 }
 
 func Test_DataSource_ProcessDataPoint(t *testing.T) {
 
 	ds := &DataSource{step: 10 * time.Second}
-	ds.SetRRAs([]*RoundRobinArchive{
+	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
-	ds.Reset()
-	ds.rras[0].Reset()
 
 	ds.ProcessDataPoint(100, time.Unix(104, 0))
-	if ds.value != 0 || ds.duration != 0 || ds.rras[0].value != 0 || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0 {
-		t.Errorf("ProcessDataPoint: on first call, ds.value != 0 || ds.duration != 0 || ds.rras[0].value != 0 || ds.rras[0].duration != 0 || len(ds.rras[0].dps) > 0")
+	if ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 || len(ds.rras[0].Dps()) > 0 {
+		t.Errorf("ProcessDataPoint: on first call, ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Vuration() != 0 || len(ds.rras[0].Dps()) > 0")
 	}
 	if !ds.lastUpdate.Equal(time.Unix(104, 0)) {
 		t.Errorf("ProcessDataPoint: on first call, !ds.lastUpdate.Equal(time.Unix(104, 0))")
 	}
 
 	ds.ProcessDataPoint(100, time.Unix(156, 0))
-	if ds.value != 100 || ds.duration != 6*time.Second || ds.rras[0].value != 100 || ds.rras[0].duration != 10*time.Second {
-		t.Errorf("ProcessDataPoint: on second call, ds.value != 100 || ds.duration != 6s || ds.rras[0].value != 100 || ds.rras[0].duration != 10s: %v %v %v %v",
-			ds.value, ds.duration, ds.rras[0].value, ds.rras[0].duration)
+	if ds.value != 100 || ds.duration != 6*time.Second || ds.rras[0].Value() != 100 || ds.rras[0].Duration() != 10*time.Second {
+		t.Errorf("ProcessDataPoint: on second call, ds.value != 100 || ds.duration != 6s || ds.rras[0].Value() != 100 || ds.rras[0].Duration() != 10s: %v %v %v %v",
+			ds.value, ds.duration, ds.rras[0].Value(), ds.rras[0].Duration())
 	}
 
 	// heartbeat
 	ds = &DataSource{step: 10 * time.Second, heartbeat: time.Second}
-	ds.Reset()
 	ds.ProcessDataPoint(100, time.Unix(104, 0))
 
 	// Inf
@@ -268,22 +256,22 @@ func Test_DataSource_ProcessDataPoint(t *testing.T) {
 func Test_DataSource_ClearRRAs(t *testing.T) {
 
 	ds := &DataSource{step: 10 * time.Second}
-	ds.SetRRAs([]*RoundRobinArchive{
+	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
-	ds.Reset()
-	ds.rras[0].Reset()
 
 	ds.ClearRRAs(false)
-	if ds.rras[0].dps != nil {
+	if ds.rras[0].Dps() != nil {
 		t.Errorf("ClearRRAs: ds.rras[0].dps got replaced even though it's empty?")
 	}
 
-	ds.rras[0].dps = map[int64]float64{1: 1}
+	ds.SetRRAs([]RoundRobinArchiver{
+		&RoundRobinArchive{step: 20 * time.Second, size: 10, dps: map[int64]float64{1: 1}},
+	})
 	ds.lastUpdate = time.Now()
 	ds.ClearRRAs(false)
-	if len(ds.rras[0].dps) != 0 || ds.rras[0].start != 0 || ds.rras[0].end != 0 {
-		t.Errorf("ClearRRAs: len(ds.rras[0].dps) != 0 || ds.rras[0].start != 0 || ds.rras[0].end != 0")
+	if len(ds.rras[0].Dps()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0 {
+		t.Errorf("ClearRRAs: len(ds.rras[0].Dps()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0")
 	}
 	if ds.lastUpdate.IsZero() {
 		t.Errorf("ClearRRAs: with false: ds.lastUpdate.IsZero()")
@@ -297,20 +285,16 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 
 func Test_DataSource_Copy(t *testing.T) {
 
-	ds := &MetaDataSource{
-		DataSource: &DataSource{
-			Pdp: Pdp{
-				value:    123,
-				duration: 4 * time.Second,
-			},
-			step:       10 * time.Second,
-			heartbeat:  45 * time.Second,
-			lastUpdate: time.Now(),
+	ds := &DataSource{
+		Pdp: Pdp{
+			value:    123,
+			duration: 4 * time.Second,
 		},
-		id:   34534,
-		name: "dfssslksdmlfkm",
+		step:       10 * time.Second,
+		heartbeat:  45 * time.Second,
+		lastUpdate: time.Now(),
 	}
-	ds.SetRRAs([]*RoundRobinArchive{
+	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10, dps: map[int64]float64{6: 100, 7: 100, 8: 100}},
 	})
 

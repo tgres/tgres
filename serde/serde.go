@@ -28,23 +28,23 @@ type DataSourceNamesFetcher interface {
 }
 
 type DataSourceFetcher interface {
-	FetchDataSourceById(id int64) (*rrd.MetaDataSource, error)
+	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
 }
 
 type DataSourcesFetcher interface {
-	FetchDataSources() ([]*rrd.MetaDataSource, error)
+	FetchDataSources() ([]rrd.DataSourcer, error)
 }
 
 type DataSourcesFetchOrCreator interface {
-	FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.MetaDataSource, error)
+	FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 }
 
 type DataSourceFlusher interface {
-	FlushDataSource(ds *rrd.MetaDataSource) error
+	FlushDataSource(ds rrd.DataSourcer) error
 }
 
 type SeriesQuerier interface {
-	SeriesQuery(ds *rrd.MetaDataSource, from, to time.Time, maxPoints int64) (Series, error)
+	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (Series, error)
 }
 
 type DataSourceSerDe interface {
@@ -71,21 +71,4 @@ type SerDe interface {
 type DbSerDe interface {
 	SerDe
 	DbAddresser
-}
-
-// DSSpec describes a DataSource. DSSpec is a schema that is used to
-// create the DataSource. This is necessary so that DS's can be crated
-// on-the-fly.
-type DSSpec struct {
-	Step      time.Duration
-	Heartbeat time.Duration
-	RRAs      []*RRASpec
-}
-
-// RRASpec is the RRA definition part of DSSpec.
-type RRASpec struct {
-	Function rrd.Consolidation
-	Step     time.Duration
-	Size     time.Duration
-	Xff      float64
 }

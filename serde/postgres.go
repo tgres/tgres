@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -274,182 +274,6 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 	return nil
 }
 
-// This implements the Series interface
-
-type dbSeries struct {
-	ds  *rrd.MetaDataSource
-	rra *rrd.RoundRobinArchive
-
-	// Current Value
-	value    float64
-	posBegin time.Time // pos begins after
-	posEnd   time.Time // pos ends on
-
-	// Time boundary
-	from time.Time
-	to   time.Time
-
-	// Db stuff
-	db   *pgSerDe
-	rows *sql.Rows
-
-	// These are not the same:
-	maxPoints int64 // max points we want
-	groupByMs int64 // requested alignment
-
-	latest time.Time
-
-	// Alias
-	alias string
-}
-
-func (dps *dbSeries) StepMs() int64 {
-	return dps.rra.Step().Nanoseconds() / 1000000
-}
-
-func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
-	if len(ms) > 0 {
-		defer func() { dps.groupByMs = ms[0] }()
-	}
-	if dps.groupByMs == 0 {
-		return dps.StepMs()
-	}
-	return dps.groupByMs
-}
-
-func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
-	if len(t) == 1 {
-		defer func() { dps.from = t[0] }()
-	} else if len(t) == 2 {
-		defer func() { dps.from, dps.to = t[0], t[1] }()
-	}
-	return dps.from, dps.to
-}
-
-func (dps *dbSeries) LastUpdate() time.Time {
-	return dps.ds.LastUpdate()
-}
-
-func (dps *dbSeries) MaxPoints(n ...int64) int64 {
-	if len(n) > 0 { // setter
-		defer func() { dps.maxPoints = n[0] }()
-	}
-	return dps.maxPoints // getter
-}
-
-func (dps *dbSeries) Align() {}
-
-func (dps *dbSeries) Alias(s ...string) string {
-	if len(s) > 0 {
-		dps.alias = s[0]
-	}
-	return dps.alias
-}
-
-func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-
-	var (
-		finalGroupByMs int64
-		rraStepMs      = dps.rra.Step().Nanoseconds() / 1000000
-	)
-
-	if dps.groupByMs != 0 {
-		// Specific granularity was requested for alignment, we ignore maxPoints
-		finalGroupByMs = finalGroupByMs/dps.groupByMs*dps.groupByMs + dps.groupByMs
-	} else if dps.maxPoints != 0 {
-		// If maxPoints was specified, then calculate group by interval
-		finalGroupByMs = (dps.to.Unix() - dps.from.Unix()) * 1000 / dps.maxPoints
-		finalGroupByMs = finalGroupByMs/rraStepMs*rraStepMs + rraStepMs
-	} else {
-		// Otherwise, group by will equal the rrastep
-		finalGroupByMs = rraStepMs
-	}
-
-	if finalGroupByMs == 0 {
-		finalGroupByMs = 1000 // TODO Why would this happen (it did)?
-	}
-
-	// Ensure that the true group by interval is reflected in the series.
-	if finalGroupByMs != dps.groupByMs {
-		dps.groupByMs = finalGroupByMs
-	}
-
-	// Ensure that we never return data beyond lastUpdate (it would
-	// cause us to return bogus data because the RRD would wrap
-	// around). We do this *after* calculating groupBy because groupBy
-	// should be based on the screen resolution, not what we have in
-	// the db.
-	if dps.to.After(dps.LastUpdate()) {
-		dps.to = dps.LastUpdate()
-	}
-
-	// TODO: support milliseconds?
-	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
-
-	if debug {
-		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
-			dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
-	}
-	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
-
-	if err != nil {
-		log.Printf("seriesQuery(): error %v", err)
-		return nil, err
-	}
-
-	return rows, nil
-}
-
-func (dps *dbSeries) Next() bool {
-
-	if dps.rows == nil { // First Next()
-		rows, err := dps.seriesQuerySqlUsingViewAndSeries()
-		if err == nil {
-			dps.rows = rows
-		} else {
-			log.Printf("dbSeries.Next(): database error: %v", err)
-			return false
-		}
-	}
-
-	if dps.rows.Next() {
-		if ts, value, err := timeValueFromRow(dps.rows); err != nil {
-			log.Printf("dbSeries.Next(): database error: %v", err)
-			return false
-		} else {
-			dps.posBegin = dps.latest
-			dps.posEnd = ts
-			dps.value = value
-			dps.latest = dps.posEnd
-		}
-		return true
-	}
-
-	return false
-}
-
-func (dps *dbSeries) CurrentValue() float64 {
-	return dps.value
-}
-
-func (dps *dbSeries) CurrentPosBeginsAfter() time.Time {
-	return dps.posBegin
-}
-
-func (dps *dbSeries) CurrentPosEndsOn() time.Time {
-	return dps.posEnd
-}
-
-func (dps *dbSeries) Close() error {
-	result := dps.rows.Close()
-	dps.rows = nil // next Next() will re-open
-	return result
-}
-
 func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 	var (
 		value sql.NullFloat64
@@ -466,7 +290,7 @@ func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
 	}
 }
 
-func dataSourceFromRow(rows *sql.Rows) (*rrd.MetaDataSource, error) {
+func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 	var (
 		lastupdate               *time.Time
 		durationMs, stepMs, hbMs int64
@@ -484,16 +308,22 @@ func dataSourceFromRow(rows *sql.Rows) (*rrd.MetaDataSource, error) {
 		lastupdate = &time.Time{}
 	}
 
-	ds := rrd.NewMetaDataSource(id, name,
-		time.Duration(stepMs)*time.Millisecond,
-		time.Duration(hbMs)*time.Millisecond,
-		*lastupdate)
+	ds := NewDbDataSource(id, name,
+		rrd.NewDataSource(
+			&rrd.DSSpec{
+				Step:       time.Duration(stepMs) * time.Millisecond,
+				Heartbeat:  time.Duration(hbMs) * time.Millisecond,
+				LastUpdate: *lastupdate,
+				Value:      value,
+				Duration:   time.Duration(durationMs) * time.Millisecond,
+			},
+		),
+	)
 
-	ds.SetValue(value, time.Duration(durationMs)*time.Millisecond)
-	return ds, err
+	return ds, nil
 }
 
-func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*rrd.RoundRobinArchive, error) {
+func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*DbRoundRobinArchive, error) {
 	var (
 		latest *time.Time
 		cf     string
@@ -511,14 +341,36 @@ func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*rrd.RoundR
 	if latest == nil {
 		latest = &time.Time{}
 	}
-	rra, err := rrd.NewRoundRobinArchive(id, dsId, cf, time.Duration(stepsPerRow)*dsStep, size, width, xff, *latest)
+
+	spec := &rrd.RRASpec{
+		Step:     time.Duration(stepsPerRow) * dsStep,
+		Span:     time.Duration(stepsPerRow*size) * dsStep,
+		Xff:      xff,
+		Latest:   *latest,
+		Value:    value,
+		Duration: time.Duration(durationMs) * time.Millisecond,
+	}
+
+	switch cf {
+	case "WMEAN":
+		spec.Function = rrd.WMEAN
+	case "MIN":
+		spec.Function = rrd.MIN
+	case "MAX":
+		spec.Function = rrd.MAX
+	case "LAST":
+		spec.Function = rrd.LAST
+	default:
+		return nil, fmt.Errorf("roundRoundRobinArchiveFromRow(): Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
+	}
+
+	rra, err := NewDbRoundRobinArchive(id, width, spec)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error creating rra: %v", err)
 		return nil, err
 	}
 
-	rra.SetValue(value, time.Duration(durationMs)*time.Millisecond)
-	return rra, err
+	return rra, nil
 }
 
 func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
@@ -548,7 +400,7 @@ func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
 	return result, nil
 }
 
-func (p *pgSerDe) FetchDataSourceById(id int64) (*rrd.MetaDataSource, error) {
+func (p *pgSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
 
 	rows, err := p.sql8.Query(id)
 	if err != nil {
@@ -572,7 +424,7 @@ func (p *pgSerDe) FetchDataSourceById(id int64) (*rrd.MetaDataSource, error) {
 	return nil, nil
 }
 
-func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.MetaDataSource, error) {
+func (p *pgSerDe) FetchDataSourceByName(name string) (*DbDataSource, error) {
 
 	rows, err := p.sql9.Query(name)
 	if err != nil {
@@ -596,7 +448,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*rrd.MetaDataSource, error
 	return nil, nil
 }
 
-func (p *pgSerDe) FetchDataSources() ([]*rrd.MetaDataSource, error) {
+func (p *pgSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
 	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
 
@@ -607,7 +459,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.MetaDataSource, error) {
 	}
 	defer rows.Close()
 
-	result := make([]*rrd.MetaDataSource, 0)
+	result := make([]rrd.DataSourcer, 0)
 	for rows.Next() {
 		ds, err := dataSourceFromRow(rows)
 		rras, err := p.fetchRoundRobinArchives(ds)
@@ -623,7 +475,7 @@ func (p *pgSerDe) FetchDataSources() ([]*rrd.MetaDataSource, error) {
 	return result, nil
 }
 
-func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.MetaDataSource) ([]*rrd.RoundRobinArchive, error) {
+func (p *pgSerDe) fetchRoundRobinArchives(ds *DbDataSource) ([]rrd.RoundRobinArchiver, error) {
 
 	const sql = `SELECT id, ds_id, cf, steps_per_row, size, width, xff, value, duration_ms, latest FROM %[1]srra rra WHERE ds_id = $1`
 
@@ -634,7 +486,7 @@ func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.MetaDataSource) ([]*rrd.RoundR
 	}
 	defer rows.Close()
 
-	var rras []*rrd.RoundRobinArchive
+	var rras []rrd.RoundRobinArchiver
 	for rows.Next() {
 		if rra, err := roundRobinArchiveFromRow(rows, ds.Step()); err == nil {
 			rras = append(rras, rra)
@@ -647,7 +499,7 @@ func (p *pgSerDe) fetchRoundRobinArchives(ds *rrd.MetaDataSource) ([]*rrd.RoundR
 	return rras, nil
 }
 
-func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
+func (p *pgSerDe) flushRoundRobinArchive(rra DbRoundRobinArchiver) error {
 	var n int64
 	rraSize, rraWidth := rra.Size(), rra.Width()
 	rraStart, rraEnd := rra.Start(), rra.End()
@@ -734,10 +586,20 @@ func (p *pgSerDe) flushRoundRobinArchive(rra *rrd.RoundRobinArchive) error {
 	return nil
 }
 
-func (p *pgSerDe) FlushDataSource(ds *rrd.MetaDataSource) error {
+func (p *pgSerDe) FlushDataSource(ds rrd.DataSourcer) error {
+	dbds, ok := ds.(DbDataSourcer)
+	if !ok {
+		return fmt.Errorf("ds must be a DbDataSourcer to flush.")
+	}
+
 	for _, rra := range ds.RRAs() {
-		if rra.PointCount() > 0 {
-			if err := p.flushRoundRobinArchive(rra); err != nil {
+		// If this is not a DbRoundRobinArchive, we cannot flush
+		drra, ok := rra.(DbRoundRobinArchiver)
+		if !ok {
+			return fmt.Errorf("rra must be a DbRoundRobinArchiver to flush.")
+		}
+		if drra.PointCount() > 0 {
+			if err := p.flushRoundRobinArchive(drra); err != nil {
 				log.Printf("FlushDataSource(): error flushing RRA, probable data loss: %v", err)
 				return err
 			}
@@ -745,10 +607,11 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.MetaDataSource) error {
 	}
 
 	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", ds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
+		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", dbds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.Value(), durationMs, ds.Id()); err != nil {
+	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
+		// TODO Check number of rows updated - what if this DS does not exist in the DB?
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
@@ -769,7 +632,7 @@ func (p *pgSerDe) FlushDataSource(ds *rrd.MetaDataSource) error {
 // functionally overlapping and should probably be re-worked,
 // e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
 // pre-inserting rows in ts here.
-func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.MetaDataSource, error) {
+func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
@@ -787,10 +650,10 @@ func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.Met
 	}
 
 	// RRAs
-	var rras []*rrd.RoundRobinArchive
+	var rras []rrd.RoundRobinArchiver
 	for _, rraSpec := range dsSpec.RRAs {
 		steps := int64(rraSpec.Step / ds.Step())
-		size := rraSpec.Size.Nanoseconds() / rraSpec.Step.Nanoseconds()
+		size := rraSpec.Span.Nanoseconds() / rraSpec.Step.Nanoseconds()
 		var cf string
 		switch rraSpec.Function {
 		case rrd.WMEAN:
@@ -836,7 +699,7 @@ func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *DSSpec) (*rrd.Met
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds *rrd.MetaDataSource, from, to time.Time, maxPoints int64) (Series, error) {
+func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 
@@ -847,8 +710,18 @@ func (p *pgSerDe) SeriesQuery(ds *rrd.MetaDataSource, from, to time.Time, maxPoi
 		from = rraEarliest
 	}
 
+	dbds, ok := ds.(DbDataSourcer)
+	if !ok {
+		return nil, fmt.Errorf("SeriesQuery: ds must be a DbDataSourcer")
+	}
+
+	dbrra, ok := rra.(DbRoundRobinArchiver)
+	if !ok {
+		return nil, fmt.Errorf("SeriesQuery: rra must be a DbRoundRobinArchive")
+	}
+
 	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
 	// to be the earliest of "to" or "LastUpdate".
-	dps := &dbSeries{db: p, ds: ds, rra: rra, from: from, to: to, maxPoints: maxPoints}
+	dps := &dbSeries{db: p, ds: dbds, rra: dbrra, from: from, to: to, maxPoints: maxPoints}
 	return Series(dps), nil
 }

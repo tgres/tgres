@@ -16,10 +16,7 @@
 package rrd
 
 import (
-	"bytes"
-	"fmt"
 	"math"
-	"strconv"
 	"time"
 )
 
@@ -35,8 +32,6 @@ const (
 // RoundRobinArchive and all its parameters.
 type RoundRobinArchive struct {
 	Pdp
-	id   int64 // Id
-	dsId int64 // DS id
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution
 	// one. Must be WMEAN, MAX, MIN, LAST.
@@ -61,16 +56,13 @@ type RoundRobinArchive struct {
 	// contradicting any rules.
 	xff float32
 
-	// The list of data points (as a map so that its sparse). Slots in
+	// The list of data points (as a map so that it's sparse). Slots in
 	// dps are time-aligned starting at zero time. This means that if
 	// Latest is defined, we can compute any slot's timestamp without
 	// having to store it. Slot numbers are aligned on millisecond,
 	// therefore an RRA step cannot be less than a millisecond.
 	dps map[int64]float64
 
-	// In the undelying storage, how many data points are stored in a
-	// single (database) row.
-	width int64
 	// Index of the first slot for which we have data. (Should be
 	// between 0 and Size-1)
 	start int64
@@ -80,60 +72,54 @@ type RoundRobinArchive struct {
 	end int64
 }
 
-func (rra *RoundRobinArchive) Id() int64           { return rra.id }
-func (rra *RoundRobinArchive) Latest() time.Time   { return rra.latest }
-func (rra *RoundRobinArchive) Step() time.Duration { return rra.step }
-func (rra *RoundRobinArchive) Size() int64         { return rra.size }
-func (rra *RoundRobinArchive) Width() int64        { return rra.width }
-func (rra *RoundRobinArchive) Start() int64        { return rra.start }
-func (rra *RoundRobinArchive) End() int64          { return rra.end }
+type RoundRobinArchiver interface {
+	Pdper
+	Latest() time.Time
+	Step() time.Duration
+	Size() int64
+	Start() int64
+	End() int64
+	PointCount() int
+	Dps() map[int64]float64
+	Copy() RoundRobinArchiver
+	Begins(now time.Time) time.Time
 
-// NewRoundRobinArchive returns a new RRA and checks that its valid. Useful for serde implementations.
-func NewRoundRobinArchive(id, dsId int64, cf string, step time.Duration, size, width int64, xff float32, latest time.Time) (*RoundRobinArchive, error) {
-	rra := &RoundRobinArchive{
-		id:     id,
-		dsId:   dsId,
-		step:   step,
-		size:   size,
-		width:  width,
-		xff:    xff,
-		latest: latest,
-		dps:    make(map[int64]float64),
-	}
-	switch cf {
-	case "WMEAN":
-		rra.cf = WMEAN
-	case "MIN":
-		rra.cf = MIN
-	case "MAX":
-		rra.cf = MAX
-	case "LAST":
-		rra.cf = LAST
-	default:
-		return nil, fmt.Errorf("Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
-	}
-	if rra.size == 0 {
-		return nil, fmt.Errorf("Invalid size: rra.size cannot be 0.")
-	}
-	// Steps are aligned on milliseconds, so a step of less than a
-	// millisecond would result in a division by zero (see rra.update())
-	if rra.step < 1000000 {
-		return nil, fmt.Errorf("Invalid step: rra.step: %v cannot be less than 1 millisecond.")
-	}
-	return rra, nil
+	// A side benifit from these being unexported is that you can only
+	// satisfy this interface by including this implementation
+	clear()
+	includes(t time.Time) bool
+	update(periodBegin, periodEnd time.Time, value float64, duration time.Duration)
 }
 
-func (rra *RoundRobinArchive) copy() *RoundRobinArchive {
+func (rra *RoundRobinArchive) Latest() time.Time      { return rra.latest }
+func (rra *RoundRobinArchive) Step() time.Duration    { return rra.step }
+func (rra *RoundRobinArchive) Size() int64            { return rra.size }
+func (rra *RoundRobinArchive) Start() int64           { return rra.start }
+func (rra *RoundRobinArchive) End() int64             { return rra.end }
+func (rra *RoundRobinArchive) Dps() map[int64]float64 { return rra.dps }
+
+func NewRoundRobinArchive(spec *RRASpec) *RoundRobinArchive {
+	return &RoundRobinArchive{
+		step:   spec.Step,
+		size:   spec.Span.Nanoseconds() / spec.Step.Nanoseconds(),
+		xff:    spec.Xff,
+		latest: spec.Latest,
+		Pdp: Pdp{
+			value:    spec.Value,
+			duration: spec.Duration,
+		},
+		dps: make(map[int64]float64),
+	}
+}
+
+func (rra *RoundRobinArchive) Copy() RoundRobinArchiver {
 	new_rra := &RoundRobinArchive{
 		Pdp:    Pdp{value: rra.value, duration: rra.duration},
-		id:     rra.id,
-		dsId:   rra.dsId,
 		cf:     rra.cf,
 		step:   rra.step,
 		size:   rra.size,
 		latest: rra.latest,
 		xff:    rra.xff,
-		width:  rra.width,
 		start:  rra.start,
 		end:    rra.end,
 		dps:    make(map[int64]float64, len(rra.dps)),
@@ -142,16 +128,6 @@ func (rra *RoundRobinArchive) copy() *RoundRobinArchive {
 		new_rra.dps[k] = v
 	}
 	return new_rra
-}
-
-// SlotRow returns the row number given a slot number. This is mostly
-// useful in serde implementations.
-func (rra *RoundRobinArchive) SlotRow(slot int64) int64 {
-	if slot%rra.width == 0 {
-		return slot / rra.width
-	} else {
-		return (slot / rra.width) + 1
-	}
 }
 
 // Begins returns the timestamp of the beginning of this RRA assuming
@@ -166,27 +142,13 @@ func (rra *RoundRobinArchive) Begins(now time.Time) time.Time {
 	return rraStart
 }
 
-// DpsAsPGString returns data points as a PostgreSQL-compatible array string
-func (rra *RoundRobinArchive) DpsAsPGString(start, end int64) string {
-	var b bytes.Buffer
-	b.WriteString("{")
-	for i := start; i <= end; i++ {
-		b.WriteString(strconv.FormatFloat(rra.dps[int64(i)], 'f', -1, 64))
-		if i != end {
-			b.WriteString(",")
-		}
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
 // PointCount returns the number of points in this RRA.
 func (rra *RoundRobinArchive) PointCount() int {
 	return len(rra.dps)
 }
 
 // Includes tells whether the given time is within the RRA
-func (rra *RoundRobinArchive) Includes(t time.Time) bool {
+func (rra *RoundRobinArchive) includes(t time.Time) bool {
 	begin := rra.Begins(rra.latest)
 	return t.After(begin) && !t.After(rra.latest)
 }
@@ -259,4 +221,24 @@ func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
 	rra.end = slotN
 
 	rra.Reset()
+}
+
+func (rra *RoundRobinArchive) clear() {
+	if len(rra.dps) > 0 {
+		rra.dps = make(map[int64]float64)
+	}
+	rra.start, rra.end = 0, 0
+}
+
+// RRASpec is the RRA definition part of DSSpec.
+type RRASpec struct {
+	Function Consolidation
+	Step     time.Duration // duration of a single step
+	Span     time.Duration // duration of the whole series (should be multiple of step)
+	Xff      float32
+
+	// These can be used to fill the initial value
+	Latest   time.Time
+	Value    float64
+	Duration time.Duration
 }

@@ -19,40 +19,40 @@
 package receiver
 
 import (
-	"github.com/tgres/tgres/rrd"
-	"github.com/tgres/tgres/serde"
 	"time"
+
+	"github.com/tgres/tgres/rrd"
 )
 
 type dftDSFinder struct{}
 
 type MatchingDSSpecFinder interface {
-	FindMatchingDSSpec(name string) *serde.DSSpec
+	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
 
-func (_ *dftDSFinder) FindMatchingDSSpec(name string) *serde.DSSpec {
+func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	if name == "" {
 		return nil
 	}
-	return &serde.DSSpec{
+	return &rrd.DSSpec{
 		Step:      10 * time.Second,
 		Heartbeat: 2 * time.Hour,
-		RRAs: []*serde.RRASpec{
-			&serde.RRASpec{Function: rrd.WMEAN,
+		RRAs: []*rrd.RRASpec{
+			&rrd.RRASpec{Function: rrd.WMEAN,
 				Step: 10 * time.Second,
-				Size: 6 * time.Hour,
+				Span: 6 * time.Hour,
 			},
-			&serde.RRASpec{Function: rrd.WMEAN,
+			&rrd.RRASpec{Function: rrd.WMEAN,
 				Step: 1 * time.Minute,
-				Size: 24 * time.Hour,
+				Span: 24 * time.Hour,
 			},
-			&serde.RRASpec{Function: rrd.WMEAN,
+			&rrd.RRASpec{Function: rrd.WMEAN,
 				Step: 10 * time.Minute,
-				Size: 93 * 24 * time.Hour,
+				Span: 93 * 24 * time.Hour,
 			},
-			&serde.RRASpec{Function: rrd.WMEAN,
+			&rrd.RRASpec{Function: rrd.WMEAN,
 				Step: 24 * time.Hour,
-				Size: 1825 * 24 * time.Hour,
+				Span: 1825 * 24 * time.Hour,
 			},
 		},
 	}

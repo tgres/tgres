@@ -16,11 +16,11 @@
 package receiver
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
 
@@ -78,8 +78,12 @@ func (d *dsCache) preLoad() error {
 	}
 
 	for _, ds := range dss {
-		d.insert(&cachedDs{MetaDataSource: ds})
-		d.register(ds)
+		dbds, ok := ds.(serde.DbDataSourcer)
+		if !ok {
+			return fmt.Errorf("preLoad: ds must be a serde.NamedDataSource")
+		}
+		d.insert(&cachedDs{DbDataSourcer: dbds})
+		d.register(dbds)
 	}
 
 	return nil
@@ -87,27 +91,31 @@ func (d *dsCache) preLoad() error {
 
 // get a cached ds
 func (d *dsCache) fetchDataSourceByName(name string) (*cachedDs, error) {
-	cds := d.getByName(name)
-	if cds == nil {
+	result := d.getByName(name)
+	if result == nil {
 		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
 			ds, err := d.db.FetchOrCreateDataSource(name, dsSpec)
 			if err != nil {
 				return nil, err
 			}
 			if ds != nil {
-				cds = &cachedDs{MetaDataSource: ds}
-				d.insert(cds)
-				d.register(ds)
+				dbds, ok := ds.(serde.DbDataSourcer)
+				if !ok {
+					return nil, fmt.Errorf("fetchDataSourceByName: ds must be a serde.DbDataSourcer")
+				}
+				result = &cachedDs{DbDataSourcer: dbds}
+				d.insert(result)
+				d.register(dbds)
 			}
 		}
 	}
-	return cds, nil
+	return result, nil
 }
 
 // register the rds as a DistDatum with the cluster
-func (d *dsCache) register(ds *rrd.MetaDataSource) {
+func (d *dsCache) register(ds serde.DbDataSourcer) {
 	if d.clstr != nil {
-		dds := &distDs{MetaDataSource: ds, dsc: d}
+		dds := &distDs{DbDataSourcer: ds, dsc: d}
 		d.clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
 			return []cluster.DistDatum{dds}, nil
 		})
@@ -115,7 +123,7 @@ func (d *dsCache) register(ds *rrd.MetaDataSource) {
 }
 
 type cachedDs struct {
-	*rrd.MetaDataSource
+	serde.DbDataSourcer
 	lastFlushRT time.Time // Last time this DS was flushed (actual real time).
 }
 
@@ -133,7 +141,7 @@ func (cds *cachedDs) shouldBeFlushed(maxCachedPoints int, minCache, maxCache tim
 }
 
 type distDs struct {
-	*rrd.MetaDataSource
+	serde.DbDataSourcer
 	dsc *dsCache
 }
 
@@ -141,7 +149,7 @@ type distDs struct {
 
 func (ds *distDs) Relinquish() error {
 	if !ds.LastUpdate().IsZero() {
-		ds.dsc.dsf.flushDs(ds.MetaDataSource, true)
+		ds.dsc.dsf.flushDs(ds.DbDataSourcer, true)
 		ds.dsc.delete(ds.Name())
 	}
 	return nil
@@ -152,8 +160,8 @@ func (ds *distDs) Acquire() error {
 	return nil
 }
 
-func (ds *distDs) Id() int64       { return ds.MetaDataSource.Id() }
+func (ds *distDs) Id() int64       { return ds.DbDataSourcer.Id() }
 func (ds *distDs) Type() string    { return "DataSource" }
-func (ds *distDs) GetName() string { return ds.MetaDataSource.Name() }
+func (ds *distDs) GetName() string { return ds.DbDataSourcer.Name() }
 
 // end cluster.DistDatum interface

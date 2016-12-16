@@ -27,7 +27,6 @@ import (
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 	"golang.org/x/time/rate"
 )
@@ -190,7 +189,7 @@ func (r *Receiver) reportStatGauge(name string, f float64) {
 	}
 }
 
-func (r *Receiver) flushDs(ds *rrd.MetaDataSource, block bool) bool {
+func (r *Receiver) flushDs(ds serde.DbDataSourcer, block bool) bool {
 	if r.flushLimiter != nil && !r.flushLimiter.Allow() {
 		r.reportStatCount("serde.flushes_rate_limited", 1)
 		return false
@@ -201,7 +200,7 @@ func (r *Receiver) flushDs(ds *rrd.MetaDataSource, block bool) bool {
 }
 
 type dsFlusherBlocking interface {
-	flushDs(*rrd.MetaDataSource, bool) bool
+	flushDs(serde.DbDataSourcer, bool) bool
 }
 
 type dataPointQueuer interface {

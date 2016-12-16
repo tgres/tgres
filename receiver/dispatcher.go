@@ -65,7 +65,7 @@ var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd cha
 
 var dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
 
-	for _, node := range clstr.NodesForDistDatum(&distDs{MetaDataSource: cds.MetaDataSource, dsc: dsc}) {
+	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
 			workerChs.queue(dp, cds)
 		} else {

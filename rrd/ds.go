@@ -28,58 +28,75 @@ type DataSource struct {
 	step       time.Duration        // Step (PDP) size
 	heartbeat  time.Duration        // Heartbeat is inactivity period longer than this causes NaN values. 0 -> no heartbeat.
 	lastUpdate time.Time            // Last time we received an update (series time - can be in the past or future)
-	rras       []*RoundRobinArchive // Array of Round Robin Archives
+	rras       []RoundRobinArchiver // Array of Round Robin Archives
 }
 
-// MetaDataSource contains additional attributes for storing and
-// finding a DS
-type MetaDataSource struct {
-	*DataSource
-	name string // Series name
-	id   int64  // Id
+type DataSourcer interface {
+	Pdper
+	Step() time.Duration
+	Heartbeat() time.Duration
+	LastUpdate() time.Time
+	RRAs() []RoundRobinArchiver
+	SetRRAs(rras []RoundRobinArchiver)
+	Copy() DataSourcer
+	BestRRA(start, end time.Time, points int64) RoundRobinArchiver
+	PointCount() int
+	ClearRRAs(clearLU bool)
+	ProcessDataPoint(value float64, ts time.Time) error
 }
 
-func (ds *MetaDataSource) Name() string { return ds.name }
-func (ds *MetaDataSource) Id() int64    { return ds.id }
-
-// NewDataSource returns a pointer to a new DataSource. This function
-// is meant primarily for internal use such as serde implementations.
-func NewMetaDataSource(id int64, name string, step, hb time.Duration, lu time.Time) *MetaDataSource {
-
-	return &MetaDataSource{
-		DataSource: &DataSource{step: step,
-			heartbeat:  hb,
-			lastUpdate: lu,
+// NewDataSource return a new DataSource in accordance with the passed
+// in spec.
+func NewDataSource(spec *DSSpec) *DataSource {
+	return &DataSource{
+		step:       spec.Step,
+		heartbeat:  spec.Heartbeat,
+		lastUpdate: spec.LastUpdate,
+		Pdp: Pdp{
+			value:    spec.Value,
+			duration: spec.Duration,
 		},
-		id:   id,
-		name: name,
 	}
 }
 
 func (ds *DataSource) Step() time.Duration               { return ds.step }
 func (ds *DataSource) Heartbeat() time.Duration          { return ds.heartbeat }
 func (ds *DataSource) LastUpdate() time.Time             { return ds.lastUpdate }
-func (ds *DataSource) RRAs() []*RoundRobinArchive        { return ds.rras }
-func (ds *DataSource) SetRRAs(rras []*RoundRobinArchive) { ds.rras = rras }
+func (ds *DataSource) RRAs() []RoundRobinArchiver        { return ds.rras }
+func (ds *DataSource) SetRRAs(rras []RoundRobinArchiver) { ds.rras = rras }
+
+func (ds *DataSource) Copy() DataSourcer {
+	newDs := &DataSource{
+		Pdp:        Pdp{value: ds.value, duration: ds.duration},
+		step:       ds.step,
+		heartbeat:  ds.heartbeat,
+		lastUpdate: ds.lastUpdate,
+		rras:       make([]RoundRobinArchiver, len(ds.rras)),
+	}
+	for n, rra := range ds.rras {
+		newDs.rras[n] = rra.Copy()
+	}
+	return newDs
+}
 
 // BestRRA examines the RRAs and returns the one that best matches the
 // given start, end and resolution (as number of points).
-func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArchive {
-	var result []*RoundRobinArchive
+func (ds *DataSource) BestRRA(start, end time.Time, points int64) RoundRobinArchiver {
+	var result []RoundRobinArchiver
 
 	// Any RRA include start?
 	for _, rra := range ds.rras {
 		// We need to include RRAs that were last updated before start too
 		// or we end up with nothing, then the lowest resolution RRA
-		if rra.Includes(start) || rra.Latest().Before(start) {
+		if rra.includes(start) || rra.Latest().Before(start) {
 			result = append(result, rra)
 		}
 	}
 
 	if len(result) == 0 { // if we found nothing above, simply select the longest RRA
-		var longest *RoundRobinArchive
+		var longest RoundRobinArchiver
 		for _, rra := range ds.rras {
-			if longest == nil || longest.size*int64(longest.step) < rra.size*int64(rra.step) {
+			if longest == nil || longest.Size()*int64(longest.Step()) < rra.Size()*int64(rra.Step()) {
 				longest = rra
 			}
 		}
@@ -96,13 +113,13 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 		if points > 0 {
 			// select the one with the closest matching resolution
 			expectedStep := end.Sub(start) / time.Duration(points)
-			var best *RoundRobinArchive
+			var best RoundRobinArchiver
 			for _, rra := range result {
 				if best == nil {
 					best = rra
 				} else {
-					rraDiff := math.Abs(float64(expectedStep - rra.step))
-					bestDiff := math.Abs(float64(expectedStep - best.step))
+					rraDiff := math.Abs(float64(expectedStep - rra.Step()))
+					bestDiff := math.Abs(float64(expectedStep - best.Step()))
 					if bestDiff > rraDiff {
 						best = rra
 					}
@@ -110,12 +127,12 @@ func (ds *DataSource) BestRRA(start, end time.Time, points int64) *RoundRobinArc
 			}
 			return best
 		} else { // no points specified, select maximum resolution (i.e. smallest step)
-			var best *RoundRobinArchive
+			var best RoundRobinArchiver
 			for _, rra := range result {
 				if best == nil {
 					best = rra
 				} else {
-					if best.step > rra.step {
+					if best.Step() > rra.Step() {
 						best = rra
 					}
 				}
@@ -267,34 +284,24 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
 // data..
 func (ds *DataSource) ClearRRAs(clearLU bool) {
 	for _, rra := range ds.rras {
-		if len(rra.dps) > 0 {
-			rra.dps = make(map[int64]float64)
-		}
-		rra.start, rra.end = 0, 0
+		rra.clear()
 	}
 	if clearLU {
 		ds.lastUpdate = time.Time{}
 	}
 }
 
-// Copy returns a copy of the MetaDataSource.
-func (ds *MetaDataSource) Copy() *MetaDataSource {
+// DSSpec describes a DataSource. DSSpec is a schema that is used to
+// create the DataSource, as an argument to NewDataSource(). DSSpec is
+// used in configuration describing how a DataSource must be created
+// on-the-fly.
+type DSSpec struct {
+	Step      time.Duration
+	Heartbeat time.Duration
+	RRAs      []*RRASpec
 
-	new_ds := &MetaDataSource{
-		DataSource: &DataSource{
-			Pdp:        Pdp{value: ds.value, duration: ds.duration},
-			step:       ds.step,
-			heartbeat:  ds.heartbeat,
-			lastUpdate: ds.lastUpdate,
-			rras:       make([]*RoundRobinArchive, len(ds.rras)),
-		},
-		id:   ds.id,
-		name: ds.name,
-	}
-
-	for n, rra := range ds.rras {
-		new_ds.rras[n] = rra.copy()
-	}
-
-	return new_ds
+	// These can be used to fill the initial value
+	LastUpdate time.Time
+	Value      float64
+	Duration   time.Duration
 }

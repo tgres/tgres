@@ -29,7 +29,7 @@ var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[i
 			if debug {
 				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, id)
 			}
-			if !dsf.flushDs(cds.MetaDataSource, false) {
+			if !dsf.flushDs(cds.DbDataSourcer, false) {
 				leftover[id] = cds
 			}
 			cds.lastFlushRT = time.Now()

@@ -74,6 +74,11 @@ type Pdp struct {
 	duration time.Duration
 }
 
+type Pdper interface {
+	Value() float64
+	Duration() time.Duration
+}
+
 func (p *Pdp) Value() float64 {
 	if p.duration == 0 {
 		return math.NaN()

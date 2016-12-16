@@ -18,10 +18,6 @@ package daemon
 import (
 	"errors"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/rrd"
-	"github.com/tgres/tgres/serde"
 	"log"
 	"os"
 	"path/filepath"
@@ -29,6 +25,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/tgres/tgres/misc"
+	"github.com/tgres/tgres/rrd"
 )
 
 type Config struct { // Needs to be exported for TOML to work
@@ -47,9 +47,9 @@ type Config struct { // Needs to be exported for TOML to work
 	StatsdUdpListenSpec      string   `toml:"statsd-udp-listen-spec"`
 	HttpListenSpec           string   `toml:"http-listen-spec"`
 	Workers                  int
-	DSs                      []DSSpec `toml:"ds"`
-	StatFlush                duration `toml:"stat-flush-interval"`
-	StatsNamePrefix          string   `toml:"stats-name-prefix"`
+	DSs                      []ConfigDSSpec `toml:"ds"`
+	StatFlush                duration       `toml:"stat-flush-interval"`
+	StatsNamePrefix          string         `toml:"stats-name-prefix"`
 }
 
 type regex struct{ *regexp.Regexp }
@@ -66,20 +66,21 @@ func (d *duration) UnmarshalText(text []byte) (err error) {
 	return err
 }
 
-type DSSpec struct {
+// Needs to be exported for TOML
+type ConfigDSSpec struct {
 	Regexp    regex
 	Step      duration
 	Heartbeat duration
-	RRAs      []RRASpec
+	RRAs      []ConfigRRASpec
 }
-type RRASpec struct {
+type ConfigRRASpec struct {
 	Function rrd.Consolidation
 	Step     time.Duration
-	Size     time.Duration
+	Span     time.Duration
 	Xff      float64
 }
 
-func (r *RRASpec) UnmarshalText(text []byte) error {
+func (r *ConfigRRASpec) UnmarshalText(text []byte) error {
 	r.Xff = 0.5
 	parts := strings.SplitN(string(text), ":", 4)
 	if len(parts) < 2 || len(parts) > 4 {
@@ -109,15 +110,15 @@ func (r *RRASpec) UnmarshalText(text []byte) error {
 	if r.Step, err = misc.BetterParseDuration(parts[1]); err != nil {
 		return fmt.Errorf("Invalid Step: %q (%v)", parts[1], err)
 	}
-	if r.Size, err = misc.BetterParseDuration(parts[2]); err != nil {
+	if r.Span, err = misc.BetterParseDuration(parts[2]); err != nil {
 		return fmt.Errorf("Invalid Size: %q (%v)", parts[2], err)
 	}
-	if (r.Size.Nanoseconds() % r.Step.Nanoseconds()) != 0 {
-		newSize := time.Duration(r.Size.Nanoseconds()/r.Step.Nanoseconds()*r.Step.Nanoseconds()) * time.Nanosecond
-		log.Printf("Size (%q) is not a multiple of Step (%q), auto adjusting Size to %v.", parts[2], parts[1], newSize)
-		r.Size = newSize
-		if newSize.Nanoseconds() == 0 {
-			return fmt.Errorf("invalid Size (%v)", newSize)
+	if (r.Span.Nanoseconds() % r.Step.Nanoseconds()) != 0 {
+		newSpan := time.Duration(r.Span.Nanoseconds()/r.Step.Nanoseconds()*r.Step.Nanoseconds()) * time.Nanosecond
+		log.Printf("Span (%q) is not a multiple of step (%q), auto adjusting span to %v.", parts[2], parts[1], newSpan)
+		r.Span = newSpan
+		if newSpan.Nanoseconds() == 0 {
+			return fmt.Errorf("invalid Size (%v)", newSpan)
 		}
 	}
 	if len(parts) == 4 {
@@ -281,7 +282,7 @@ func (c *Config) processDSSpec() error {
 	return nil
 }
 
-func (c *Config) FindMatchingDSSpec(name string) *serde.DSSpec {
+func (c *Config) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	for _, dsSpec := range c.DSs {
 		if dsSpec.Regexp.Regexp.MatchString(name) {
 			return convertDSSpec(&dsSpec)
@@ -290,15 +291,19 @@ func (c *Config) FindMatchingDSSpec(name string) *serde.DSSpec {
 	return nil
 }
 
-func convertDSSpec(dsSpec *DSSpec) *serde.DSSpec {
-	serdeDSSpec := &serde.DSSpec{
+func convertDSSpec(dsSpec *ConfigDSSpec) *rrd.DSSpec {
+	serdeDSSpec := &rrd.DSSpec{
 		Step:      dsSpec.Step.Duration,
 		Heartbeat: dsSpec.Heartbeat.Duration,
-		RRAs:      make([]*serde.RRASpec, len(dsSpec.RRAs)),
+		RRAs:      make([]*rrd.RRASpec, len(dsSpec.RRAs)),
 	}
 	for i, r := range dsSpec.RRAs {
-		rr := serde.RRASpec(r)
-		serdeDSSpec.RRAs[i] = &rr
+		serdeDSSpec.RRAs[i] = &rrd.RRASpec{
+			Function: r.Function,
+			Step:     r.Step,
+			Span:     r.Span,
+			Xff:      float32(r.Xff),
+		}
 	}
 	return serdeDSSpec
 }

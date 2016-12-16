@@ -25,13 +25,13 @@ import (
 )
 
 type dsFlushRequest struct {
-	ds   *rrd.MetaDataSource
+	ds   rrd.DataSourcer
 	resp chan bool
 }
 
 type flusherChannels []chan *dsFlushRequest
 
-func (f flusherChannels) queueBlocking(ds *rrd.MetaDataSource, block bool) {
+func (f flusherChannels) queueBlocking(ds serde.DbDataSourcer, block bool) {
 	fr := &dsFlushRequest{ds: ds.Copy()}
 	if block {
 		fr.resp = make(chan bool, 1)
