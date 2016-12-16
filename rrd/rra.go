@@ -81,7 +81,7 @@ type RoundRobinArchiver interface {
 	Start() int64
 	End() int64
 	PointCount() int
-	Dps() map[int64]float64
+	DPs() map[int64]float64
 	Copy() RoundRobinArchiver
 	Begins(now time.Time) time.Time
 
@@ -110,10 +110,10 @@ func (rra *RoundRobinArchive) End() int64 { return rra.end }
 
 // Dps returns data points as a map of floats. It's a map rather than
 // a slice to be more space-efficient for sparse series.
-func (rra *RoundRobinArchive) Dps() map[int64]float64 { return rra.dps }
+func (rra *RoundRobinArchive) DPs() map[int64]float64 { return rra.dps }
 
 // Returns a new RRA in accordance with the provided RRASpec.
-func NewRoundRobinArchive(spec *RRASpec) *RoundRobinArchive {
+func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
 	return &RoundRobinArchive{
 		step:   spec.Step,
 		size:   spec.Span.Nanoseconds() / spec.Step.Nanoseconds(),

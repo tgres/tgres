@@ -31,7 +31,14 @@ func Test_DataSource(t *testing.T) {
 
 	// NewDataSource
 	step, hb, lu = 10*time.Second, 300*time.Second, time.Now()
-	ds := NewDataSource(&DSSpec{Step: step, Heartbeat: hb, LastUpdate: lu})
+	ds := NewDataSource(DSSpec{
+		Step:       step,
+		Heartbeat:  hb,
+		LastUpdate: lu,
+		RRAs: []RRASpec{
+			RRASpec{Step: 10 * time.Second, Span: 100 * time.Second},
+		},
+	})
 
 	if step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate {
 		t.Errorf("NewDataSource: step != ds.step || hb != ds.heartbeat || lu != ds.lastUpdate")
@@ -48,10 +55,8 @@ func Test_DataSource(t *testing.T) {
 		t.Errorf("ds.LastUpdate() != ds.lastUpdate")
 	}
 
-	rras := []RoundRobinArchiver{&RoundRobinArchive{}}
-	ds.SetRRAs(rras)
-	if !reflect.DeepEqual(ds.RRAs(), rras) {
-		t.Errorf("ds.RRAs() != ds.rras")
+	if len(ds.rras) == 0 {
+		t.Errorf("len(ds.rras) == 0")
 	}
 
 	ds.SetRRAs([]RoundRobinArchiver{&RoundRobinArchive{dps: map[int64]float64{1: 1, 2: 2, 3: 3}}})
@@ -73,7 +78,7 @@ func Test_DataSource_BestRRA(t *testing.T) {
 
 	// NewDataSource
 	step, hb, lu = 10*time.Second, 300*time.Second, time.Now()
-	ds := NewDataSource(&DSSpec{Step: step, Heartbeat: hb, LastUpdate: lu})
+	ds := NewDataSource(DSSpec{Step: step, Heartbeat: hb, LastUpdate: lu})
 
 	ten, twenty := 10*time.Second, 20*time.Second
 
@@ -184,16 +189,16 @@ func Test_DataSource_updateRange(t *testing.T) {
 	ds.updateRange(begin, end, 100.0)
 
 	exp1 := map[int64]float64{1: 100, 2: 100, 3: 100, 4: 100, 5: 100}
-	if !reflect.DeepEqual(ds.rras[0].Dps(), exp1) {
-		t.Errorf("updateRange: expecting rra[0].Dps(): %v, got %v", exp1, ds.rras[0].Dps())
+	if !reflect.DeepEqual(ds.rras[0].DPs(), exp1) {
+		t.Errorf("updateRange: expecting rra[0].DPs(): %v, got %v", exp1, ds.rras[0].DPs())
 	}
 	if !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 {
 		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].Value()) || ds.rras[1].Duration() != 0")
 	}
 
 	exp2 := map[int64]float64{6: 100, 7: 100}
-	if !reflect.DeepEqual(ds.rras[1].Dps(), exp2) {
-		t.Errorf("updateRange: expecting rra1.Dps(): %v, got %v", exp2, ds.rras[1].Dps())
+	if !reflect.DeepEqual(ds.rras[1].DPs(), exp2) {
+		t.Errorf("updateRange: expecting rra1.DPs(): %v, got %v", exp2, ds.rras[1].DPs())
 	}
 	if ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second {
 		t.Errorf("updateRange: ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second")
@@ -209,8 +214,8 @@ func Test_DataSource_updateRange(t *testing.T) {
 	ds.updateRange(begin, end, 100.0)
 
 	exp3 := map[int64]float64{6: 100, 7: 100, 8: 100}
-	if !reflect.DeepEqual(ds.rras[0].Dps(), exp3) {
-		t.Errorf("updateRange: expecting rra[0].Dps(): %v, got %v", exp3, ds.rras[0].Dps())
+	if !reflect.DeepEqual(ds.rras[0].DPs(), exp3) {
+		t.Errorf("updateRange: expecting rra[0].DPs(): %v, got %v", exp3, ds.rras[0].DPs())
 	}
 	if !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 {
 		t.Errorf("updateRange: !math.IsNaN(ds.rras[0].Value()) || ds.rras[1].Duration() != 0")
@@ -225,8 +230,8 @@ func Test_DataSource_ProcessDataPoint(t *testing.T) {
 	})
 
 	ds.ProcessDataPoint(100, time.Unix(104, 0))
-	if ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 || len(ds.rras[0].Dps()) > 0 {
-		t.Errorf("ProcessDataPoint: on first call, ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Vuration() != 0 || len(ds.rras[0].Dps()) > 0")
+	if ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 || len(ds.rras[0].DPs()) > 0 {
+		t.Errorf("ProcessDataPoint: on first call, ds.value != 0 || ds.duration != 0 || !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Vuration() != 0 || len(ds.rras[0].DPs()) > 0")
 	}
 	if !ds.lastUpdate.Equal(time.Unix(104, 0)) {
 		t.Errorf("ProcessDataPoint: on first call, !ds.lastUpdate.Equal(time.Unix(104, 0))")
@@ -261,7 +266,7 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 	})
 
 	ds.ClearRRAs(false)
-	if ds.rras[0].Dps() != nil {
+	if ds.rras[0].DPs() != nil {
 		t.Errorf("ClearRRAs: ds.rras[0].dps got replaced even though it's empty?")
 	}
 
@@ -270,8 +275,8 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 	})
 	ds.lastUpdate = time.Now()
 	ds.ClearRRAs(false)
-	if len(ds.rras[0].Dps()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0 {
-		t.Errorf("ClearRRAs: len(ds.rras[0].Dps()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0")
+	if len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0 {
+		t.Errorf("ClearRRAs: len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0")
 	}
 	if ds.lastUpdate.IsZero() {
 		t.Errorf("ClearRRAs: with false: ds.lastUpdate.IsZero()")

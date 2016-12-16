@@ -48,8 +48,8 @@ type DataSourcer interface {
 
 // NewDataSource returns a new DataSource in accordance with the passed
 // in DSSpec.
-func NewDataSource(spec *DSSpec) *DataSource {
-	return &DataSource{
+func NewDataSource(spec DSSpec) *DataSource {
+	result := &DataSource{
 		step:       spec.Step,
 		heartbeat:  spec.Heartbeat,
 		lastUpdate: spec.LastUpdate,
@@ -58,6 +58,13 @@ func NewDataSource(spec *DSSpec) *DataSource {
 			duration: spec.Duration,
 		},
 	}
+
+	for _, rspec := range spec.RRAs {
+		rra := NewRoundRobinArchive(rspec)
+		result.rras = append(result.rras, rra)
+	}
+
+	return result
 }
 
 // Step returns the step, i.e. the size of the PDP. All RRAs this DS
@@ -311,7 +318,7 @@ func (ds *DataSource) ClearRRAs(clearLU bool) {
 type DSSpec struct {
 	Step      time.Duration
 	Heartbeat time.Duration
-	RRAs      []*RRASpec
+	RRAs      []RRASpec
 
 	// These can be used to fill the initial value
 	LastUpdate time.Time

@@ -310,7 +310,7 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 
 	ds := NewDbDataSource(id, name,
 		rrd.NewDataSource(
-			&rrd.DSSpec{
+			rrd.DSSpec{
 				Step:       time.Duration(stepMs) * time.Millisecond,
 				Heartbeat:  time.Duration(hbMs) * time.Millisecond,
 				LastUpdate: *lastupdate,
@@ -342,7 +342,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*DbRoundRob
 		latest = &time.Time{}
 	}
 
-	spec := &rrd.RRASpec{
+	spec := rrd.RRASpec{
 		Step:     time.Duration(stepsPerRow) * dsStep,
 		Span:     time.Duration(stepsPerRow*size) * dsStep,
 		Xff:      xff,
@@ -509,7 +509,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra DbRoundRobinArchiver) error {
 			if n == rraSize/rraWidth {
 				end = (rraSize - 1) % rraWidth
 			}
-			dps := rra.DpsAsPGString(n*rraWidth, n*rraWidth+rraWidth-1)
+			dps := rra.DPsAsPGString(n*rraWidth, n*rraWidth+rraWidth-1)
 			if rows, err := p.sql1.Query(1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(1): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, 1, end+1, len(dps), n)
@@ -528,7 +528,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra DbRoundRobinArchiver) error {
 			if n == rraEnd/rraWidth {
 				end = rraEnd % rraWidth
 			}
-			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DPsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(2): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)
@@ -545,7 +545,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra DbRoundRobinArchiver) error {
 			if n == rraEnd/rraWidth {
 				end = rraEnd % rraWidth
 			}
-			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DPsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(3): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id, rraStart, rraEnd, start+1, end+1, len(dps), n)
@@ -565,7 +565,7 @@ func (p *pgSerDe) flushRoundRobinArchive(rra DbRoundRobinArchiver) error {
 			if n == rraSize/rraWidth {
 				end = (rraSize - 1) % rraWidth
 			}
-			dps := rra.DpsAsPGString(n*rraWidth+start, n*rraWidth+end)
+			dps := rra.DPsAsPGString(n*rraWidth+start, n*rraWidth+end)
 			if rows, err := p.sql1.Query(start+1, end+1, dps, rra.Id(), n); err == nil {
 				if debug {
 					log.Printf("flushRoundRobinArchive(4): rra.Id: %d rraStart: %d rra.End: %d params: s: %d e: %d len: %d n: %d", rra.Id(), rraStart, rraEnd, start+1, end+1, len(dps), n)

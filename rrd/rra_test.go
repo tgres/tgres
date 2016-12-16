@@ -34,7 +34,7 @@ func Test_RoundRobinArchive(t *testing.T) {
 	step, size, cf, xff, latest = 10*time.Second, 100, WMEAN, 0.5, time.Now()
 
 	// Again, this time good data
-	rra := NewRoundRobinArchive(&RRASpec{Step: step, Span: time.Duration(size) * step, Function: cf, Xff: xff, Latest: latest})
+	rra := NewRoundRobinArchive(RRASpec{Step: step, Span: time.Duration(size) * step, Function: cf, Xff: xff, Latest: latest})
 
 	if rra.cf != WMEAN || step != rra.step ||
 		size != rra.size || xff != rra.xff ||

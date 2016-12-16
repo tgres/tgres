@@ -295,10 +295,10 @@ func convertDSSpec(dsSpec *ConfigDSSpec) *rrd.DSSpec {
 	serdeDSSpec := &rrd.DSSpec{
 		Step:      dsSpec.Step.Duration,
 		Heartbeat: dsSpec.Heartbeat.Duration,
-		RRAs:      make([]*rrd.RRASpec, len(dsSpec.RRAs)),
+		RRAs:      make([]rrd.RRASpec, len(dsSpec.RRAs)),
 	}
 	for i, r := range dsSpec.RRAs {
-		serdeDSSpec.RRAs[i] = &rrd.RRASpec{
+		serdeDSSpec.RRAs[i] = rrd.RRASpec{
 			Function: r.Function,
 			Step:     r.Step,
 			Span:     r.Span,

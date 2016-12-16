@@ -29,7 +29,7 @@ type DbRoundRobinArchiver interface {
 	Id() int64
 	Width() int64
 	SlotRow(slot int64) int64
-	DpsAsPGString(start, end int64) string
+	DPsAsPGString(start, end int64) string
 }
 
 type DbRoundRobinArchive struct {
@@ -41,7 +41,7 @@ type DbRoundRobinArchive struct {
 func (rra *DbRoundRobinArchive) Id() int64    { return rra.id }
 func (rra *DbRoundRobinArchive) Width() int64 { return rra.width }
 
-func NewDbRoundRobinArchive(id, width int64, spec *rrd.RRASpec) (*DbRoundRobinArchive, error) {
+func NewDbRoundRobinArchive(id, width int64, spec rrd.RRASpec) (*DbRoundRobinArchive, error) {
 	if spec.Span == 0 {
 		return nil, fmt.Errorf("Invalid size: Span cannot be 0.")
 	}
@@ -71,11 +71,11 @@ func (rra *DbRoundRobinArchive) SlotRow(slot int64) int64 {
 	}
 }
 
-// DpsAsPGString returns data points as a PostgreSQL-compatible array string
-func (rra *DbRoundRobinArchive) DpsAsPGString(start, end int64) string {
+// DPsAsPGString returns data points as a PostgreSQL-compatible array string
+func (rra *DbRoundRobinArchive) DPsAsPGString(start, end int64) string {
 	var b bytes.Buffer
 	b.WriteString("{")
-	dps := rra.Dps()
+	dps := rra.DPs()
 	for i := start; i <= end; i++ {
 		b.WriteString(strconv.FormatFloat(dps[int64(i)], 'f', -1, 64))
 		if i != end {
