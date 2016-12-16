@@ -31,6 +31,7 @@ type DataSource struct {
 	rras       []RoundRobinArchiver // Array of Round Robin Archives
 }
 
+// DataSourcer is a DataSource as an interface.
 type DataSourcer interface {
 	Pdper
 	Step() time.Duration
@@ -45,8 +46,8 @@ type DataSourcer interface {
 	ProcessDataPoint(value float64, ts time.Time) error
 }
 
-// NewDataSource return a new DataSource in accordance with the passed
-// in spec.
+// NewDataSource returns a new DataSource in accordance with the passed
+// in DSSpec.
 func NewDataSource(spec *DSSpec) *DataSource {
 	return &DataSource{
 		step:       spec.Step,
@@ -59,12 +60,24 @@ func NewDataSource(spec *DSSpec) *DataSource {
 	}
 }
 
-func (ds *DataSource) Step() time.Duration               { return ds.step }
-func (ds *DataSource) Heartbeat() time.Duration          { return ds.heartbeat }
-func (ds *DataSource) LastUpdate() time.Time             { return ds.lastUpdate }
-func (ds *DataSource) RRAs() []RoundRobinArchiver        { return ds.rras }
+// Step returns the step, i.e. the size of the PDP. All RRAs this DS
+// has must have steps that are a multiple of this Step.
+func (ds *DataSource) Step() time.Duration { return ds.step }
+
+// Heartbeat returns the interval size which if passed without any
+// data renders the data NaN.
+func (ds *DataSource) Heartbeat() time.Duration { return ds.heartbeat }
+
+// LastUpdate returns the timestamp of the last Data Point processed
+func (ds *DataSource) LastUpdate() time.Time { return ds.lastUpdate }
+
+// List of Round Robin Archives this Data Source has
+func (ds *DataSource) RRAs() []RoundRobinArchiver { return ds.rras }
+
+// SetRRAs provides a way to set the RRAs (which may contain data)
 func (ds *DataSource) SetRRAs(rras []RoundRobinArchiver) { ds.rras = rras }
 
+// Returns a complete copy of this Data Source
 func (ds *DataSource) Copy() DataSourcer {
 	newDs := &DataSource{
 		Pdp:        Pdp{value: ds.value, duration: ds.duration},

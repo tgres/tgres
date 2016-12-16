@@ -29,7 +29,7 @@ const (
 	LAST                       // Last
 )
 
-// RoundRobinArchive and all its parameters.
+// A Round Robin Archive and all its parameters.
 type RoundRobinArchive struct {
 	Pdp
 	// Consolidation function (CF). How data points from a
@@ -72,6 +72,7 @@ type RoundRobinArchive struct {
 	end int64
 }
 
+// RoundRobinArchive as an interface
 type RoundRobinArchiver interface {
 	Pdper
 	Latest() time.Time
@@ -91,13 +92,27 @@ type RoundRobinArchiver interface {
 	update(periodBegin, periodEnd time.Time, value float64, duration time.Duration)
 }
 
-func (rra *RoundRobinArchive) Latest() time.Time      { return rra.latest }
-func (rra *RoundRobinArchive) Step() time.Duration    { return rra.step }
-func (rra *RoundRobinArchive) Size() int64            { return rra.size }
-func (rra *RoundRobinArchive) Start() int64           { return rra.start }
-func (rra *RoundRobinArchive) End() int64             { return rra.end }
+// Latest returns the time on which the last slot ends.
+func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
+
+// Step of this RRA
+func (rra *RoundRobinArchive) Step() time.Duration { return rra.step }
+
+// Number of data points in this RRA
+func (rra *RoundRobinArchive) Size() int64 { return rra.size }
+
+// Index of the first slot for which we have data (between 0 and Size-1).
+func (rra *RoundRobinArchive) Start() int64 { return rra.start }
+
+// Index of the last slot for which we have data. It's possible for
+// end to be less than start when the RRD wraps around.
+func (rra *RoundRobinArchive) End() int64 { return rra.end }
+
+// Dps returns data points as a map of floats. It's a map rather than
+// a slice to be more space-efficient for sparse series.
 func (rra *RoundRobinArchive) Dps() map[int64]float64 { return rra.dps }
 
+// Returns a new RRA in accordance with the provided RRASpec.
 func NewRoundRobinArchive(spec *RRASpec) *RoundRobinArchive {
 	return &RoundRobinArchive{
 		step:   spec.Step,
@@ -112,6 +127,7 @@ func NewRoundRobinArchive(spec *RRASpec) *RoundRobinArchive {
 	}
 }
 
+// Returns a complete copy of the RRA.
 func (rra *RoundRobinArchive) Copy() RoundRobinArchiver {
 	new_rra := &RoundRobinArchive{
 		Pdp:    Pdp{value: rra.value, duration: rra.duration},
@@ -223,6 +239,7 @@ func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
 	rra.Reset()
 }
 
+// clears the data in dps
 func (rra *RoundRobinArchive) clear() {
 	if len(rra.dps) > 0 {
 		rra.dps = make(map[int64]float64)
@@ -230,7 +247,7 @@ func (rra *RoundRobinArchive) clear() {
 	rra.start, rra.end = 0, 0
 }
 
-// RRASpec is the RRA definition part of DSSpec.
+// RRASpec is the RRA definition for NewRoundRobinArchive.
 type RRASpec struct {
 	Function Consolidation
 	Step     time.Duration // duration of a single step

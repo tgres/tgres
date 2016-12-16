@@ -79,6 +79,7 @@ type Pdper interface {
 	Duration() time.Duration
 }
 
+// The current value of the PDP. If duration is 0, this returns NaN.
 func (p *Pdp) Value() float64 {
 	if p.duration == 0 {
 		return math.NaN()
