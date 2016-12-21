@@ -19,9 +19,6 @@ package http
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/dsl"
-	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/receiver"
 	"log"
 	"math"
 	"net/http"
@@ -29,12 +26,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/misc"
 )
 
-func GraphiteMetricsFindHandler(rcvr *receiver.Receiver) http.HandlerFunc {
+func GraphiteMetricsFindHandler(rcache *dsl.ReadCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
-		nodes := rcvr.Rcache.FsFind(r.FormValue("query"))
+		nodes := rcache.FsFind(r.FormValue("query"))
 		for n, node := range nodes {
 			parts := strings.Split(node.Name, ".")
 			if node.Leaf {
@@ -50,7 +50,7 @@ func GraphiteMetricsFindHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 	}
 }
 
-func GraphiteRenderHandler(rcvr *receiver.Receiver) http.HandlerFunc {
+func GraphiteRenderHandler(rcache *dsl.ReadCache) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -80,7 +80,7 @@ func GraphiteRenderHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 
 		for tn, target := range r.Form["target"] {
 
-			seriesMap, err := processTarget(rcvr, target, from.Unix(), to.Unix(), int64(points))
+			seriesMap, err := processTarget(rcache, target, from.Unix(), to.Unix(), int64(points))
 
 			if err != nil {
 				log.Printf("RenderHandler(): %v", err)
@@ -104,7 +104,7 @@ func GraphiteRenderHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 						fmt.Fprintf(w, ",")
 					}
 					value := series.CurrentValue()
-					ts := series.CurrentPosBeginsAfter().Unix() // NOTE: Graphite protocol marks the *beginning* of the point
+					ts := series.CurrentTime().Add(-series.Step()).Unix() // NOTE: Graphite protocol marks the *beginning* of the point
 					if ts > 0 {
 						if math.IsNaN(value) || math.IsInf(value, 0) {
 							fmt.Fprintf(w, "[null, %v]", ts)
@@ -169,11 +169,11 @@ func quoteIdentifiers(target string) string {
 	return result
 }
 
-func processTarget(rcvr *receiver.Receiver, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
+func processTarget(rcache *dsl.ReadCache, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	target = quoteIdentifiers(target)
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	dc := dsl.NewDslCtx(rcvr.Rcache, query, from, to, maxPoints)
+	dc := dsl.NewDslCtx(rcache, query, from, to, maxPoints)
 	result, err := dc.ParseDsl()
 	return result, err
 }

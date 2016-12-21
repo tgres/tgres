@@ -13,24 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package serde
+package rrd
 
-import (
-	"time"
-)
+import "time"
 
 type Series interface {
 	Next() bool
 	Close() error
 
 	CurrentValue() float64
-	CurrentPosBeginsAfter() time.Time
-	CurrentPosEndsOn() time.Time
 
-	StepMs() int64
-	GroupByMs(...int64) int64
+	// The time one which the current slot ends. The next slot begins
+	// immediately after this time.
+	CurrentTime() time.Time
+
+	Step() time.Duration
+	GroupBy(...time.Duration) time.Duration
 	TimeRange(...time.Time) (time.Time, time.Time)
-	LastUpdate() time.Time
+	Latest() time.Time
 	MaxPoints(...int64) int64
 
 	Alias(...string) string

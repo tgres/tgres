@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/serde"
+	"github.com/tgres/tgres/rrd"
 )
 
 // We have two confusingly similar types here - SeriesMap and
@@ -54,7 +54,7 @@ import (
 //  - is how we give Series names - the key is the name
 //  - does not support duplicates - same series would need different names
 
-type SeriesMap map[string]serde.Series
+type SeriesMap map[string]rrd.Series
 
 func (sm SeriesMap) SortedKeys() []string {
 	keys := make([]string, 0, len(sm))
@@ -529,7 +529,7 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 // CurrentValue()). It is useful for bunching Series together to call
 // Next() and Close() on all of them (e.g. in avg() or sum()).
 
-type SeriesSlice []serde.Series
+type SeriesSlice []rrd.Series
 type SeriesList struct {
 	SeriesSlice
 	alias string
@@ -548,16 +548,9 @@ func (sl *SeriesList) Next() bool {
 	return true
 }
 
-func (sl *SeriesList) CurrentPosBeginsAfter() time.Time {
+func (sl *SeriesList) CurrentTime() time.Time {
 	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].CurrentPosBeginsAfter()
-	}
-	return time.Time{}
-}
-
-func (sl *SeriesList) CurrentPosEndsOn() time.Time {
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].CurrentPosEndsOn()
+		return sl.SeriesSlice[0].CurrentTime()
 	}
 	return time.Time{}
 }
@@ -571,18 +564,18 @@ func (sl *SeriesList) Close() error {
 	return nil
 }
 
-func (sl *SeriesList) StepMs() int64 {
+func (sl *SeriesList) Step() time.Duration {
 	// This returns the StepMs of the first series since we should
 	// assume they are aligned (thus equeal). Then if we happen to be
 	// encapsulated in a another SeriesList, it might overrule the
 	// GroupByMs.
-	return sl.SeriesSlice[0].StepMs()
+	return sl.SeriesSlice[0].Step()
 }
 
-func (sl *SeriesList) GroupByMs(ms ...int64) int64 {
+func (sl *SeriesList) GroupBy(ms ...time.Duration) time.Duration {
 	// getter only, no setter
 	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].GroupByMs()
+		return sl.SeriesSlice[0].GroupBy()
 	}
 	return 0
 }
@@ -608,9 +601,9 @@ func (sl *SeriesList) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return time.Time{}, time.Time{}
 }
 
-func (sl *SeriesList) LastUpdate() time.Time {
+func (sl *SeriesList) Latest() time.Time {
 	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].LastUpdate()
+		return sl.SeriesSlice[0].Latest()
 	}
 	return time.Time{}
 }
@@ -651,14 +644,14 @@ func (sl *SeriesList) Align() {
 	var result int64 = -1
 	for _, series := range sl.SeriesSlice {
 		if result == -1 {
-			result = series.StepMs()
+			result = series.Step().Nanoseconds() / 1e6
 			continue
 		}
-		result = lcm(result, series.StepMs())
+		result = lcm(result, series.Step().Nanoseconds()/1e6)
 	}
 
 	for _, series := range sl.SeriesSlice {
-		series.GroupByMs(result)
+		series.GroupBy(time.Duration(result) * time.Millisecond)
 	}
 }
 
@@ -787,7 +780,7 @@ func argsAsString(args []interface{}) string {
 // e.g. Max(), Avr(), StdDev(), etc.
 
 type seriesWithSummaries struct {
-	serde.Series
+	rrd.Series
 }
 
 func (f *seriesWithSummaries) Max() (max float64) {
@@ -1177,7 +1170,7 @@ func dslIsNonNull(args map[string]interface{}) (SeriesMap, error) {
 // absolute()
 
 type seriesAbsolute struct {
-	serde.Series
+	rrd.Series
 }
 
 func (f *seriesAbsolute) CurrentValue() float64 {
@@ -1198,7 +1191,7 @@ func dslAbsolute(args map[string]interface{}) (SeriesMap, error) {
 // scale()
 
 type seriesScale struct {
-	serde.Series
+	rrd.Series
 	factor float64
 }
 
@@ -1222,7 +1215,7 @@ func dslScale(args map[string]interface{}) (SeriesMap, error) {
 // derivative()
 
 type seriesDerivative struct {
-	serde.Series
+	rrd.Series
 	last float64
 }
 
@@ -1247,7 +1240,7 @@ func dslDerivative(args map[string]interface{}) (SeriesMap, error) {
 // integral()
 
 type seriesIntegral struct {
-	serde.Series
+	rrd.Series
 	total float64
 }
 
@@ -1275,7 +1268,7 @@ func dslIntegral(args map[string]interface{}) (SeriesMap, error) {
 // logarithm()
 
 type seriesLogarithm struct {
-	serde.Series
+	rrd.Series
 	base float64
 }
 
@@ -1296,7 +1289,7 @@ func dslLogarithm(args map[string]interface{}) (SeriesMap, error) {
 // nonNegativeDerivative()
 
 type seriesNonNegativeDerivative struct {
-	serde.Series
+	rrd.Series
 	last     float64
 	maxValue float64
 }
@@ -1343,7 +1336,7 @@ func dslNonNegativeDerivative(args map[string]interface{}) (SeriesMap, error) {
 // offset()
 
 type seriesOffset struct {
-	serde.Series
+	rrd.Series
 	offset float64
 }
 
@@ -1364,7 +1357,7 @@ func dslOffset(args map[string]interface{}) (SeriesMap, error) {
 // offsetToZero()
 
 type seriesOffsetToZero struct {
-	serde.Series
+	rrd.Series
 	offset float64
 }
 
@@ -1394,7 +1387,7 @@ func dslOffsetToZero(args map[string]interface{}) (SeriesMap, error) {
 // we're not actually generating graphs.
 
 type seriesTimeShift struct {
-	serde.Series
+	rrd.Series
 	timeShift time.Duration
 }
 
@@ -1417,12 +1410,8 @@ func parseTimeShift(s string) (time.Duration, error) {
 	}
 }
 
-func (f *seriesTimeShift) CurrentPosBeginsAfter() time.Time {
-	return f.Series.CurrentPosBeginsAfter().Add(f.timeShift)
-}
-
-func (f *seriesTimeShift) CurrentPosEndsOn() time.Time {
-	return f.Series.CurrentPosEndsOn().Add(f.timeShift)
+func (f *seriesTimeShift) CurrentTime() time.Time {
+	return f.Series.CurrentTime().Add(f.timeShift)
 }
 
 func dslTimeShift(args map[string]interface{}) (SeriesMap, error) {
@@ -1444,7 +1433,7 @@ func dslTimeShift(args map[string]interface{}) (SeriesMap, error) {
 // transformNull()
 
 type seriesTransformNull struct {
-	serde.Series
+	rrd.Series
 	dft float64
 }
 
@@ -1469,7 +1458,7 @@ func dslTransformNull(args map[string]interface{}) (SeriesMap, error) {
 // nPercentile()
 
 type seriesNPercentile struct {
-	serde.Series
+	rrd.Series
 	n          float64
 	percentile float64
 }
@@ -1739,7 +1728,7 @@ func dslMostDeviant(args map[string]interface{}) (SeriesMap, error) {
 // movingAverage()
 
 type seriesMovingAverage struct {
-	serde.Series
+	rrd.Series
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1751,7 +1740,7 @@ func (f *seriesMovingAverage) Next() bool {
 	// join with the time generate_series, and thus never skip a time
 	// period
 	if f.dur != 0 && f.points == 0 {
-		f.points = int((f.dur.Nanoseconds()/1000000)/f.GroupByMs()) + 1 // +1 to avoid div by 0
+		f.points = int(f.dur/f.GroupBy()) + 1 // +1 to avoid div by 0
 	}
 	// initial build up
 	for len(f.window) < f.points {
@@ -1805,7 +1794,7 @@ func dslMovingAverage(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar as movingAverage?
 
 type seriesMovingMedian struct {
-	serde.Series
+	rrd.Series
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1817,7 +1806,7 @@ func (f *seriesMovingMedian) Next() bool {
 	// join with the time generate_series, and thus never skip a time
 	// period
 	if f.dur != 0 && f.points == 0 {
-		f.points = int((f.dur.Nanoseconds()/1000000)/f.GroupByMs()) + 1 // +1 to avoid div by 0
+		f.points = int(f.dur/f.GroupBy()) + 1 // +1 to avoid div by 0
 	}
 	// initial build up
 	for len(f.window) < f.points {
@@ -1878,7 +1867,7 @@ func dslMovingMedian(args map[string]interface{}) (SeriesMap, error) {
 // removeAbovePercentile()
 
 type seriesRemoveAbovePercentile struct {
-	serde.Series
+	rrd.Series
 	n          float64
 	percentile float64
 	computed   bool
@@ -1921,7 +1910,7 @@ func dslRemoveAbovePercentile(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeBelowPercentile()
 
 type seriesRemoveBelowPercentile struct {
-	serde.Series
+	rrd.Series
 	n          float64
 	percentile float64
 	computed   bool
@@ -1963,7 +1952,7 @@ func dslRemoveBelowPercentile(args map[string]interface{}) (SeriesMap, error) {
 // removeAboveValue()
 
 type seriesRemoveAboveValue struct {
-	serde.Series
+	rrd.Series
 	n float64
 }
 
@@ -1989,7 +1978,7 @@ func dslRemoveAboveValue(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeAboveValue()
 
 type seriesRemoveBelowValue struct {
-	serde.Series
+	rrd.Series
 	n float64
 }
 
@@ -2038,7 +2027,7 @@ func stdDevFloat64(data []float64) float64 {
 // movingStdDev()
 // TODO threshold not yet implemented
 type seriesMovingStdDev struct {
-	serde.Series
+	rrd.Series
 	// avg over n points or time duration for n points, the slice size
 	// is the marker
 	window    []float64
@@ -2115,8 +2104,8 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	weightSeries := args["seriesListWeight"].(SeriesMap)
 	n := int(args["node"].(float64))
 
-	avgByPart := make(map[string]serde.Series, 0)
-	weightByPart := make(map[string]serde.Series, 0)
+	avgByPart := make(map[string]rrd.Series, 0)
+	weightByPart := make(map[string]rrd.Series, 0)
 
 	for k, v := range avgSeries {
 		parts := strings.Split(k, ".")
@@ -2159,7 +2148,7 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 // changed()
 
 type seriesChanged struct {
-	serde.Series
+	rrd.Series
 	last float64
 }
 
@@ -2205,7 +2194,7 @@ func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
 // holtWintersForecast
 
 type seriesHoltWintersForecast struct {
-	serde.Series
+	rrd.Series
 	data      []float64
 	result    []float64
 	upper     []float64
@@ -2234,7 +2223,7 @@ func (f *seriesHoltWintersForecast) nanlessData() ([]float64, time.Time, error) 
 			val = last // TODO can we do better?
 		}
 		if start.IsZero() {
-			start = f.Series.CurrentPosEndsOn()
+			start = f.Series.CurrentTime()
 		}
 		result = append(result, val)
 		last = val
@@ -2245,7 +2234,7 @@ func (f *seriesHoltWintersForecast) nanlessData() ([]float64, time.Time, error) 
 
 // season length in points
 func (f *seriesHoltWintersForecast) seasonPoints() int {
-	return int(f.seasonLen.Nanoseconds() / f.GroupByMs() / 1000000)
+	return int(f.seasonLen / f.GroupBy())
 }
 
 func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
@@ -2287,10 +2276,10 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// Push back beginning of our data seasonLimit from no later than LastUpdate
 		var adjustedFrom time.Time
-		if to.Before(s.LastUpdate()) {
+		if to.Before(s.Latest()) {
 			adjustedFrom = to.Add(-slen * time.Duration(seasonLimit))
 		} else {
-			adjustedFrom = s.LastUpdate().Add(-slen * time.Duration(seasonLimit))
+			adjustedFrom = s.Latest().Add(-slen * time.Duration(seasonLimit))
 		}
 
 		// If we went beyond "viewport", adjust the underlying Series and MaxPoints
@@ -2315,8 +2304,8 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// Calculate the forecast point count
 		var nPreds int = 0
-		if to.After(s.LastUpdate()) {
-			nPreds = int((to.Sub(s.LastUpdate()).Nanoseconds() / 1000000) / s.GroupByMs())
+		if to.After(s.Latest()) {
+			nPreds = int(to.Sub(s.Latest()) / s.GroupBy())
 		}
 
 		// Run the exponential smoothing algo
@@ -2339,10 +2328,10 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// If the "viewport" is smaller than our data, figure out how many points we should
 		// send across. Ensure from is aligned on GroupByMs first
-		from = time.Unix((from.Unix()*1000/s.GroupByMs()*s.GroupByMs())/1000, 0)
+		from = from.Truncate(s.GroupBy())
 		if nanlessBegin.Before(from) {
-			big := float64(to.Sub(nanlessBegin).Nanoseconds() / 1000000)
-			small := float64(from.Sub(nanlessBegin).Nanoseconds() / 1000000)
+			big := to.Sub(nanlessBegin).Seconds()
+			small := from.Sub(nanlessBegin).Seconds()
 			viewPoints := len(smooth) - int(small/big*float64(len(smooth)))
 			nanlessBegin = from
 			shw.result = smooth[len(smooth)-viewPoints:]
@@ -2352,11 +2341,11 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// This is the actual output
 		ss := &SliceSeries{
-			data:   shw.result,
-			start:  nanlessBegin,
-			stepMs: shw.GroupByMs(),
-			pos:    -1,
-			alias:  shw.Alias(),
+			data:  shw.result,
+			start: nanlessBegin,
+			step:  shw.GroupBy(),
+			pos:   -1,
+			alias: shw.Alias(),
 		}
 
 		if strings.Contains(show, "smooth") {
@@ -2367,11 +2356,11 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 			// upper band
 			uc := &SliceSeries{
-				data:   make([]float64, len(shw.result)),
-				start:  nanlessBegin,
-				stepMs: shw.GroupByMs(),
-				pos:    -1,
-				alias:  shw.Alias(),
+				data:  make([]float64, len(shw.result)),
+				start: nanlessBegin,
+				step:  shw.GroupBy(),
+				pos:   -1,
+				alias: shw.Alias(),
 			}
 			uc.Alias(fmt.Sprintf("holtWintersConfidenceUpper(%v)", name))
 
@@ -2385,11 +2374,11 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 			// lower band
 			lc := &SliceSeries{
-				data:   make([]float64, len(shw.result)),
-				start:  nanlessBegin,
-				stepMs: shw.GroupByMs(),
-				pos:    -1,
-				alias:  shw.Alias(),
+				data:  make([]float64, len(shw.result)),
+				start: nanlessBegin,
+				step:  shw.GroupBy(),
+				pos:   -1,
+				alias: shw.Alias(),
 			}
 			lc.Alias(fmt.Sprintf("holtWintersConfidenceLower(%v)", name))
 
@@ -2403,11 +2392,11 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 				// aberrations
 				ab := &SliceSeries{
-					data:   make([]float64, len(shw.result)),
-					start:  nanlessBegin,
-					stepMs: shw.GroupByMs(),
-					pos:    -1,
-					alias:  shw.Alias(),
+					data:  make([]float64, len(shw.result)),
+					start: nanlessBegin,
+					step:  shw.GroupBy(),
+					pos:   -1,
+					alias: shw.Alias(),
 				}
 				lc.Alias(fmt.Sprintf("holtWintersAberration(%v)", name))
 

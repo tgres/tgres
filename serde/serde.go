@@ -44,7 +44,7 @@ type DataSourceFlusher interface {
 }
 
 type SeriesQuerier interface {
-	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (Series, error)
+	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (rrd.Series, error)
 }
 
 type DataSourceSerDe interface {

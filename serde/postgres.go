@@ -699,7 +699,7 @@ func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (Series, error) {
+func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (rrd.Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 
@@ -723,5 +723,5 @@ func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints 
 	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
 	// to be the earliest of "to" or "LastUpdate".
 	dps := &dbSeries{db: p, ds: dbds, rra: dbrra, from: from, to: to, maxPoints: maxPoints}
-	return Series(dps), nil
+	return dps, nil
 }

@@ -40,8 +40,8 @@ type dbSeries struct {
 	rows *sql.Rows
 
 	// These are not the same:
-	maxPoints int64 // max points we want
-	groupByMs int64 // requested alignment
+	maxPoints int64         // max points we want
+	groupBy   time.Duration // requested alignment
 
 	latest time.Time
 
@@ -49,18 +49,18 @@ type dbSeries struct {
 	alias string
 }
 
-func (dps *dbSeries) StepMs() int64 {
-	return dps.rra.Step().Nanoseconds() / 1000000
+func (dps *dbSeries) Step() time.Duration {
+	return dps.rra.Step()
 }
 
-func (dps *dbSeries) GroupByMs(ms ...int64) int64 {
-	if len(ms) > 0 {
-		defer func() { dps.groupByMs = ms[0] }()
+func (dps *dbSeries) GroupBy(td ...time.Duration) time.Duration {
+	if len(td) > 0 {
+		defer func() { dps.groupBy = td[0] }()
 	}
-	if dps.groupByMs == 0 {
-		return dps.StepMs()
+	if dps.groupBy == 0 {
+		return dps.Step()
 	}
-	return dps.groupByMs
+	return dps.groupBy
 }
 
 func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
@@ -72,8 +72,8 @@ func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return dps.from, dps.to
 }
 
-func (dps *dbSeries) LastUpdate() time.Time {
-	return dps.ds.LastUpdate()
+func (dps *dbSeries) Latest() time.Time {
+	return dps.rra.Latest()
 }
 
 func (dps *dbSeries) MaxPoints(n ...int64) int64 {
@@ -100,12 +100,13 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 
 	var (
 		finalGroupByMs int64
-		rraStepMs      = dps.rra.Step().Nanoseconds() / 1000000
+		groupByMs      = dps.groupBy.Nanoseconds() / 1e6
+		rraStepMs      = dps.rra.Step().Nanoseconds() / 1e6
 	)
 
-	if dps.groupByMs != 0 {
+	if dps.groupBy != 0 {
 		// Specific granularity was requested for alignment, we ignore maxPoints
-		finalGroupByMs = finalGroupByMs/dps.groupByMs*dps.groupByMs + dps.groupByMs
+		finalGroupByMs = finalGroupByMs/groupByMs*groupByMs + groupByMs
 	} else if dps.maxPoints != 0 {
 		// If maxPoints was specified, then calculate group by interval
 		finalGroupByMs = (dps.to.Unix() - dps.from.Unix()) * 1000 / dps.maxPoints
@@ -120,21 +121,20 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	}
 
 	// Ensure that the true group by interval is reflected in the series.
-	if finalGroupByMs != dps.groupByMs {
-		dps.groupByMs = finalGroupByMs
+	if finalGroupByMs != dps.groupBy.Nanoseconds()/1e6 {
+		dps.groupBy = time.Duration(finalGroupByMs) * time.Millisecond
 	}
 
-	// Ensure that we never return data beyond lastUpdate (it would
+	// Ensure that we never return data beyond rra.latest (it would
 	// cause us to return bogus data because the RRD would wrap
 	// around). We do this *after* calculating groupBy because groupBy
 	// should be based on the screen resolution, not what we have in
 	// the db.
-	if dps.to.After(dps.LastUpdate()) {
-		dps.to = dps.LastUpdate()
+	if dps.to.After(dps.Latest()) {
+		dps.to = dps.Latest()
 	}
 
-	// TODO: support milliseconds?
-	aligned_from := time.Unix(dps.from.Unix()/(finalGroupByMs/1000)*(finalGroupByMs/1000), 0)
+	aligned_from := dps.from.Truncate(time.Duration(finalGroupByMs) * time.Millisecond)
 
 	if debug {
 		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
@@ -182,11 +182,7 @@ func (dps *dbSeries) CurrentValue() float64 {
 	return dps.value
 }
 
-func (dps *dbSeries) CurrentPosBeginsAfter() time.Time {
-	return dps.posBegin
-}
-
-func (dps *dbSeries) CurrentPosEndsOn() time.Time {
+func (dps *dbSeries) CurrentTime() time.Time {
 	return dps.posEnd
 }
 

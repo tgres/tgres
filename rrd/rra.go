@@ -151,7 +151,7 @@ func (rra *RoundRobinArchive) Copy() RoundRobinArchiver {
 // approximately but not exactly the RRA length ago, because it is
 // aligned on the RRA step boundary.
 func (rra *RoundRobinArchive) Begins(now time.Time) time.Time {
-	rraStart := now.Add(rra.step * time.Duration(rra.size) * -1).Truncate(rra.step)
+	rraStart := now.Add(-rra.step * time.Duration(rra.size)).Truncate(rra.step)
 	if now.Equal(now.Truncate(rra.step)) {
 		rraStart = rraStart.Add(rra.step)
 	}
@@ -227,12 +227,14 @@ func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
 		rra.dps = make(map[int64]float64)
 	}
 
-	slotN := ((endOfSlot.UnixNano() / 1000000) / (rra.step.Nanoseconds() / 1000000)) % int64(rra.size)
+	slotN := SlotIndex(endOfSlot, rra.step, rra.size)
 	rra.latest = endOfSlot
 	rra.dps[slotN] = rra.value
 
 	if len(rra.dps) == 1 {
 		rra.start = slotN
+	} else if rra.start == slotN { // The RRA has gone full-cicrle
+		rra.start = (slotN + 1) % rra.size
 	}
 	rra.end = slotN
 
@@ -245,6 +247,27 @@ func (rra *RoundRobinArchive) clear() {
 		rra.dps = make(map[int64]float64)
 	}
 	rra.start, rra.end = 0, 0
+}
+
+// Given a slot timestamp, RRA step and size, return the slot's index
+// in the data points array. Size of zero causes a division by zero panic.
+func SlotIndex(slotEnd time.Time, step time.Duration, size int64) int64 {
+	return ((slotEnd.UnixNano() / 1e6) / (step.Nanoseconds() / 1e6)) % size
+}
+
+// Distance between i and j indexes in an RRA. If i > j (the RRA wraps
+// around) then it is the sum of the distance from i to the end and
+// the beginning to j. Size of 0 causes a division by zero panic.
+func IndexDistance(i, j, size int64) int64 {
+	return (size + j - i) % size
+}
+
+// Given time of the latest slot, step and size, return the timestamp
+// on which slot n ends. Size of zero causes a division by zero panic.
+func SlotTime(n int64, latest time.Time, step time.Duration, size int64) time.Time {
+	latestN := SlotIndex(latest, step, size)
+	distance := IndexDistance(n, latestN, size)
+	return latest.Add(time.Duration(distance*-1) * step)
 }
 
 // RRASpec is the RRA definition for NewRoundRobinArchive.

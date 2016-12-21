@@ -17,13 +17,19 @@ package dsl
 
 import "github.com/tgres/tgres/serde"
 
+type rcacheSeriesQuerier interface {
+	serde.DataSourceNamesFetcher
+	serde.DataSourceFetcher
+	serde.SeriesQuerier
+}
+
 type ReadCache struct {
-	serde.SerDe
+	rcacheSeriesQuerier
 	dsns *DataSourceNames
 }
 
-func NewReadCache(db serde.SerDe) *ReadCache {
-	return &ReadCache{SerDe: db, dsns: &DataSourceNames{}}
+func NewReadCache(db rcacheSeriesQuerier) *ReadCache {
+	return &ReadCache{rcacheSeriesQuerier: db, dsns: &DataSourceNames{}}
 }
 
 func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {

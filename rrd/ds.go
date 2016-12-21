@@ -180,7 +180,7 @@ func (ds *DataSource) PointCount() int {
 func surroundingStep(mark time.Time, step time.Duration) (time.Time, time.Time) {
 	begin := mark.Truncate(step)
 	if mark.Equal(begin) { // We are exactly at the end, need to move one step back.
-		begin = begin.Add(step * -1)
+		begin = begin.Add(-step)
 	}
 	return begin, begin.Add(step)
 }
