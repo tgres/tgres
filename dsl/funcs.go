@@ -544,7 +544,6 @@ func (sl *SeriesList) Next() bool {
 			return false
 		}
 	}
-
 	return true
 }
 

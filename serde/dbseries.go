@@ -187,6 +187,9 @@ func (dps *dbSeries) CurrentTime() time.Time {
 }
 
 func (dps *dbSeries) Close() error {
+	if dps.rows == nil {
+		return fmt.Errorf("Close() on dbSeries that isn not open.")
+	}
 	result := dps.rows.Close()
 	dps.rows = nil // next Next() will re-open
 	return result
