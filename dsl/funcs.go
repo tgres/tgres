@@ -1,5 +1,5 @@
 //
-// Copyright 2015 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,52 +26,8 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/series"
 )
-
-// We have two confusingly similar types here - SeriesMap and
-// SeriesList. The key distinction is that you cannot see beyond a
-// SeriesList, it encapsulates and hides all Series within
-// it. E.g. when we compute avg(a, b), we end up with a new series and
-// no longer have access to a or b. This is done by way of SeriesList.
-//
-// The test is whether a "new" series is created. E.g. scale() is
-// given a bunch of series, and returns a bunch of series, so it
-// should use SeriesMap. avg() takes a bunch of series and returns
-// only one series, so it's a SeriesList.
-//
-// SeriesList
-//  - based on []Series
-//  - implements Series
-//  - aligns Series' within it to match on group by
-//  - series in it are not associated with a name (key)
-//  - it's a "mix of series" that can be treated as a series
-//  - supports duplicates
-//
-// SeriesMap
-//  - alias for map[string]Series
-//  - does NOT implement Series, it's a container of series, but not a series
-//  - is how we give Series names - the key is the name
-//  - does not support duplicates - same series would need different names
-
-type SeriesMap map[string]rrd.Series
-
-func (sm SeriesMap) SortedKeys() []string {
-	keys := make([]string, 0, len(sm))
-	for k, _ := range sm {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func (sm SeriesMap) toSeriesListPtr() *SeriesList {
-	result := SeriesList{SeriesSlice: make(SeriesSlice, 0)}
-	for _, key := range sm.SortedKeys() {
-		result.SeriesSlice = append(result.SeriesSlice, sm[key])
-	}
-	return &result
-}
 
 type argType int
 
@@ -475,7 +431,7 @@ func processArgs(dc *DslCtx, fn *dslFuncType, args []interface{}) (map[string]in
 						combined[n] = s
 					}
 				}
-				combined.toSeriesListPtr().Align()
+				combined.toAliasSeriesSlice().Align()
 				result[fnarg.name] = combined
 			} else {
 				result[fnarg.name] = value
@@ -525,242 +481,20 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 
 }
 
-// SeriesList is an "abstract" Series (it fails to implement
-// CurrentValue()). It is useful for bunching Series together to call
-// Next() and Close() on all of them (e.g. in avg() or sum()).
-
-type SeriesSlice []rrd.Series
-type SeriesList struct {
-	SeriesSlice
-	alias string
-}
-
-func (sl *SeriesList) Next() bool {
-	if len(sl.SeriesSlice) == 0 {
-		return false
-	}
-	for _, series := range sl.SeriesSlice {
-		if !series.Next() {
-			return false
-		}
-	}
-	return true
-}
-
-func (sl *SeriesList) CurrentTime() time.Time {
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].CurrentTime()
-	}
-	return time.Time{}
-}
-
-func (sl *SeriesList) Close() error {
-	for _, series := range sl.SeriesSlice {
-		if err := series.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (sl *SeriesList) Step() time.Duration {
-	// This returns the StepMs of the first series since we should
-	// assume they are aligned (thus equeal). Then if we happen to be
-	// encapsulated in a another SeriesList, it might overrule the
-	// GroupByMs.
-	return sl.SeriesSlice[0].Step()
-}
-
-func (sl *SeriesList) GroupBy(ms ...time.Duration) time.Duration {
-	// getter only, no setter
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].GroupBy()
-	}
-	return 0
-}
-
-func (sl *SeriesList) TimeRange(t ...time.Time) (time.Time, time.Time) {
-	if len(t) == 1 { // setter 1 arg
-		defer func() {
-			for _, series := range sl.SeriesSlice {
-				series.TimeRange(t[0])
-			}
-		}()
-	} else if len(t) == 2 { // setter 2 args
-		defer func() {
-			for _, series := range sl.SeriesSlice {
-				series.TimeRange(t[0], t[1])
-			}
-		}()
-	}
-	// getter
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].TimeRange()
-	}
-	return time.Time{}, time.Time{}
-}
-
-func (sl *SeriesList) Latest() time.Time {
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].Latest()
-	}
-	return time.Time{}
-}
-
-func (sl *SeriesList) MaxPoints(n ...int64) int64 {
-	if len(n) > 0 { // setter
-		defer func() {
-			for _, series := range sl.SeriesSlice {
-				series.MaxPoints(n[0])
-			}
-		}()
-	}
-	// getter
-	if len(sl.SeriesSlice) > 0 {
-		return sl.SeriesSlice[0].MaxPoints()
-	}
-	return 0
-}
-
-// Least Common Multiple
-func lcm(x, y int64) int64 {
-	if x == 0 || y == 0 {
-		return 0
-	}
-	p := x * y
-	for y != 0 {
-		mod := x % y
-		x, y = y, mod
-	}
-	return p / x
-}
-
-func (sl *SeriesList) Align() {
-	if len(sl.SeriesSlice) < 2 {
-		return
-	}
-
-	var result int64 = -1
-	for _, series := range sl.SeriesSlice {
-		if result == -1 {
-			result = series.Step().Nanoseconds() / 1e6
-			continue
-		}
-		result = lcm(result, series.Step().Nanoseconds()/1e6)
-	}
-
-	for _, series := range sl.SeriesSlice {
-		series.GroupBy(time.Duration(result) * time.Millisecond)
-	}
-}
-
-func (sl *SeriesList) Alias(s ...string) string {
-	if len(s) > 0 {
-		sl.alias = s[0]
-	}
-	return sl.alias
-}
-
-func (sl *SeriesList) Sum() (result float64) {
-	for _, series := range sl.SeriesSlice {
-		result += series.CurrentValue()
-	}
-	return
-}
-
-func (sl *SeriesList) Avg() float64 {
-	return sl.Sum() / float64(len(sl.SeriesSlice))
-}
-
-func (sl *SeriesList) Max() float64 {
-	result := math.NaN()
-	for _, series := range sl.SeriesSlice {
-		value := series.CurrentValue()
-		if math.IsNaN(result) || result < value {
-			result = value
-		}
-	}
-	return result
-}
-
-func (sl *SeriesList) Min() float64 {
-	result := math.NaN()
-	for _, series := range sl.SeriesSlice {
-		value := series.CurrentValue()
-		if math.IsNaN(result) || result > value {
-			result = value
-		}
-	}
-	return result
-}
-
-func (sl *SeriesList) First() float64 {
-	for _, series := range sl.SeriesSlice {
-		return series.CurrentValue()
-	}
-	return math.NaN()
-}
-
-func percentile(list []float64, p float64) float64 {
-	// https://github.com/rcrowley/go-metrics/blob/a248d281279ea605eccec4f54546fd998c060e38/sample.go#L278
-	size := len(list)
-	if size == 0 {
-		return math.NaN()
-	}
-	cpy := make([]float64, len(list))
-	copy(cpy, list)
-	sort.Float64s(cpy)
-	pos := p * float64(size+1)
-	if pos < 1.0 {
-		return cpy[0]
-	} else if pos >= float64(size) {
-		return cpy[size-1]
-	} else {
-		lower := cpy[int(pos)-1]
-		upper := cpy[int(pos)]
-		return lower + (pos-math.Floor(pos))*(upper-lower)
-	}
-}
-
-func (sl *SeriesList) Percentile(p float64) float64 {
-	// This is a percentile of one data point, not the whole series
-	dps := make([]float64, 0)
-	for _, series := range sl.SeriesSlice {
-		dps = append(dps, series.CurrentValue())
-	}
-	return percentile(dps, p)
-}
-
-func (sl *SeriesList) Range() float64 {
-	return sl.Max() - sl.Min()
-}
-
-func (sl *SeriesList) Diff() float64 {
-	if len(sl.SeriesSlice) == 0 {
-		return math.NaN()
-	}
-	// TODO SeriesList still needs to be ordered
-	result := sl.SeriesSlice[0].CurrentValue()
-	for _, series := range sl.SeriesSlice[1:] {
-		result -= series.CurrentValue()
-	}
-	return result
-}
-
-func NewSeriesListFromArgs(dc *DslCtx, args []interface{}) (*SeriesList, error) {
+func NewSeriesSliceFromArgs(dc *DslCtx, args []interface{}) (series.SeriesSlice, error) {
 
 	if len(args) == 0 {
-		return nil, fmt.Errorf("NewSeriesListFromArgs(): at least 1 arg required, 0 given")
+		return nil, fmt.Errorf("NewSeriesSliceFromArgs(): at least 1 arg required, 0 given")
 	}
 
-	result := &SeriesList{SeriesSlice: make(SeriesSlice, 0)}
+	result := series.SeriesSlice{}
 	for _, arg := range args {
 		series, err := dc.seriesFromSeriesOrIdent(arg)
 		if err != nil {
 			return nil, err
 		}
 		for _, s := range series {
-			result.SeriesSlice = append(result.SeriesSlice, s)
+			result = append(result, s)
 		}
 	}
 	result.Align()
@@ -775,73 +509,12 @@ func argsAsString(args []interface{}) string {
 	return strings.Join(sargs, ",")
 }
 
-// seriesWithSummaries provides some across-series summary functions,
-// e.g. Max(), Avr(), StdDev(), etc.
-
-type seriesWithSummaries struct {
-	rrd.Series
-}
-
-func (f *seriesWithSummaries) Max() (max float64) {
-	max = math.NaN()
-	for f.Series.Next() {
-		value := f.Series.CurrentValue()
-		if math.IsNaN(max) || value > max {
-			max = value
-		}
-	}
-	f.Series.Close()
-	return
-}
-
-func (f *seriesWithSummaries) Min() (min float64) {
-	min = math.NaN()
-	for f.Series.Next() {
-		value := f.Series.CurrentValue()
-		if math.IsNaN(min) || value < min {
-			min = value
-		}
-	}
-	f.Series.Close()
-	return
-}
-
-func (f *seriesWithSummaries) Avg() float64 {
-	count := 0
-	sum := float64(0)
-	for f.Series.Next() {
-		sum += f.Series.CurrentValue()
-		count++
-	}
-	f.Series.Close()
-	return sum / float64(count)
-}
-
-func (f *seriesWithSummaries) StdDev(avg float64) float64 {
-	count := 0
-	sum := float64(0)
-	for f.Series.Next() {
-		sum += math.Pow(f.Series.CurrentValue()-avg, 2)
-		count++
-	}
-	f.Series.Close()
-	return math.Sqrt(sum / float64(count-1))
-}
-
-func (f *seriesWithSummaries) Last() (last float64) {
-	for f.Series.Next() {
-		last = f.Series.CurrentValue()
-	}
-	f.Series.Close()
-	return
-}
-
 // ------------ functions ----------
 
 // maxSeries()
 
 type seriesMaxSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesMaxSeries) CurrentValue() float64 {
@@ -849,15 +522,15 @@ func (sl *seriesMaxSeries) CurrentValue() float64 {
 }
 
 func dslMaxSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesMaxSeries{*series}}, nil
+	return SeriesMap{name: &seriesMaxSeries{series}}, nil
 }
 
 // minSeries()
 
 type seriesMinSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesMinSeries) CurrentValue() float64 {
@@ -865,15 +538,15 @@ func (sl *seriesMinSeries) CurrentValue() float64 {
 }
 
 func dslMinSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesMinSeries{*series}}, nil
+	return SeriesMap{name: &seriesMinSeries{series}}, nil
 }
 
 // sumSeries()
 
 type seriesSumSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesSumSeries) CurrentValue() float64 {
@@ -881,15 +554,15 @@ func (sl *seriesSumSeries) CurrentValue() float64 {
 }
 
 func dslSumSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesSumSeries{*series}}, nil
+	return SeriesMap{name: &seriesSumSeries{series}}, nil
 }
 
 // diffSeries()
 
 type seriesDiffSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesDiffSeries) CurrentValue() float64 {
@@ -899,11 +572,11 @@ func (sl *seriesDiffSeries) CurrentValue() float64 {
 func dslDiffSeries(args map[string]interface{}) (SeriesMap, error) {
 	// We must use _args_ to preserve the order
 	argsAsSlice := args["_args_"].([]interface{})
-	sl := SeriesList{SeriesSlice: make(SeriesSlice, 0)}
+	sl := &aliasSeriesSlice{}
 	n := 0
 	for _, arg := range argsAsSlice {
-		if series, ok := arg.(SeriesMap); ok {
-			for _, s := range series.toSeriesListPtr().SeriesSlice {
+		if ss, ok := arg.(SeriesMap); ok {
+			for _, s := range ss.toAliasSeriesSlice().SeriesSlice {
 				sl.SeriesSlice = append(sl.SeriesSlice, s)
 				n++
 			}
@@ -946,7 +619,7 @@ func dslSumSeriesWithWildcards(dc *DslCtx, args []interface{}) (SeriesMap, error
 		}
 	}
 
-	result := &SeriesList{SeriesSlice: make(SeriesSlice, 0)}
+	result := &aliasSeriesSlice{}
 	series, err := dc.seriesFromSeriesOrIdent(newName)
 	if err != nil {
 		return nil, err
@@ -957,14 +630,14 @@ func dslSumSeriesWithWildcards(dc *DslCtx, args []interface{}) (SeriesMap, error
 	result.Align()
 
 	name = fmt.Sprintf("sumSeriesWithWildcards(%s)", argsAsString(args))
-	return SeriesMap{name: &seriesSumSeries{*result}}, nil
+	return SeriesMap{name: &seriesSumSeries{result}}, nil
 }
 
 // percentileOfSeries()
 // TODO the interpolate argument is ignored for now
 
 type seriesPercentileOfSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 	ptile float64
 }
 
@@ -973,16 +646,16 @@ func (sl *seriesPercentileOfSeries) CurrentValue() float64 {
 }
 
 func dslPercentileOfSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	ptile := args["n"].(float64) / 100
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesPercentileOfSeries{*series, ptile}}, nil
+	return SeriesMap{name: &seriesPercentileOfSeries{series, ptile}}, nil
 }
 
 // rangeOfSeries()
 
 type seriesRangeOfSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesRangeOfSeries) CurrentValue() float64 {
@@ -990,15 +663,15 @@ func (sl *seriesRangeOfSeries) CurrentValue() float64 {
 }
 
 func dslRangeOfSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesRangeOfSeries{*series}}, nil
+	return SeriesMap{name: &seriesRangeOfSeries{series}}, nil
 }
 
 // averageSeries()
 
 type seriesAverageSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesAverageSeries) CurrentValue() float64 {
@@ -1006,9 +679,9 @@ func (sl *seriesAverageSeries) CurrentValue() float64 {
 }
 
 func dslAverageSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesAverageSeries{*series}}, nil
+	return SeriesMap{name: &seriesAverageSeries{series}}, nil
 }
 
 // group()
@@ -1080,17 +753,17 @@ func dslAliasSub(args map[string]interface{}) (SeriesMap, error) {
 // asPercent()
 
 type seriesAsPercent struct {
-	SeriesList
+	*aliasSeriesSlice
 	my_idx      int
 	total       float64
-	totalSeries *SeriesList
+	totalSeries *aliasSeriesSlice
 }
 
 func (sl *seriesAsPercent) Next() bool {
 	if sl.totalSeries != nil {
 		sl.totalSeries.Next()
 	}
-	return sl.SeriesList.Next()
+	return sl.SeriesSlice.Next()
 }
 
 func (sl *seriesAsPercent) CurrentValue() float64 {
@@ -1107,7 +780,7 @@ func dslAsPercent(args map[string]interface{}) (SeriesMap, error) {
 
 	var (
 		total   float64 = math.NaN()
-		totSl   *SeriesList
+		totSl   *aliasSeriesSlice
 		totName string
 	)
 
@@ -1115,16 +788,16 @@ func dslAsPercent(args map[string]interface{}) (SeriesMap, error) {
 	case float64:
 		total = t
 	case SeriesMap:
-		totSl = t.toSeriesListPtr()
+		totSl = t.toAliasSeriesSlice()
 		// This is a hack (what if there is more than one series), but
 		// we need some kind of a name
 		totName = t.SortedKeys()[0]
 	}
 
-	// Wrap in seriesAsPercent AND build a SeriesList so we can do Sum
-	// The series needs to know its index in the SeriesList
+	// Wrap in seriesAsPercent AND build a SeriesSlice so we can do Sum
+	// The series needs to know its index in the SeriesSlice
 	result := args["seriesList"].(SeriesMap)
-	sl := &SeriesList{SeriesSlice: make(SeriesSlice, 0)}
+	sl := &aliasSeriesSlice{}
 	for _, key := range result.SortedKeys() {
 		sl.SeriesSlice = append(sl.SeriesSlice, result[key])
 	}
@@ -1137,7 +810,7 @@ func dslAsPercent(args map[string]interface{}) (SeriesMap, error) {
 		} else {
 			sl.Alias(fmt.Sprintf("asPersent(%s,%v)", name, total))
 		}
-		result[name] = &seriesAsPercent{*sl, n, total, totSl}
+		result[name] = &seriesAsPercent{sl, n, total, totSl}
 		n++
 	}
 
@@ -1147,7 +820,7 @@ func dslAsPercent(args map[string]interface{}) (SeriesMap, error) {
 // isNonNull
 
 type seriesIsNonNull struct {
-	SeriesList
+	*aliasSeriesSlice
 }
 
 func (sl *seriesIsNonNull) CurrentValue() float64 {
@@ -1161,19 +834,19 @@ func (sl *seriesIsNonNull) CurrentValue() float64 {
 }
 
 func dslIsNonNull(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesIsNonNull{*series}}, nil
+	return SeriesMap{name: &seriesIsNonNull{series}}, nil
 }
 
 // absolute()
 
 type seriesAbsolute struct {
-	rrd.Series
+	AliasSeries
 }
 
 func (f *seriesAbsolute) CurrentValue() float64 {
-	return math.Abs(f.Series.CurrentValue())
+	return math.Abs(f.AliasSeries.CurrentValue())
 }
 
 func dslAbsolute(args map[string]interface{}) (SeriesMap, error) {
@@ -1190,12 +863,12 @@ func dslAbsolute(args map[string]interface{}) (SeriesMap, error) {
 // scale()
 
 type seriesScale struct {
-	rrd.Series
+	AliasSeries
 	factor float64
 }
 
 func (f *seriesScale) CurrentValue() float64 {
-	return f.Series.CurrentValue() * f.factor
+	return f.AliasSeries.CurrentValue() * f.factor
 }
 
 func dslScale(args map[string]interface{}) (SeriesMap, error) {
@@ -1214,17 +887,17 @@ func dslScale(args map[string]interface{}) (SeriesMap, error) {
 // derivative()
 
 type seriesDerivative struct {
-	rrd.Series
+	AliasSeries
 	last float64
 }
 
 func (f *seriesDerivative) CurrentValue() float64 {
-	return f.Series.CurrentValue() - f.last
+	return f.AliasSeries.CurrentValue() - f.last
 }
 
 func (f *seriesDerivative) Next() bool {
-	f.last = f.Series.CurrentValue()
-	return f.Series.Next()
+	f.last = f.AliasSeries.CurrentValue()
+	return f.AliasSeries.Next()
 }
 
 func dslDerivative(args map[string]interface{}) (SeriesMap, error) {
@@ -1239,7 +912,7 @@ func dslDerivative(args map[string]interface{}) (SeriesMap, error) {
 // integral()
 
 type seriesIntegral struct {
-	rrd.Series
+	AliasSeries
 	total float64
 }
 
@@ -1248,11 +921,11 @@ func (f *seriesIntegral) CurrentValue() float64 {
 }
 
 func (f *seriesIntegral) Next() bool {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if !math.IsNaN(value) {
 		f.total += value
 	}
-	return f.Series.Next()
+	return f.AliasSeries.Next()
 }
 
 func dslIntegral(args map[string]interface{}) (SeriesMap, error) {
@@ -1267,12 +940,12 @@ func dslIntegral(args map[string]interface{}) (SeriesMap, error) {
 // logarithm()
 
 type seriesLogarithm struct {
-	rrd.Series
+	AliasSeries
 	base float64
 }
 
 func (f *seriesLogarithm) CurrentValue() float64 {
-	return math.Log(f.Series.CurrentValue()) / math.Log(f.base)
+	return math.Log(f.AliasSeries.CurrentValue()) / math.Log(f.base)
 }
 
 func dslLogarithm(args map[string]interface{}) (SeriesMap, error) {
@@ -1288,13 +961,13 @@ func dslLogarithm(args map[string]interface{}) (SeriesMap, error) {
 // nonNegativeDerivative()
 
 type seriesNonNegativeDerivative struct {
-	rrd.Series
+	AliasSeries
 	last     float64
 	maxValue float64
 }
 
 func (f *seriesNonNegativeDerivative) CurrentValue() float64 {
-	current := f.Series.CurrentValue()
+	current := f.AliasSeries.CurrentValue()
 	result := current - f.last
 	if result >= 0 {
 		return result
@@ -1307,19 +980,19 @@ func (f *seriesNonNegativeDerivative) CurrentValue() float64 {
 }
 
 func (f *seriesNonNegativeDerivative) Next() bool {
-	if !f.Series.Next() {
+	if !f.AliasSeries.Next() {
 		return false
 	}
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	for math.IsNaN(f.last) || value < f.last {
 		f.last = value
-		if !f.Series.Next() {
+		if !f.AliasSeries.Next() {
 			return false
 		}
-		value = f.Series.CurrentValue()
+		value = f.AliasSeries.CurrentValue()
 	}
 	f.last = value
-	return f.Series.Next()
+	return f.AliasSeries.Next()
 }
 
 func dslNonNegativeDerivative(args map[string]interface{}) (SeriesMap, error) {
@@ -1335,12 +1008,12 @@ func dslNonNegativeDerivative(args map[string]interface{}) (SeriesMap, error) {
 // offset()
 
 type seriesOffset struct {
-	rrd.Series
+	AliasSeries
 	offset float64
 }
 
 func (f *seriesOffset) CurrentValue() float64 {
-	return f.Series.CurrentValue() + f.offset
+	return f.AliasSeries.CurrentValue() + f.offset
 }
 
 func dslOffset(args map[string]interface{}) (SeriesMap, error) {
@@ -1356,20 +1029,20 @@ func dslOffset(args map[string]interface{}) (SeriesMap, error) {
 // offsetToZero()
 
 type seriesOffsetToZero struct {
-	rrd.Series
+	AliasSeries
 	offset float64
 }
 
 func (f *seriesOffsetToZero) Next() bool {
 	if math.IsNaN(f.offset) {
-		summary := &seriesWithSummaries{f.Series}
+		summary := &aliasSummarySeries{SummarySeries: &series.SummarySeries{f.AliasSeries}}
 		f.offset = summary.Min()
 	}
-	return f.Series.Next()
+	return f.AliasSeries.Next()
 }
 
 func (f *seriesOffsetToZero) CurrentValue() float64 {
-	return f.Series.CurrentValue() - f.offset
+	return f.AliasSeries.CurrentValue() - f.offset
 }
 
 func dslOffsetToZero(args map[string]interface{}) (SeriesMap, error) {
@@ -1386,7 +1059,7 @@ func dslOffsetToZero(args map[string]interface{}) (SeriesMap, error) {
 // we're not actually generating graphs.
 
 type seriesTimeShift struct {
-	rrd.Series
+	AliasSeries
 	timeShift time.Duration
 }
 
@@ -1410,7 +1083,7 @@ func parseTimeShift(s string) (time.Duration, error) {
 }
 
 func (f *seriesTimeShift) CurrentTime() time.Time {
-	return f.Series.CurrentTime().Add(f.timeShift)
+	return f.AliasSeries.CurrentTime().Add(f.timeShift)
 }
 
 func dslTimeShift(args map[string]interface{}) (SeriesMap, error) {
@@ -1432,12 +1105,12 @@ func dslTimeShift(args map[string]interface{}) (SeriesMap, error) {
 // transformNull()
 
 type seriesTransformNull struct {
-	rrd.Series
+	AliasSeries
 	dft float64
 }
 
 func (f *seriesTransformNull) CurrentValue() float64 {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if math.IsNaN(value) {
 		return f.dft
 	}
@@ -1457,7 +1130,7 @@ func dslTransformNull(args map[string]interface{}) (SeriesMap, error) {
 // nPercentile()
 
 type seriesNPercentile struct {
-	rrd.Series
+	AliasSeries
 	n          float64
 	percentile float64
 }
@@ -1470,14 +1143,14 @@ func (f *seriesNPercentile) Next() bool {
 	if math.IsNaN(f.percentile) {
 		// We traverse the whole series, and then it will be traversed
 		// again as the datapoints are sent to the client
-		series := make([]float64, 0)
-		for f.Series.Next() {
-			series = append(series, f.Series.CurrentValue())
+		s := make([]float64, 0)
+		for f.AliasSeries.Next() {
+			s = append(s, f.AliasSeries.CurrentValue())
 		}
-		f.Series.Close()
-		f.percentile = percentile(series, f.n)
+		f.AliasSeries.Close()
+		f.percentile = series.Percentile(s, f.n)
 	}
-	return f.Series.Next() // restart to the first Next()
+	return f.AliasSeries.Next() // restart to the first Next()
 }
 
 func dslNPercentile(args map[string]interface{}) (SeriesMap, error) {
@@ -1526,32 +1199,24 @@ func sortedKeys(m map[string]float64) []string {
 
 // highestCurrent()
 
-type seriesHighestCurrent struct {
-	seriesWithSummaries
-}
-
 func dslHighestCurrent(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap)
+	ss := args["seriesList"].(SeriesMap)
 	n := int(args["n"].(float64))
 	lasts := make(map[string]float64)
-	for name, s := range series {
+	for name, s := range ss {
 		s.Alias(fmt.Sprintf("highestCurrent(%v,%v)", name, n))
-		shc := &seriesHighestCurrent{seriesWithSummaries{s}}
+		shc := newAliasSummarySeries(s)
 		lasts[name] = shc.Last()
-		series[name] = shc
+		ss[name] = shc
 	}
 	sortedLasts := sortedKeys(lasts)
 	for i := 0; i < len(sortedLasts)-n; i++ {
-		delete(series, sortedLasts[i])
+		delete(ss, sortedLasts[i])
 	}
-	return series, nil
+	return ss, nil
 }
 
 // highestMax()
-
-type seriesHighestMax struct {
-	seriesWithSummaries
-}
 
 func dslHighestMax(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
@@ -1559,7 +1224,7 @@ func dslHighestMax(args map[string]interface{}) (SeriesMap, error) {
 	lasts := make(map[string]float64)
 	for name, s := range series {
 		s.Alias(fmt.Sprintf("highestMax(%v,%v)", name, n))
-		shm := &seriesHighestMax{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		lasts[name] = shm.Max()
 		series[name] = shm
 	}
@@ -1587,16 +1252,12 @@ func dslLimit(args map[string]interface{}) (SeriesMap, error) {
 
 // lowestAverage()
 
-type seriesLowestAverage struct {
-	seriesWithSummaries
-}
-
 func dslLowestAverage(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := int(args["n"].(float64))
 	avgs := make(map[string]float64)
 	for name, s := range series {
-		ss := &seriesLowestAverage{seriesWithSummaries{s}}
+		ss := newAliasSummarySeries(s)
 		avgs[name] = ss.Avg()
 		series[name] = ss
 	}
@@ -1609,16 +1270,12 @@ func dslLowestAverage(args map[string]interface{}) (SeriesMap, error) {
 
 // lowestCurrent()
 
-type seriesLowestCurrent struct {
-	seriesWithSummaries
-}
-
 func dslLowestCurrent(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := int(args["n"].(float64))
 	lasts := make(map[string]float64)
 	for name, s := range series {
-		shc := &seriesLowestCurrent{seriesWithSummaries{s}}
+		shc := newAliasSummarySeries(s)
 		lasts[name] = shc.Last()
 		series[name] = shc
 	}
@@ -1631,15 +1288,11 @@ func dslLowestCurrent(args map[string]interface{}) (SeriesMap, error) {
 
 // maximumAbove()
 
-type seriesMaximumAbove struct {
-	seriesWithSummaries
-}
-
 func dslMaximumAbove(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := args["n"].(float64)
 	for name, s := range series {
-		shm := &seriesMaximumAbove{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		if shm.Max() <= n {
 			delete(series, name)
 		}
@@ -1649,15 +1302,11 @@ func dslMaximumAbove(args map[string]interface{}) (SeriesMap, error) {
 
 // maximumBelow()
 
-type seriesMaximumBelow struct {
-	seriesWithSummaries
-}
-
 func dslMaximumBelow(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := args["n"].(float64)
 	for name, s := range series {
-		shm := &seriesMaximumBelow{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		if shm.Max() >= n {
 			delete(series, name)
 		}
@@ -1667,15 +1316,11 @@ func dslMaximumBelow(args map[string]interface{}) (SeriesMap, error) {
 
 // minimumAbove()
 
-type seriesMinimumAbove struct {
-	seriesWithSummaries
-}
-
 func dslMinimumAbove(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := args["n"].(float64)
 	for name, s := range series {
-		shm := &seriesMinimumAbove{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		if shm.Min() <= n {
 			delete(series, name)
 		}
@@ -1685,15 +1330,11 @@ func dslMinimumAbove(args map[string]interface{}) (SeriesMap, error) {
 
 // minimumBelow()
 
-type seriesMinimumBelow struct {
-	seriesWithSummaries
-}
-
 func dslMinimumBelow(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := args["n"].(float64)
 	for name, s := range series {
-		shm := &seriesMinimumBelow{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		if shm.Min() >= n {
 			delete(series, name)
 		}
@@ -1703,16 +1344,12 @@ func dslMinimumBelow(args map[string]interface{}) (SeriesMap, error) {
 
 // mostDeviant()
 
-type seriesMostDeviant struct {
-	seriesWithSummaries
-}
-
 func dslMostDeviant(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	n := int(args["n"].(float64))
 	stddevs := make(map[string]float64)
 	for name, s := range series {
-		shm := &seriesMostDeviant{seriesWithSummaries{s}}
+		shm := newAliasSummarySeries(s)
 		stddev := shm.StdDev(shm.Avg())
 		stddevs[name] = stddev
 		series[name] = shm
@@ -1727,7 +1364,7 @@ func dslMostDeviant(args map[string]interface{}) (SeriesMap, error) {
 // movingAverage()
 
 type seriesMovingAverage struct {
-	rrd.Series
+	AliasSeries
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1743,8 +1380,8 @@ func (f *seriesMovingAverage) Next() bool {
 	}
 	// initial build up
 	for len(f.window) < f.points {
-		if f.Series.Next() {
-			f.window = append(f.window, f.Series.CurrentValue())
+		if f.AliasSeries.Next() {
+			f.window = append(f.window, f.AliasSeries.CurrentValue())
 			f.n++
 			// if n starts at -1
 			// [a] n:0; [a,b] n:1, [a,b,c] n:2 | exit loop
@@ -1753,8 +1390,8 @@ func (f *seriesMovingAverage) Next() bool {
 		}
 	}
 	// now we have enough points
-	if f.Series.Next() {
-		f.window[f.n%f.points] = f.Series.CurrentValue()
+	if f.AliasSeries.Next() {
+		f.window[f.n%f.points] = f.AliasSeries.CurrentValue()
 		f.n++
 	} else {
 		return false
@@ -1776,12 +1413,12 @@ func dslMovingAverage(args map[string]interface{}) (SeriesMap, error) {
 	if dur, err := parseTimeShift(window); err == nil {
 		for name, s := range series {
 			s.Alias(fmt.Sprintf("movingAverage(%v,%v)", name, window))
-			series[name] = &seriesMovingAverage{Series: s, window: make([]float64, 0), dur: dur, n: -1}
+			series[name] = &seriesMovingAverage{AliasSeries: s, window: make([]float64, 0), dur: dur, n: -1}
 		}
 	} else if points, err := strconv.ParseInt(window, 10, 64); err == nil {
 		for name, s := range series {
 			s.Alias(fmt.Sprintf("movingAverage(%v,%v)", name, points))
-			series[name] = &seriesMovingAverage{Series: s, window: make([]float64, 0), points: int(points), n: -1}
+			series[name] = &seriesMovingAverage{AliasSeries: s, window: make([]float64, 0), points: int(points), n: -1}
 		}
 	} else {
 		return nil, fmt.Errorf("invalid window size: %v", window)
@@ -1793,7 +1430,7 @@ func dslMovingAverage(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar as movingAverage?
 
 type seriesMovingMedian struct {
-	rrd.Series
+	AliasSeries
 	window    []float64
 	points, n int
 	dur       time.Duration
@@ -1809,8 +1446,8 @@ func (f *seriesMovingMedian) Next() bool {
 	}
 	// initial build up
 	for len(f.window) < f.points {
-		if f.Series.Next() {
-			f.window = append(f.window, f.Series.CurrentValue())
+		if f.AliasSeries.Next() {
+			f.window = append(f.window, f.AliasSeries.CurrentValue())
 			f.n++
 			// if n starts at -1
 			// [a] n:0; [a,b] n:1, [a,b,c] n:2 | exit loop
@@ -1819,8 +1456,8 @@ func (f *seriesMovingMedian) Next() bool {
 		}
 	}
 	// now we have enough points
-	if f.Series.Next() {
-		f.window[f.n%f.points] = f.Series.CurrentValue()
+	if f.AliasSeries.Next() {
+		f.window[f.n%f.points] = f.AliasSeries.CurrentValue()
 		f.n++
 	} else {
 		return false
@@ -1850,12 +1487,12 @@ func dslMovingMedian(args map[string]interface{}) (SeriesMap, error) {
 	if dur, err := parseTimeShift(window); err == nil {
 		for name, s := range series {
 			s.Alias(fmt.Sprintf("movingMedian(%v,%v)", name, window))
-			series[name] = &seriesMovingMedian{Series: s, window: make([]float64, 0), dur: dur, n: -1}
+			series[name] = &seriesMovingMedian{AliasSeries: s, window: make([]float64, 0), dur: dur, n: -1}
 		}
 	} else if points, err := strconv.ParseInt(window, 10, 64); err == nil {
 		for name, s := range series {
 			s.Alias(fmt.Sprintf("movingMedian(%v,%v)", name, points))
-			series[name] = &seriesMovingMedian{Series: s, window: make([]float64, 0), points: int(points), n: -1}
+			series[name] = &seriesMovingMedian{AliasSeries: s, window: make([]float64, 0), points: int(points), n: -1}
 		}
 	} else {
 		return nil, fmt.Errorf("invalid window size: %v", window)
@@ -1866,14 +1503,14 @@ func dslMovingMedian(args map[string]interface{}) (SeriesMap, error) {
 // removeAbovePercentile()
 
 type seriesRemoveAbovePercentile struct {
-	rrd.Series
+	AliasSeries
 	n          float64
 	percentile float64
 	computed   bool
 }
 
 func (f *seriesRemoveAbovePercentile) CurrentValue() float64 {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if value > f.percentile {
 		return math.NaN()
 	}
@@ -1884,15 +1521,15 @@ func (f *seriesRemoveAbovePercentile) Next() bool {
 	if !f.computed {
 		// Here we traverse the series, and then it will be traversed
 		// again as the datapoints are sent to the client
-		series := make([]float64, 0)
-		for f.Series.Next() {
-			series = append(series, f.Series.CurrentValue())
+		s := make([]float64, 0)
+		for f.AliasSeries.Next() {
+			s = append(s, f.AliasSeries.CurrentValue())
 		}
-		f.Series.Close()
-		f.percentile = percentile(series, f.n)
+		f.AliasSeries.Close()
+		f.percentile = series.Percentile(s, f.n)
 		f.computed = true
 	}
-	return f.Series.Next() // restart to the first Next()
+	return f.AliasSeries.Next() // restart to the first Next()
 }
 
 func dslRemoveAbovePercentile(args map[string]interface{}) (SeriesMap, error) {
@@ -1909,14 +1546,14 @@ func dslRemoveAbovePercentile(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeBelowPercentile()
 
 type seriesRemoveBelowPercentile struct {
-	rrd.Series
+	AliasSeries
 	n          float64
 	percentile float64
 	computed   bool
 }
 
 func (f *seriesRemoveBelowPercentile) CurrentValue() float64 {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if value < f.percentile {
 		value = math.NaN()
 	}
@@ -1927,15 +1564,15 @@ func (f *seriesRemoveBelowPercentile) Next() bool {
 	if !f.computed {
 		// Here we traverse the series, and then it will be traversed
 		// again as the datapoints are sent to the client
-		series := make([]float64, 0)
-		for f.Series.Next() {
-			series = append(series, f.Series.CurrentValue())
+		s := make([]float64, 0)
+		for f.AliasSeries.Next() {
+			s = append(s, f.AliasSeries.CurrentValue())
 		}
-		f.Series.Close()
-		f.percentile = percentile(series, f.n)
+		f.AliasSeries.Close()
+		f.percentile = series.Percentile(s, f.n)
 		f.computed = true
 	}
-	return f.Series.Next() // restart to the first Next()
+	return f.AliasSeries.Next() // restart to the first Next()
 }
 
 func dslRemoveBelowPercentile(args map[string]interface{}) (SeriesMap, error) {
@@ -1951,12 +1588,12 @@ func dslRemoveBelowPercentile(args map[string]interface{}) (SeriesMap, error) {
 // removeAboveValue()
 
 type seriesRemoveAboveValue struct {
-	rrd.Series
+	AliasSeries
 	n float64
 }
 
 func (f *seriesRemoveAboveValue) CurrentValue() float64 {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if value > f.n {
 		return math.NaN()
 	}
@@ -1977,12 +1614,12 @@ func dslRemoveAboveValue(args map[string]interface{}) (SeriesMap, error) {
 // TODO similar to removeAboveValue()
 
 type seriesRemoveBelowValue struct {
-	rrd.Series
+	AliasSeries
 	n float64
 }
 
 func (f *seriesRemoveBelowValue) CurrentValue() float64 {
-	value := f.Series.CurrentValue()
+	value := f.AliasSeries.CurrentValue()
 	if value < f.n {
 		return math.NaN()
 	}
@@ -2026,7 +1663,7 @@ func stdDevFloat64(data []float64) float64 {
 // movingStdDev()
 // TODO threshold not yet implemented
 type seriesMovingStdDev struct {
-	rrd.Series
+	AliasSeries
 	// avg over n points or time duration for n points, the slice size
 	// is the marker
 	window    []float64
@@ -2036,8 +1673,8 @@ type seriesMovingStdDev struct {
 func (f *seriesMovingStdDev) Next() bool {
 	// initial build up
 	for len(f.window) < f.points {
-		if f.Series.Next() {
-			f.window = append(f.window, f.Series.CurrentValue())
+		if f.AliasSeries.Next() {
+			f.window = append(f.window, f.AliasSeries.CurrentValue())
 			f.n++
 			// if n starts at -1
 			// [a] n:0; [a,b] n:1, [a,b,c] n:2 | exit loop
@@ -2046,8 +1683,8 @@ func (f *seriesMovingStdDev) Next() bool {
 		}
 	}
 	// now we have enough points
-	if f.Series.Next() {
-		f.window[f.n%f.points] = f.Series.CurrentValue()
+	if f.AliasSeries.Next() {
+		f.window[f.n%f.points] = f.AliasSeries.CurrentValue()
 		f.n++
 	} else {
 		return false
@@ -2068,7 +1705,7 @@ func dslMovingStdDev(args map[string]interface{}) (SeriesMap, error) {
 	points := int(args["points"].(float64))
 	for name, s := range series {
 		s.Alias(fmt.Sprintf("movingStdDev(%v,%v)", name, points))
-		series[name] = &seriesMovingStdDev{Series: s, window: make([]float64, 0), points: points, n: -1}
+		series[name] = &seriesMovingStdDev{AliasSeries: s, window: make([]float64, 0), points: points, n: -1}
 	}
 	return series, nil
 }
@@ -2076,7 +1713,7 @@ func dslMovingStdDev(args map[string]interface{}) (SeriesMap, error) {
 // weightedAverage
 
 type seriesWeightedAverage struct {
-	SeriesList
+	aliasSeriesSlice
 }
 
 func (sl *seriesWeightedAverage) CurrentValue() float64 {
@@ -2103,8 +1740,8 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	weightSeries := args["seriesListWeight"].(SeriesMap)
 	n := int(args["node"].(float64))
 
-	avgByPart := make(map[string]rrd.Series, 0)
-	weightByPart := make(map[string]rrd.Series, 0)
+	avgByPart := make(map[string]AliasSeries, 0)
+	weightByPart := make(map[string]AliasSeries, 0)
 
 	for k, v := range avgSeries {
 		parts := strings.Split(k, ".")
@@ -2129,8 +1766,8 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	}
 	sort.Strings(avgKeys)
 
-	// make a special SeriesList
-	result := &SeriesList{SeriesSlice: make(SeriesSlice, 0)}
+	// make a special SeriesSlice
+	result := &aliasSeriesSlice{}
 	for _, k := range avgKeys {
 		w := weightByPart[k]
 		if w != nil {
@@ -2147,20 +1784,20 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 // changed()
 
 type seriesChanged struct {
-	rrd.Series
+	AliasSeries
 	last float64
 }
 
 func (f *seriesChanged) CurrentValue() float64 {
-	if f.Series.CurrentValue() != f.last {
+	if f.AliasSeries.CurrentValue() != f.last {
 		return 1
 	}
 	return 0
 }
 
 func (f *seriesChanged) Next() bool {
-	f.last = f.Series.CurrentValue()
-	return f.Series.Next()
+	f.last = f.AliasSeries.CurrentValue()
+	return f.AliasSeries.Next()
 }
 
 func dslChanged(args map[string]interface{}) (SeriesMap, error) {
@@ -2176,7 +1813,7 @@ func dslChanged(args map[string]interface{}) (SeriesMap, error) {
 // countSeries()
 
 type seriesCountSeries struct {
-	SeriesList
+	*aliasSeriesSlice
 	count float64
 }
 
@@ -2185,15 +1822,15 @@ func (f *seriesCountSeries) CurrentValue() float64 {
 }
 
 func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toSeriesListPtr()
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesCountSeries{*series, float64(len(series.SeriesSlice))}}, nil
+	return SeriesMap{name: &seriesCountSeries{series, float64(len(series.SeriesSlice))}}, nil
 }
 
 // holtWintersForecast
 
 type seriesHoltWintersForecast struct {
-	rrd.Series
+	AliasSeries
 	data      []float64
 	result    []float64
 	upper     []float64
@@ -2208,11 +1845,11 @@ func (f *seriesHoltWintersForecast) nanlessData() ([]float64, time.Time, error) 
 	result := make([]float64, 0)
 	var last float64
 	var start time.Time
-	for f.Series.Next() {
-		val := f.Series.CurrentValue()
+	for f.AliasSeries.Next() {
+		val := f.AliasSeries.CurrentValue()
 		for len(result) == 0 && math.IsNaN(val) {
-			if f.Series.Next() {
-				val = f.Series.CurrentValue()
+			if f.AliasSeries.Next() {
+				val = f.AliasSeries.CurrentValue()
 			} else {
 				return nil, time.Time{}, fmt.Errorf("Reached end of series while skipping leading NaNs")
 			}
@@ -2222,12 +1859,12 @@ func (f *seriesHoltWintersForecast) nanlessData() ([]float64, time.Time, error) 
 			val = last // TODO can we do better?
 		}
 		if start.IsZero() {
-			start = f.Series.CurrentTime()
+			start = f.AliasSeries.CurrentTime()
 		}
 		result = append(result, val)
 		last = val
 	}
-	f.Series.Close()
+	f.AliasSeries.Close()
 	return result, start, nil
 }
 
@@ -2237,7 +1874,7 @@ func (f *seriesHoltWintersForecast) seasonPoints() int {
 }
 
 func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap)
+	ss := args["seriesList"].(SeriesMap)
 	seasonLen := args["seasonLen"].(string)
 	seasonLimit := int(args["seasonLimit"].(float64))
 	α := args["alpha"].(float64)
@@ -2256,7 +1893,7 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 	}
 
 	result := make(SeriesMap, 0)
-	for name, s := range series {
+	for name, s := range ss {
 		s.Alias(fmt.Sprintf("holtWintersForecast(%v)", name))
 
 		var err error
@@ -2292,8 +1929,8 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// This struct knows how to permorm triple exponential smoothing
 		shw := &seriesHoltWintersForecast{
-			Series:    s,
-			seasonLen: slen}
+			AliasSeries: s,
+			seasonLen:   slen}
 
 		// NB: This causes GroupByMs be calculated by dbSeries
 		var nanlessBegin time.Time
@@ -2309,18 +1946,18 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// Run the exponential smoothing algo
 		var smooth, dev []float64
-		if trend, err := hwInitialTrendFactor(shw.data, shw.seasonPoints()); err != nil {
+		if trend, err := series.HWInitialTrendFactor(shw.data, shw.seasonPoints()); err != nil {
 			return nil, err
 		} else {
-			if seasonal, err := hwInitialSeasonalFactors(shw.data, shw.seasonPoints()); err != nil {
+			if seasonal, err := series.HWInitialSeasonalFactors(shw.data, shw.seasonPoints()); err != nil {
 				return nil, err
 			} else {
 				if α == 0 {
 					var e int
-					smooth, dev, α, β, γ, _, e = hwMinimizeSSE(shw.data, shw.seasonPoints(), trend, seasonal, nPreds)
+					smooth, dev, α, β, γ, _, e = series.HWMinimizeSSE(shw.data, shw.seasonPoints(), trend, seasonal, nPreds)
 					log.Printf("Nelder-Mead finished in %d evaluations, resulting in α: %f β: %f γ: %f", e, α, β, γ)
 				} else {
-					smooth, dev, _ = hwTripleExponentialSmoothing(shw.data, shw.seasonPoints(), trend, seasonal, nPreds, α, β, γ)
+					smooth, dev, _ = series.HWTripleExponentialSmoothing(shw.data, shw.seasonPoints(), trend, seasonal, nPreds, α, β, γ)
 				}
 			}
 		}

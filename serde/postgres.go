@@ -54,6 +54,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/series"
 )
 
 var debug bool
@@ -699,7 +700,7 @@ func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (rrd.Series, error) {
+func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 

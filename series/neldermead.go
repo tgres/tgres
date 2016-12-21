@@ -21,7 +21,7 @@
 // This is an implementation of a variant of the Nelder-Mead (1965) downhill
 // simplex optimization heuristic.
 
-package dsl
+package series
 
 import (
 	"math"

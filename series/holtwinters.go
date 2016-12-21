@@ -13,19 +13,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dsl
+package series
 
 import (
 	"fmt"
 	"math"
 )
 
-// hwInitialTrendFactor returns a list of best initial trend factor so
+// HWInitialTrendFactor returns a list of best initial trend factor so
 // that we can start forecasting.
 //
 // See http://www.itl.nist.gov/div898/handbook/pmc/section4/pmc435.htm
 // "Initial values for the trend factor"
-func hwInitialTrendFactor(data []float64, slen int) (float64, error) {
+func HWInitialTrendFactor(data []float64, slen int) (float64, error) {
 	if len(data) < slen*2 {
 		return math.NaN(), fmt.Errorf("Not enough data to compute initial trend factor, need at least two seasons")
 	}
@@ -36,12 +36,12 @@ func hwInitialTrendFactor(data []float64, slen int) (float64, error) {
 	return tot / float64(slen), nil
 }
 
-// hwInitialSeasonalFactors returns a list of best initial seasonal
+// HWInitialSeasonalFactors returns a list of best initial seasonal
 // factor so that we can start forecasting.
 //
 // See http://www.itl.nist.gov/div898/handbook/pmc/section4/pmc435.htm
 // "Initial values for the Seasonal Indices"
-func hwInitialSeasonalFactors(data []float64, slen int) ([]float64, error) {
+func HWInitialSeasonalFactors(data []float64, slen int) ([]float64, error) {
 
 	nSeasons := len(data) / slen
 	if nSeasons == 0 {
@@ -70,7 +70,7 @@ func hwInitialSeasonalFactors(data []float64, slen int) ([]float64, error) {
 	return result, nil
 }
 
-// hwTripleExponentialSmoothing performs triple exponential smoothing
+// HWTripleExponentialSmoothing performs triple exponential smoothing
 // (multiplicative) on data given season length slen (in number of
 // data points per season), initial trend, slice of initial seasonal
 // factors, the number of forecasted points and smoothing factors α,
@@ -82,7 +82,7 @@ func hwInitialSeasonalFactors(data []float64, slen int) ([]float64, error) {
 // repeatedly calling hwTripleExponentialSmoothing to find the
 // combination with the smallest SSE, you can use hwMinimiseSSE for
 // this.
-func hwTripleExponentialSmoothing(data []float64, slen int, trend float64, seasonal []float64, nPredictions int, α, β, γ float64) ([]float64, []float64, float64) {
+func HWTripleExponentialSmoothing(data []float64, slen int, trend float64, seasonal []float64, nPredictions int, α, β, γ float64) ([]float64, []float64, float64) {
 
 	var (
 		level, lastLevel float64
@@ -133,19 +133,19 @@ func hwTripleExponentialSmoothing(data []float64, slen int, trend float64, seaso
 	return result, dev, sse
 }
 
-// hwMinimizeSSE repeatedly executes hwTripleExponentialSmoothing over
+// HWMinimizeSSE repeatedly executes hwTripleExponentialSmoothing over
 // data, season, slen, trend and nPred with varying α, β and γ using
 // the Nelder-Mead algorithm to minimize SSE.  It returns the final
 // (best) smooth and dev returned by hwTripleExponentialSmoothing, as
 // well as the resulting α, β, γ (which can be reused later), k
 // (number of passes) and e (evocation count for
 // hwTripleExponentialSmoothing).
-func hwMinimizeSSE(data []float64, slen int, trend float64, seasonal []float64, nPred int) (smooth, dev []float64, α, β, γ float64, k, e int) {
+func HWMinimizeSSE(data []float64, slen int, trend float64, seasonal []float64, nPred int) (smooth, dev []float64, α, β, γ float64, k, e int) {
 	doit := func(x []float64) float64 {
 		α, β, γ, sse := x[0], x[1], x[2], float64(0)
 		sc := make([]float64, len(seasonal))
 		copy(sc, seasonal)
-		smooth, dev, sse = hwTripleExponentialSmoothing(data, slen, trend, sc, nPred, α, β, γ)
+		smooth, dev, sse = HWTripleExponentialSmoothing(data, slen, trend, sc, nPred, α, β, γ)
 		return sse
 	}
 

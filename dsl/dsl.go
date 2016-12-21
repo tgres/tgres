@@ -24,8 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tgres/tgres/rrd"
 )
 
 type DslCtx struct {
@@ -72,9 +70,9 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
 }
 
-func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]rrd.Series, error) {
+func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, error) {
 	ids := dc.rcache.dsIdsFromIdent(ident)
-	result := make(map[string]rrd.Series)
+	result := make(SeriesMap)
 	for name, id := range ids {
 		ds, err := dc.rcache.FetchDataSourceById(id)
 		if err != nil {
@@ -84,7 +82,7 @@ func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}
-		result[name] = dps
+		result[name] = &aliasSeries{Series: dps}
 	}
 	return result, nil
 }

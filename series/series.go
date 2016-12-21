@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rrd
+// Package series provides fundamental series operations.
+package series
 
 import "time"
 
@@ -33,5 +34,5 @@ type Series interface {
 	Latest() time.Time
 	MaxPoints(...int64) int64
 
-	Alias(...string) string
+	//Alias(...string) string
 }

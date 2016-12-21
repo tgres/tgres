@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/series"
 )
 
 type DataSourceNamesFetcher interface {
@@ -44,7 +45,7 @@ type DataSourceFlusher interface {
 }
 
 type SeriesQuerier interface {
-	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (rrd.Series, error)
+	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
 type DataSourceSerDe interface {
