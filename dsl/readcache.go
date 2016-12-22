@@ -15,7 +15,13 @@
 
 package dsl
 
-import "github.com/tgres/tgres/serde"
+import (
+	"time"
+
+	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
+	"github.com/tgres/tgres/series"
+)
 
 type rcacheSeriesQuerier interface {
 	serde.DataSourceNamesFetcher
@@ -44,4 +50,45 @@ func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {
 func (r *ReadCache) FsFind(pattern string) []*FsFindNode {
 	r.dsns.reload(r)
 	return r.dsns.fsFind(pattern)
+}
+
+func NewReadCacheFromMap(dss map[string]rrd.DataSourcer) *ReadCache {
+	return NewReadCache(newMapCache(dss))
+}
+
+// A rcacheSeriesQuerier backed by a simple map of DSs
+func newMapCache(dss map[string]rrd.DataSourcer) *mapCache {
+	mc := &mapCache{make(map[string]int64), make(map[int64]rrd.DataSourcer)}
+	var n int64
+	for name, ds := range dss {
+		mc.byName[name] = n
+		mc.byId[n] = ds
+		n++
+	}
+	return mc
+}
+
+type mapCache struct {
+	byName map[string]int64
+	byId   map[int64]rrd.DataSourcer
+}
+
+func (m mapCache) FetchDataSourceNames() (map[string]int64, error) {
+	return m.byName, nil
+}
+
+func (m *mapCache) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
+	return m.byId[id], nil
+}
+
+func (*mapCache) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
+	return series.NewRRASeries(ds.RRAs()[0]), nil
+}
+
+func (m *mapCache) FetchDataSources() ([]rrd.DataSourcer, error) {
+	result := []rrd.DataSourcer{}
+	for _, ds := range m.byId {
+		result = append(result, ds)
+	}
+	return result, nil
 }
