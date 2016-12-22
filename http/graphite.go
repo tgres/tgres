@@ -159,7 +159,7 @@ func parseTime(s string) (*time.Time, error) {
 // which is not valid Go syntax.
 func quoteIdentifiers(target string) string {
 	result := target
-	parts := regexp.MustCompile("(\"?[a-zA-Z0-9_\\-\\.*]*\"?)").FindAllString(target, -1)
+	parts := regexp.MustCompile("(\"?[a-zA-Z0-9_\\-\\.*{,}]*\"?)").FindAllString(target, -1)
 	for _, part := range parts {
 		if strings.Contains(part, ".") && !strings.HasPrefix(part, "\"") {
 			result = quoteIdentifiers(strings.Replace(result, part, fmt.Sprintf("%q", part), -1))
