@@ -18,12 +18,14 @@ package series
 import "math"
 
 // SummarySeries provides some whole-series summary functions,
-// e.g. Max(), Avg(), StdDev(), etc.
-
+// e.g. Max(), Avg(), StdDev(), etc. (Not to be confused with the
+// cross-series aggregation SeriesSlice provides). Note that all of
+// these function require iterating over the entire series.
 type SummarySeries struct {
 	Series
 }
 
+// Returns the max of all the values in the series.
 func (f *SummarySeries) Max() (max float64) {
 	max = math.NaN()
 	for f.Series.Next() {
@@ -36,6 +38,7 @@ func (f *SummarySeries) Max() (max float64) {
 	return
 }
 
+// Returns the min of all the values in the series.
 func (f *SummarySeries) Min() (min float64) {
 	min = math.NaN()
 	for f.Series.Next() {
@@ -48,6 +51,7 @@ func (f *SummarySeries) Min() (min float64) {
 	return
 }
 
+// Returns the simple average of all the values in the series.
 func (f *SummarySeries) Avg() float64 {
 	count := 0
 	sum := float64(0)
@@ -59,6 +63,7 @@ func (f *SummarySeries) Avg() float64 {
 	return sum / float64(count)
 }
 
+// Returns the standard deviation of all the values in the series.
 func (f *SummarySeries) StdDev(avg float64) float64 {
 	count := 0
 	sum := float64(0)
@@ -70,6 +75,7 @@ func (f *SummarySeries) StdDev(avg float64) float64 {
 	return math.Sqrt(sum / float64(count-1))
 }
 
+// Returns the last value in the series.
 func (f *SummarySeries) Last() (last float64) {
 	for f.Series.Next() {
 		last = f.Series.CurrentValue()

@@ -638,18 +638,18 @@ func dslSumSeriesWithWildcards(dc *DslCtx, args []interface{}) (SeriesMap, error
 
 type seriesPercentileOfSeries struct {
 	*aliasSeriesSlice
-	ptile float64
+	qtile float64
 }
 
 func (sl *seriesPercentileOfSeries) CurrentValue() float64 {
-	return sl.Percentile(sl.ptile)
+	return sl.Quantile(sl.qtile)
 }
 
 func dslPercentileOfSeries(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
-	ptile := args["n"].(float64) / 100
+	qtile := args["n"].(float64) / 100
 	name := args["_legend_"].(string)
-	return SeriesMap{name: &seriesPercentileOfSeries{series, ptile}}, nil
+	return SeriesMap{name: &seriesPercentileOfSeries{series, qtile}}, nil
 }
 
 // rangeOfSeries()
@@ -1131,16 +1131,16 @@ func dslTransformNull(args map[string]interface{}) (SeriesMap, error) {
 
 type seriesNPercentile struct {
 	AliasSeries
-	n          float64
-	percentile float64
+	n     float64
+	qtile float64
 }
 
 func (f *seriesNPercentile) CurrentValue() float64 {
-	return f.percentile
+	return f.qtile
 }
 
 func (f *seriesNPercentile) Next() bool {
-	if math.IsNaN(f.percentile) {
+	if math.IsNaN(f.qtile) {
 		// We traverse the whole series, and then it will be traversed
 		// again as the datapoints are sent to the client
 		s := make([]float64, 0)
@@ -1148,7 +1148,7 @@ func (f *seriesNPercentile) Next() bool {
 			s = append(s, f.AliasSeries.CurrentValue())
 		}
 		f.AliasSeries.Close()
-		f.percentile = series.Percentile(s, f.n)
+		f.qtile = series.Quantile(s, f.n)
 	}
 	return f.AliasSeries.Next() // restart to the first Next()
 }
@@ -1504,14 +1504,14 @@ func dslMovingMedian(args map[string]interface{}) (SeriesMap, error) {
 
 type seriesRemoveAbovePercentile struct {
 	AliasSeries
-	n          float64
-	percentile float64
-	computed   bool
+	n        float64
+	qtile    float64
+	computed bool
 }
 
 func (f *seriesRemoveAbovePercentile) CurrentValue() float64 {
 	value := f.AliasSeries.CurrentValue()
-	if value > f.percentile {
+	if value > f.qtile {
 		return math.NaN()
 	}
 	return value
@@ -1526,7 +1526,7 @@ func (f *seriesRemoveAbovePercentile) Next() bool {
 			s = append(s, f.AliasSeries.CurrentValue())
 		}
 		f.AliasSeries.Close()
-		f.percentile = series.Percentile(s, f.n)
+		f.qtile = series.Quantile(s, f.n)
 		f.computed = true
 	}
 	return f.AliasSeries.Next() // restart to the first Next()
@@ -1547,14 +1547,14 @@ func dslRemoveAbovePercentile(args map[string]interface{}) (SeriesMap, error) {
 
 type seriesRemoveBelowPercentile struct {
 	AliasSeries
-	n          float64
-	percentile float64
-	computed   bool
+	n        float64
+	qtile    float64
+	computed bool
 }
 
 func (f *seriesRemoveBelowPercentile) CurrentValue() float64 {
 	value := f.AliasSeries.CurrentValue()
-	if value < f.percentile {
+	if value < f.qtile {
 		value = math.NaN()
 	}
 	return value
@@ -1569,7 +1569,7 @@ func (f *seriesRemoveBelowPercentile) Next() bool {
 			s = append(s, f.AliasSeries.CurrentValue())
 		}
 		f.AliasSeries.Close()
-		f.percentile = series.Percentile(s, f.n)
+		f.qtile = series.Quantile(s, f.n)
 		f.computed = true
 	}
 	return f.AliasSeries.Next() // restart to the first Next()

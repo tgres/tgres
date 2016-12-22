@@ -13,26 +13,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package series provides fundamental series operations.
+// Package series provides fundamental series operations. At its core
+// is the Series interface, which describes a Series. A Series is an
+// object which can be iterated over with Next(). The idea is that the
+// underlying data could be large and fetched as needed from a
+// database as needed.
 package series
 
 import "time"
 
 type Series interface {
+	// Advance to the next data point in the series. Returns false if
+	// no further advancement is possible.
 	Next() bool
+
+	// Resets the internal cursor and closes all underlying
+	// cursors. After Close(), Next() should start from the beginning.
 	Close() error
 
+	// The current data point value. If called before Next(), or after
+	// Next() returned false, should return a NaN.
 	CurrentValue() float64
 
-	// The time one which the current slot ends. The next slot begins
+	// The time on which the current data point ends. The next slot begins
 	// immediately after this time.
 	CurrentTime() time.Time
 
+	// The step of the series.
 	Step() time.Duration
-	GroupBy(...time.Duration) time.Duration
-	TimeRange(...time.Time) (time.Time, time.Time)
-	Latest() time.Time
-	MaxPoints(...int64) int64
 
-	//Alias(...string) string
+	// Signals the underlying storage to group rows by this interval,
+	// resulting in fewer (and longer) data points. The values are
+	// aggregated using average. By default it is equal to Step.
+	// Without arguments returns the value, with an argument sets and
+	// returns the previous value.
+	GroupBy(...time.Duration) time.Duration
+
+	// Restrict the series to a subset of its span.
+	// Without arguments returns the value, with arguments sets and
+	// returns the previous value.
+	TimeRange(...time.Time) (time.Time, time.Time)
+
+	// Timestamp of the last data point in the series.
+	Latest() time.Time
+
+	// Alternative to GroupBy(), with a similar effect but based on
+	// the maximum number of points we expect to receive. MaxPoints is
+	// ignored if GroupBy was set.
+	// Without arguments returns the value, with an argument sets and
+	// returns the previous value.
+	MaxPoints(...int64) int64
 }

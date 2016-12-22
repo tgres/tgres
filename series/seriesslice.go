@@ -21,10 +21,11 @@ import (
 	"time"
 )
 
-// SeriesSlice is an "abstract" Series (it does not implement
-// CurrentValue()). It is useful for bunching Series together to call
-// Next() and Close() on all of them (e.g. in avg() or sum()).
-
+// A slice of series which implements the Series interface (almost).
+// SeriesSlice is an "abstract" Series because it purposely does not
+// implement CurrentValue(). It is used for bunching Series together
+// for cross-series aggregation. A call to Next(), Close() etc will
+// call respective methods on all series in the slice.
 type SeriesSlice []Series
 
 func (sl SeriesSlice) Next() bool {
@@ -39,6 +40,8 @@ func (sl SeriesSlice) Next() bool {
 	return true
 }
 
+// Returns CurrentTime of the first series in the slice or zero time
+// if slice is empty.
 func (sl SeriesSlice) CurrentTime() time.Time {
 	if len(sl) > 0 {
 		return sl[0].CurrentTime()
@@ -46,6 +49,8 @@ func (sl SeriesSlice) CurrentTime() time.Time {
 	return time.Time{}
 }
 
+// Closes all series in the slice. First error encountered is returned
+// and the rest of the series is not closed.
 func (sl SeriesSlice) Close() error {
 	for _, series := range sl {
 		if err := series.Close(); err != nil {
@@ -55,12 +60,17 @@ func (sl SeriesSlice) Close() error {
 	return nil
 }
 
+// Returns the step of the first series in the slice or 0 if slice is
+// empty.
 func (sl SeriesSlice) Step() time.Duration {
 	// This returns the StepMs of the first series since we should
 	// assume they are aligned (thus equeal). Then if we happen to be
 	// encapsulated in a another SeriesSlice, it might overrule the
 	// GroupByMs.
-	return sl[0].Step()
+	if len(sl) > 0 {
+		return sl[0].Step()
+	}
+	return 0
 }
 
 func (sl SeriesSlice) GroupBy(ms ...time.Duration) time.Duration {
@@ -92,6 +102,8 @@ func (sl SeriesSlice) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return time.Time{}, time.Time{}
 }
 
+// Returns Latest() for the first series in the slice or zero time if
+// slice is empty.
 func (sl SeriesSlice) Latest() time.Time {
 	if len(sl) > 0 {
 		return sl[0].Latest()
@@ -99,6 +111,9 @@ func (sl SeriesSlice) Latest() time.Time {
 	return time.Time{}
 }
 
+// With argument sets MaxPoints on all series in the slice, without
+// argument returns MaxPoints of the first series in the slice or 0 if
+// slice is empty.
 func (sl SeriesSlice) MaxPoints(n ...int64) int64 {
 	if len(n) > 0 { // setter
 		defer func() {
@@ -127,6 +142,11 @@ func lcm(x, y int64) int64 {
 	return p / x
 }
 
+// Computes the least common multiple of the steps of all the series
+// in the slice and calls GroupBy with this value thereby causing all
+// series to be of matching resolution (i.e. aligned on data point
+// timestamps). Generally you should always Align() the series slice
+// before iterting over it.
 func (sl SeriesSlice) Align() {
 	if len(sl) < 2 {
 		return
@@ -146,6 +166,8 @@ func (sl SeriesSlice) Align() {
 	}
 }
 
+// Returns the arithmetic sum of all the current values in the series
+// in the slice.
 func (sl SeriesSlice) Sum() (result float64) {
 	for _, series := range sl {
 		result += series.CurrentValue()
@@ -153,10 +175,14 @@ func (sl SeriesSlice) Sum() (result float64) {
 	return
 }
 
+// Returns the simple average of all the current values in the series
+// in the slice.
 func (sl SeriesSlice) Avg() float64 {
 	return sl.Sum() / float64(len(sl))
 }
 
+// Returns the max of all the current values in the series in the
+// slice.
 func (sl SeriesSlice) Max() float64 {
 	result := math.NaN()
 	for _, series := range sl {
@@ -168,6 +194,8 @@ func (sl SeriesSlice) Max() float64 {
 	return result
 }
 
+// Returns the min of all the current values in the series in the
+// slice.
 func (sl SeriesSlice) Min() float64 {
 	result := math.NaN()
 	for _, series := range sl {
@@ -179,6 +207,8 @@ func (sl SeriesSlice) Min() float64 {
 	return result
 }
 
+// Returns the current value of the first series in the slice. (The
+// ordering of series is up to the implementation).
 func (sl SeriesSlice) First() float64 {
 	for _, series := range sl {
 		return series.CurrentValue()
@@ -186,7 +216,9 @@ func (sl SeriesSlice) First() float64 {
 	return math.NaN()
 }
 
-func Percentile(list []float64, p float64) float64 {
+// Given a series as a []float64, returns the value below which p
+// fraction of all the values falls. (0 < p < 1).
+func Quantile(list []float64, p float64) float64 {
 	// https://github.com/rcrowley/go-metrics/blob/a248d281279ea605eccec4f54546fd998c060e38/sample.go#L278
 	size := len(list)
 	if size == 0 {
@@ -207,19 +239,25 @@ func Percentile(list []float64, p float64) float64 {
 	}
 }
 
-func (sl SeriesSlice) Percentile(p float64) float64 {
+// Returns the p-th quantile (0 < p < 1) of the current values of the
+// series in the slice.
+func (sl SeriesSlice) Quantile(p float64) float64 {
 	// This is a percentile of one data point, not the whole series
 	dps := make([]float64, 0)
 	for _, series := range sl {
 		dps = append(dps, series.CurrentValue())
 	}
-	return Percentile(dps, p)
+	return Quantile(dps, p)
 }
 
+// Returns the difference between max and min of all the current
+// values of the series in the slice.
 func (sl SeriesSlice) Range() float64 {
 	return sl.Max() - sl.Min()
 }
 
+// Starting with the current value of the series, subtract the
+// remaining values and return the result.
 func (sl SeriesSlice) Diff() float64 {
 	if len(sl) == 0 {
 		return math.NaN()
