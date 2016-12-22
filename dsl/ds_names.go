@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"regexp"
 
 	"github.com/tgres/tgres/serde"
 )
@@ -82,6 +83,21 @@ func (dsns *DataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
 }
 
 func (dsns *DataSourceNames) fsFind(pattern string) []*FsFindNode {
+
+	if strings.Count(pattern, ",") > 0 {
+		subres := make(fsNodes, 0)
+
+		parts := regexp.MustCompile("{[^{}]*}").FindAllString(pattern, -1)
+		for _, part := range parts {
+			subs := strings.Split(strings.Trim(part, "{}"), ",")
+
+			for _, sub := range subs {
+				subres = append(subres, dsns.fsFind(strings.Replace(pattern, part, sub, -1))...)
+			}
+		}
+
+		return subres
+	}
 
 	dsns.RLock()
 	defer dsns.RUnlock()
