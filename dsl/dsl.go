@@ -78,7 +78,7 @@ func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, 
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}
-		dps, err := dc.rcache.SeriesQuery(ds, from, to, dc.maxPoints)
+		dps, err := dc.rcache.FetchSeries(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}

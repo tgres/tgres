@@ -63,8 +63,11 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 	wc.onEnter()
 	defer wc.onExit()
 
-	var recent = make(map[int64]*cachedDs)
-	var leftover map[int64]*cachedDs
+	var (
+		recent       = make(map[int64]*cachedDs)
+		leftover     map[int64]*cachedDs
+		flushEnabled = dsf.enabled()
+	)
 
 	periodicFlushTicker := time.NewTicker(flushInt)
 
@@ -77,10 +80,12 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 	for {
 		select {
 		case <-periodicFlushTicker.C:
-			if len(leftover) > 0 {
-				leftover = workerPeriodicFlush(wc.ident(), dsf, leftover, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
-			} else {
-				leftover = workerPeriodicFlush(wc.ident(), dsf, recent, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
+			if flushEnabled {
+				if len(leftover) > 0 {
+					leftover = workerPeriodicFlush(wc.ident(), dsf, leftover, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
+				} else {
+					leftover = workerPeriodicFlush(wc.ident(), dsf, recent, minCacheDur, maxCacheDur, maxPoints, maxFlushes)
+				}
 			}
 		case dpds, ok := <-workerCh:
 			if !ok {
@@ -88,7 +93,9 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 			}
 			cds := dpds.cds
 			if err := cds.ProcessDataPoint(dpds.dp.Value, dpds.dp.TimeStamp); err == nil {
-				recent[cds.Id()] = cds
+				if flushEnabled {
+					recent[cds.Id()] = cds
+				}
 			} else {
 				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), cds.Name(), err)
 			}

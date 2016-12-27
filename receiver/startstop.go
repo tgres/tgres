@@ -129,7 +129,7 @@ var stopAllWorkers = func(r *Receiver) {
 	stopPacedMetricWorker(r.pacedMetricCh, &r.pacedMetricWg)
 	stopAggWorker(r.aggCh, &r.aggWg)
 	stopWorkers(r.workerChs, &r.workerWg)
-	stopFlushers(r.flusherChs, &r.flusherWg)
+	stopFlushers(r.flusher.flusherChs, &r.flusherWg)
 }
 
 var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
@@ -140,21 +140,19 @@ var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 	startWg.Add(r.NWorkers)
 	for i := 0; i < r.NWorkers; i++ {
 		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, time.Second, r)
+		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r.flusher, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, time.Second, r)
 
 	}
 }
 
 var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
-
-	r.flusherChs = make([]chan *dsFlushRequest, r.NWorkers)
+	if r.flusher.db == nil { // This serde doesn't support flushing
+		return
+	}
 
 	log.Printf("Starting %d flushers...", r.NWorkers)
 	startWg.Add(r.NWorkers)
-	for i := 0; i < r.NWorkers; i++ {
-		r.flusherChs[i] = make(chan *dsFlushRequest, 1024)
-		go flusher(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("flusher_%d", i)}, r.serde, r, r.flusherChs[i])
-	}
+	r.flusher.start(r.NWorkers, &r.flusherWg, startWg, r.MaxFlushRatePerSecond)
 }
 
 var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {

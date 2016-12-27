@@ -91,6 +91,10 @@ func InitDb(connect_string, prefix string) (*pgSerDe, error) {
 	}
 }
 
+func (p *pgSerDe) Fetcher() Fetcher         { return p }
+func (p *pgSerDe) Flusher() Flusher         { return p }
+func (p *pgSerDe) DbAddresser() DbAddresser { return p }
+
 // A hack to use the DB to see who else is connected
 func (p *pgSerDe) ListDbClientIps() ([]string, error) {
 	const sql = "SELECT DISTINCT(client_addr) FROM pg_stat_activity"
@@ -700,7 +704,7 @@ func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.
 	return ds, nil
 }
 
-func (p *pgSerDe) SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
+func (p *pgSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 
 	rra := ds.BestRRA(from, to, maxPoints)
 

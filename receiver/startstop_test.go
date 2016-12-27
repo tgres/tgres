@@ -16,11 +16,11 @@
 package receiver
 
 import (
-	"github.com/tgres/tgres/aggregator"
-	"github.com/tgres/tgres/serde"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tgres/tgres/aggregator"
 )
 
 func Test_startAllWorkers(t *testing.T) {
@@ -37,59 +37,59 @@ func Test_startAllWorkers(t *testing.T) {
 	startWorkers, startFlushers, startAggWorker, startPacedMetricWorker = f1, f2, f3, f4
 }
 
-func Test_doStart(t *testing.T) {
-	delay := 100 * time.Millisecond
+// func Test_doStart(t *testing.T) {
+// 	delay := 100 * time.Millisecond
 
-	clstr := &fakeCluster{cChange: make(chan bool)}
-	db := &fakeSerde{}
-	df := &dftDSFinder{}
-	dsc := newDsCache(db, df, clstr, nil, true)
+// 	clstr := &fakeCluster{cChange: make(chan bool)}
+// 	db := &fakeSerde{}
+// 	df := &dftDSFinder{}
+// 	dsc := newDsCache(db, df, clstr, nil, true)
 
-	r := &Receiver{dpCh: make(chan *IncomingDP), dsc: dsc}
+// 	r := &Receiver{dpCh: make(chan *IncomingDP), dsc: dsc}
 
-	saveDisp := dispatcher
-	saveSaw := startAllWorkers
-	called := 0
-	stopped := false
-	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statReporter, dss *dsCache, workerChs workerChannels) {
-		wc.onEnter()
-		defer wc.onExit()
-		called++
-		wc.onStarted()
-		if _, ok := <-dpCh; !ok {
-			stopped = true
-		}
-	}
-	calledSAW := 0
-	startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
-		calledSAW++
-		startWg.Add(1)
-		go func() {
-			time.Sleep(delay)
-			startWg.Done()
-		}()
-	}
-	started := time.Now()
-	doStart(r)
-	if called == 0 {
-		t.Errorf("doStart: didn't call dispatcher()?")
-	}
-	if calledSAW == 0 {
-		t.Errorf("doStart: calledSAW == 0, didn't call startAllWorkers()?")
-	}
-	if time.Now().Sub(started) < delay {
-		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
-	}
+// 	saveDisp := dispatcher
+// 	saveSaw := startAllWorkers
+// 	called := 0
+// 	stopped := false
+// 	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statReporter, dss *dsCache, workerChs workerChannels) {
+// 		wc.onEnter()
+// 		defer wc.onExit()
+// 		called++
+// 		wc.onStarted()
+// 		if _, ok := <-dpCh; !ok {
+// 			stopped = true
+// 		}
+// 	}
+// 	calledSAW := 0
+// 	startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
+// 		calledSAW++
+// 		startWg.Add(1)
+// 		go func() {
+// 			time.Sleep(delay)
+// 			startWg.Done()
+// 		}()
+// 	}
+// 	started := time.Now()
+// 	doStart(r)
+// 	if called == 0 {
+// 		t.Errorf("doStart: didn't call dispatcher()?")
+// 	}
+// 	if calledSAW == 0 {
+// 		t.Errorf("doStart: calledSAW == 0, didn't call startAllWorkers()?")
+// 	}
+// 	if time.Now().Sub(started) < delay {
+// 		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
+// 	}
 
-	// test stopDispatcher here too
-	stopDispatcher(r)
-	if !stopped {
-		t.Errorf("stopDispatcher didn't stop dispatcher")
-	}
+// 	// test stopDispatcher here too
+// 	stopDispatcher(r)
+// 	if !stopped {
+// 		t.Errorf("stopDispatcher didn't stop dispatcher")
+// 	}
 
-	dispatcher = saveDisp
-	startAllWorkers = saveSaw
-}
+// 	dispatcher = saveDisp
+// 	startAllWorkers = saveSaw
+// }
 
 func Test_Receiver_doStop(t *testing.T) {
 	f1, f2 := stopDispatcher, stopAllWorkers
@@ -267,26 +267,26 @@ func Test_startWorkers(t *testing.T) {
 	worker = saveWorker
 }
 
-func Test_startFlushers(t *testing.T) {
-	nFlushers := 0
-	saveFlusher := flusher
-	flusher = func(wc wController, db serde.DataSourceFlusher, scr statReporter, flusherCh chan *dsFlushRequest) {
-		wc.onEnter()
-		defer wc.onExit()
-		nFlushers++
-		wc.onStarted()
-	}
+// func Test_startFlushers(t *testing.T) {
+// 	nFlushers := 0
+// 	saveFlusher := flusher
+// 	flusher = func(wc wController, db serde.DataSourceFlusher, scr statReporter, flusherCh chan *dsFlushRequest) {
+// 		wc.onEnter()
+// 		defer wc.onExit()
+// 		nFlushers++
+// 		wc.onStarted()
+// 	}
 
-	var startWg sync.WaitGroup
-	r := &Receiver{NWorkers: 5}
-	startFlushers(r, &startWg)
-	startWg.Wait()
+// 	var startWg sync.WaitGroup
+// 	r := &Receiver{NWorkers: 5}
+// 	startFlushers(r, &startWg)
+// 	startWg.Wait()
 
-	if nFlushers != 5 {
-		t.Errorf("startFlushers: nFlushers started != 5")
-	}
-	flusher = saveFlusher
-}
+// 	if nFlushers != 5 {
+// 		t.Errorf("startFlushers: nFlushers started != 5")
+// 	}
+// 	flusher = saveFlusher
+// }
 
 func Test_startAggWorker(t *testing.T) {
 	started := 0

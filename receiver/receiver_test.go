@@ -21,15 +21,12 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/rrd"
-	"golang.org/x/time/rate"
 )
 
 // init sets debug
@@ -39,31 +36,31 @@ func Test_init(t *testing.T) {
 	}
 }
 
-func Test_workerChannels_queue(t *testing.T) {
-	var wcs workerChannels = make([]chan *incomingDpWithDs, 2)
-	wcs[0] = make(chan *incomingDpWithDs)
-	wcs[1] = make(chan *incomingDpWithDs)
+// func Test_workerChannels_queue(t *testing.T) {
+// 	var wcs workerChannels = make([]chan *incomingDpWithDs, 2)
+// 	wcs[0] = make(chan *incomingDpWithDs)
+// 	wcs[1] = make(chan *incomingDpWithDs)
 
-	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
-	rds := &receiverDs{DataSource: ds}
-	called := 0
-	go func() {
-		<-wcs[0]
-		called++
-	}()
-	wcs.queue(nil, rds)
-	if called != 1 {
-		t.Errorf("id 0 should be send to worker 0")
-	}
-}
+// 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+// 	rds := &receiverDs{DataSource: ds}
+// 	called := 0
+// 	go func() {
+// 		<-wcs[0]
+// 		called++
+// 	}()
+// 	wcs.queue(nil, rds)
+// 	if called != 1 {
+// 		t.Errorf("id 0 should be send to worker 0")
+// 	}
+// }
 
-func Test_New(t *testing.T) {
-	c := &fakeCluster{}
-	r := New(c, nil, nil)
-	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres.nil" {
-		t.Errorf(`New: r.NWorkers != 4 (%d) || r.ReportStatsPrefix != "tgres" (%s)`, r.NWorkers, r.ReportStatsPrefix)
-	}
-}
+// func Test_New(t *testing.T) {
+// 	c := &fakeCluster{}
+// 	r := New(c, nil, nil)
+// 	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres.nil" {
+// 		t.Errorf(`New: r.NWorkers != 4 (%d) || r.ReportStatsPrefix != "tgres" (%s)`, r.NWorkers, r.ReportStatsPrefix)
+// 	}
+// }
 
 func Test_Recevier_Start(t *testing.T) {
 	save := doStart
@@ -97,13 +94,13 @@ func Test_Receiver_ClusterReady(t *testing.T) {
 	}
 }
 
-func Test_Receiver_SetMaxFlushRate(t *testing.T) {
-	r := &Receiver{}
-	r.SetMaxFlushRate(100)
-	if r.flushLimiter == nil {
-		t.Errorf("r.flushLimiter == nil")
-	}
-}
+// func Test_Receiver_SetMaxFlushRate(t *testing.T) {
+// 	r := &Receiver{}
+// 	r.SetMaxFlushRate(100)
+// 	if r.flushLimiter == nil {
+// 		t.Errorf("r.flushLimiter == nil")
+// 	}
+// }
 
 func Test_Receiver_SetCluster(t *testing.T) {
 	c := &fakeCluster{}
@@ -176,40 +173,40 @@ func Test_Receiver_reportStatCount(t *testing.T) {
 	}
 }
 
-func Test_Receiver_flushDs(t *testing.T) {
-	// So we need to test that this calls queueblocking...
-	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1), flushLimiter: rate.NewLimiter(10, 10)}
-	r.flusherChs[0] = make(chan *dsFlushRequest)
-	called := 0
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			if _, ok := <-r.flusherChs[0]; !ok {
-				break
-			}
-			called++
-		}
-	}()
-	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
-	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
-	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
-	ds.ProcessDataPoint(10, time.Unix(100, 0))
-	ds.ProcessDataPoint(10, time.Unix(101, 0))
-	rds := &receiverDs{DataSource: ds}
-	r.SetMaxFlushRate(1)
-	r.flushDs(rds, false)
-	r.flushDs(rds, false)
-	close(r.flusherChs[0])
-	wg.Wait()
-	if called != 1 {
-		t.Errorf("flushDs call count not 1: %d", called)
-	}
-	if ds.PointCount() != 0 {
-		t.Errorf("ClearRRAs was not called by flushDs")
-	}
-}
+// func Test_Receiver_flushDs(t *testing.T) {
+// 	// So we need to test that this calls queueblocking...
+// 	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1), flushLimiter: rate.NewLimiter(10, 10)}
+// 	r.flusherChs[0] = make(chan *dsFlushRequest)
+// 	called := 0
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	go func() {
+// 		defer wg.Done()
+// 		for {
+// 			if _, ok := <-r.flusherChs[0]; !ok {
+// 				break
+// 			}
+// 			called++
+// 		}
+// 	}()
+// 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+// 	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
+// 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+// 	ds.ProcessDataPoint(10, time.Unix(100, 0))
+// 	ds.ProcessDataPoint(10, time.Unix(101, 0))
+// 	rds := &receiverDs{DataSource: ds}
+// 	r.SetMaxFlushRate(1)
+// 	r.flushDs(rds, false)
+// 	r.flushDs(rds, false)
+// 	close(r.flusherChs[0])
+// 	wg.Wait()
+// 	if called != 1 {
+// 		t.Errorf("flushDs call count not 1: %d", called)
+// 	}
+// 	if ds.PointCount() != 0 {
+// 		t.Errorf("ClearRRAs was not called by flushDs")
+// 	}
+// }
 
 // fake cluster
 type fakeCluster struct {

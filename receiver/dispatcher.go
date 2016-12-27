@@ -108,8 +108,12 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsC
 	}
 
 	if cds != nil {
-		forwarded := dispatcherProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
-		sr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
+		if clstr == nil {
+			workerChs.queue(dp, cds)
+		} else {
+			forwarded := dispatcherProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
+			sr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
+		}
 	}
 }
 
@@ -128,9 +132,10 @@ func reportDispatcherChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, s
 		sr.reportStatGauge("receiver.dispatcher.channel.len", ln)
 
 		// Overrun queue
-		sr.reportStatGauge("receiver.dispatcher.overrun_queue.len", float64(queue.size()))
-		pctOfDisp := (float64(queue.size()) / cp) * 100
-		sr.reportStatGauge("receiver.dispatcher.overrun_queue.pct", pctOfDisp)
+		qsz := queue.size()
+		pct := (float64(qsz) / cp) * 100
+		sr.reportStatGauge("receiver.dispatcher.overrun_queue.len", float64(qsz))
+		sr.reportStatGauge("receiver.dispatcher.overrun_queue.pct", pct)
 	}
 }
 
@@ -138,20 +143,30 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 	wc.onEnter()
 	defer wc.onExit()
 
-	// Monitor Cluster changes
-	clusterChgCh := clstr.NotifyClusterChanges()
+	var (
+		clusterChgCh chan bool
+		snd, rcv     chan *cluster.Msg
+		queue        = &dpQueue{}
+	)
 
-	// Channel for event forwards to other nodes and us
-	snd, rcv := clstr.RegisterMsgType()
-	go dispatcherIncomingDPMessages(rcv, dpCh)
+	if clstr != nil {
+		clusterChgCh = clstr.NotifyClusterChanges() // Monitor Cluster changes
+		snd, rcv = clstr.RegisterMsgType()          // Channel for event forwards to other nodes and us
+		go dispatcherIncomingDPMessages(rcv, dpCh)
+		log.Printf("dispatcher: marking cluster node as Ready.")
+		clstr.Ready(true)
+	}
 
-	queue := &dpQueue{}
-
-	// Monitor channel fill
+	// Monitor channel fill TODO: this is wrong, there should be better ways
 	go reportDispatcherChannelFillPercent(dpCh, queue, sr, time.Second)
 
-	log.Printf("dispatcher: marking cluster node as Ready.")
-	clstr.Ready(true)
+	go func() {
+		defer func() { recover() }()
+		for {
+			time.Sleep(time.Second)
+			dpCh <- nil // This ensures that overrun queue is flushed
+		}
+	}()
 
 	wc.onStarted()
 
@@ -179,6 +194,13 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 
 		if dp != nil {
 			dispatcherProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+		}
+
+		// Try to flush the queue if we are idle
+		for (len(dpCh) == 0) && (queue.size() > 0) {
+			if dp = checkSetAside(dp, queue, false); dp != nil {
+				dispatcherProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+			}
 		}
 	}
 }

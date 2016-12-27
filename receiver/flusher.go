@@ -18,11 +18,53 @@ package receiver
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
+	"golang.org/x/time/rate"
 )
+
+type dsFlusher struct {
+	flusherChs   flusherChannels
+	flushLimiter *rate.Limiter
+	db           serde.Flusher
+	sr           statReporter
+}
+
+func (f *dsFlusher) start(n int, flusherWg, startWg *sync.WaitGroup, mfs int) {
+	if mfs > 0 {
+		f.flushLimiter = rate.NewLimiter(rate.Limit(mfs), mfs)
+	}
+	f.flusherChs = make(flusherChannels, n)
+	for i := 0; i < n; i++ {
+		f.flusherChs[i] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
+		go flusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: fmt.Sprintf("flusher_%d", i)}, f, f.flusherChs[i])
+	}
+}
+
+func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
+	if f.db == nil {
+		return true
+	}
+	if f.flushLimiter != nil && !f.flushLimiter.Allow() {
+		f.sr.reportStatCount("serde.flushes_rate_limited", 1)
+		return false
+	}
+	f.flusherChs.queueBlocking(ds, block)
+	ds.ClearRRAs(false)
+	return true
+}
+
+func (f *dsFlusher) enabled() bool {
+	return f.db != nil
+}
+
+type dsFlusherBlocking interface {
+	flushDs(serde.DbDataSourcer, bool) bool
+	enabled() bool
+}
 
 type dsFlushRequest struct {
 	ds   rrd.DataSourcer
@@ -57,11 +99,11 @@ func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statRepo
 	}
 }
 
-var flusher = func(wc wController, db serde.DataSourceFlusher, sr statReporter, flusherCh chan *dsFlushRequest) {
+var flusher = func(wc wController, dsf *dsFlusher, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
 
-	go reportFlusherChannelFillPercent(flusherCh, sr, wc.ident(), time.Second)
+	go reportFlusherChannelFillPercent(flusherCh, dsf.sr, wc.ident(), time.Second)
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
@@ -72,14 +114,14 @@ var flusher = func(wc wController, db serde.DataSourceFlusher, sr statReporter, 
 			log.Printf("%s: channel closed, exiting", wc.ident())
 			return
 		}
-		err := db.FlushDataSource(fr.ds)
+		err := dsf.db.FlushDataSource(fr.ds)
 		if err != nil {
 			log.Printf("%s: error flushing data source %v: %v", wc.ident(), fr.ds, err)
 		}
 		if fr.resp != nil {
 			fr.resp <- (err == nil)
 		}
-		sr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
-		sr.reportStatCount("serde.flushes", 1)
+		dsf.sr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
+		dsf.sr.reportStatCount("serde.flushes", 1)
 	}
 }

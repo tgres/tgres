@@ -29,7 +29,7 @@ import (
 type dsCache struct {
 	sync.RWMutex
 	byName map[string]*cachedDs
-	db     serde.DataSourceSerDe
+	db     serde.Fetcher
 	dsf    dsFlusherBlocking
 	finder MatchingDSSpecFinder
 	clstr  clusterer
@@ -39,12 +39,11 @@ type dsCache struct {
 // dsCache will maintain a lock, otherwise there is no locking,
 // but the caller needs to ensure that it is never used concurrently
 // (e.g. always in the same goroutine).
-func newDsCache(db serde.DataSourceSerDe, finder MatchingDSSpecFinder, clstr clusterer, dsf dsFlusherBlocking) *dsCache {
+func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
 		byName: make(map[string]*cachedDs),
 		db:     db,
 		finder: finder,
-		clstr:  clstr,
 		dsf:    dsf,
 	}
 	return d

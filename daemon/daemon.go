@@ -106,14 +106,16 @@ var initCluster = func(bindAddr, advAddr string, joinIps []string) (c *cluster.C
 }
 
 var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *receiver.Receiver {
-	r := receiver.New(c, db, receiver.MatchingDSSpecFinder(cfg))
+	r := receiver.New(db, receiver.MatchingDSSpecFinder(cfg))
 	r.NWorkers = cfg.Workers
 	r.MaxCacheDuration = cfg.MaxCache.Duration
 	r.MinCacheDuration = cfg.MinCache.Duration
 	r.MaxCachedPoints = cfg.MaxCachedPoints
 	r.StatFlushDuration = cfg.StatFlush.Duration
 	r.StatsNamePrefix = cfg.StatsNamePrefix
-	r.SetMaxFlushRate(cfg.MaxFlushesPerSecond)
+	r.MaxFlushRatePerSecond = cfg.MaxFlushesPerSecond
+	r.ReportStats = true
+	r.SetCluster(c)
 	return r
 }
 
@@ -173,7 +175,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 
 	// Determine cluster bind address
 	var bindAddr, advAddr string
-	bindAddr, advAddr, err = determineClusterBindAddress(db)
+	bindAddr, advAddr, err = determineClusterBindAddress(db.DbAddresser())
 	if err != nil {
 		log.Printf("Cannot determine cluster bind / advertise addresses, exiting: %v", err)
 		return
@@ -181,7 +183,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 
 	// Determine ips of other nodes to join
 	var joinIps []string
-	joinIps, err = determineClusterJoinAddress(join, db)
+	joinIps, err = determineClusterJoinAddress(join, db.DbAddresser())
 	if err != nil {
 		log.Printf("Cannot determine cluster node addresses to join, exiting: %v", err)
 		return

@@ -13,9 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package receiver manages the receiving end of the data. All of the
-// queueing, caching, perioding flushing and cluster forwarding logic
-// is here.
 package receiver
 
 import (
@@ -24,36 +21,41 @@ import (
 	"github.com/tgres/tgres/rrd"
 )
 
-type dftDSFinder struct{}
-
 type MatchingDSSpecFinder interface {
 	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
 
-func (_ *dftDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
+// A default "reasonable" spec
+var DftDSSPec = &rrd.DSSpec{
+	Step:      10 * time.Second,
+	Heartbeat: 2 * time.Hour,
+	RRAs: []rrd.RRASpec{
+		rrd.RRASpec{Function: rrd.WMEAN,
+			Step: 10 * time.Second,
+			Span: 6 * time.Hour,
+		},
+		rrd.RRASpec{Function: rrd.WMEAN,
+			Step: 1 * time.Minute,
+			Span: 24 * time.Hour,
+		},
+		rrd.RRASpec{Function: rrd.WMEAN,
+			Step: 10 * time.Minute,
+			Span: 93 * 24 * time.Hour,
+		},
+		rrd.RRASpec{Function: rrd.WMEAN,
+			Step: 24 * time.Hour,
+			Span: 1825 * 24 * time.Hour,
+		},
+	},
+}
+
+type SimpleDSFinder struct {
+	*rrd.DSSpec
+}
+
+func (s *SimpleDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
 	if name == "" {
 		return nil
 	}
-	return &rrd.DSSpec{
-		Step:      10 * time.Second,
-		Heartbeat: 2 * time.Hour,
-		RRAs: []rrd.RRASpec{
-			rrd.RRASpec{Function: rrd.WMEAN,
-				Step: 10 * time.Second,
-				Span: 6 * time.Hour,
-			},
-			rrd.RRASpec{Function: rrd.WMEAN,
-				Step: 1 * time.Minute,
-				Span: 24 * time.Hour,
-			},
-			rrd.RRASpec{Function: rrd.WMEAN,
-				Step: 10 * time.Minute,
-				Span: 93 * 24 * time.Hour,
-			},
-			rrd.RRASpec{Function: rrd.WMEAN,
-				Step: 24 * time.Hour,
-				Span: 1825 * 24 * time.Hour,
-			},
-		},
-	}
+	return s.DSSpec
 }

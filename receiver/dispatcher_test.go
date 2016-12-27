@@ -28,6 +28,7 @@ import (
 	"github.com/hashicorp/memberlist"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 type fakeLogger struct {
@@ -162,9 +163,16 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 		return fwErr
 	}
 
+	// dsc
+	db := &fakeSerde{}
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, dsf)
+
 	// rds
-	ds := rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
-	rds := &receiverDs{DataSource: ds}
+	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	rds := &cachedDs{DbDataSourcer: ds}
 
 	// cluster
 	clstr := &fakeCluster{}
@@ -186,8 +194,8 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	}()
 
 	// Test if we are LocalNode
-	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
-	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if sent < 1 {
 		t.Errorf("dispatcherProcessOrForward: Nothing sent to workerChs")
 	}
@@ -196,7 +204,7 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	remote := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "remote"}}
 	clstr.nodesForDd = []*cluster.Node{remote}
 
-	n := dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	n := dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if forward != 1 {
 		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not called")
 	}
@@ -212,7 +220,7 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	}()
 
 	fwErr = fmt.Errorf("some error")
-	n = dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	n = dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if n != 0 {
 		t.Errorf("dispatcherProcessOrForward: return value != 0")
 	}
@@ -222,14 +230,21 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	fwErr = nil
 
 	// make an rds with points
-	ds = rrd.NewDataSource(0, "foo", 0, 0, time.Time{}, 0)
-	rra, _ := rrd.NewRoundRobinArchive(1, 0, "WMEAN", 10*time.Second, 100, 30, 0.5, time.Unix(1000, 0))
-	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+	ds = serde.NewDbDataSource(0, "foo", rrd.NewDataSource(rrd.DSSpec{
+		Step: 10 * time.Second,
+		RRAs: []rrd.RRASpec{
+			rrd.RRASpec{Function: rrd.WMEAN,
+				Step:   10 * time.Second,
+				Span:   30 * time.Second,
+				Latest: time.Unix(1000, 0),
+			},
+		},
+	}))
 	ds.ProcessDataPoint(123, time.Unix(2000, 0))
 	ds.ProcessDataPoint(123, time.Unix(3000, 0))
-	rds = &receiverDs{DataSource: ds}
+	rds = &cachedDs{DbDataSourcer: ds}
 
-	dispatcherProcessOrForward(rds, clstr, workerChs, nil, nil)
+	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if !strings.Contains(string(fl.last), "PointCount") {
 		t.Errorf("dispatcherProcessOrForward: Missing the PointCount warning log")
 	}
@@ -245,7 +260,7 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 
 	saveFn := dispatcherProcessOrForward
 	dpofCalled := 0
-	dispatcherProcessOrForward = func(rds *receiverDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+	dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
 		dpofCalled++
 		return 0
 	}
@@ -262,9 +277,10 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 
 	// dsc
 	db := &fakeSerde{}
-	df := &dftDSFinder{}
-	c := &fakeCluster{}
-	dsc := newDsCache(db, df, c, nil, true)
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, dsf)
 
 	// scr
 	scr := &fakeSr{}
@@ -343,13 +359,16 @@ func Test_theDispatcher(t *testing.T) {
 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
 	clstr := &fakeCluster{cChange: make(chan bool)}
 	dpCh := make(chan *IncomingDP)
-	scr := &fakeSr{}
+
+	// dsc
 	db := &fakeSerde{}
-	df := &dftDSFinder{}
-	dsc := newDsCache(db, df, clstr, nil, true)
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, dsf)
 
 	wc.startWg.Add(1)
-	go dispatcher(wc, dpCh, clstr, scr, dsc, nil)
+	go dispatcher(wc, dpCh, clstr, sr, dsc, nil)
 	wc.startWg.Wait()
 
 	if clstr.nReady == 0 {

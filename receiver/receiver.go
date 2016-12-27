@@ -28,7 +28,6 @@ import (
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/serde"
-	"golang.org/x/time/rate"
 )
 
 var debug bool
@@ -37,6 +36,9 @@ func init() {
 	debug = os.Getenv("TGRES_RCVR_DEBUG") != ""
 }
 
+// Receiver sends incoming datapoints to one of n workers, which is
+// done to provides some parallelism, especially when it comes to
+// flushing data to the database.
 type Receiver struct {
 	cluster                            clusterer
 	serde                              serde.SerDe
@@ -45,11 +47,12 @@ type Receiver struct {
 	MaxCachedPoints                    int
 	StatFlushDuration                  time.Duration
 	StatsNamePrefix                    string
+	MaxFlushRatePerSecond              int
 	dsc                                *dsCache
 	Rcache                             *dsl.ReadCache
+	flusher                            *dsFlusher
 	dpCh                               chan *IncomingDP         // incoming data point
 	workerChs                          workerChannels           // incoming data point with ds
-	flusherChs                         flusherChannels          // ds to flush
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	workerWg                           sync.WaitGroup
 	flusherWg                          sync.WaitGroup
@@ -59,7 +62,6 @@ type Receiver struct {
 	ReportStats                        bool
 	ReportStatsPrefix                  string
 	pacedMetricCh                      chan *pacedMetric
-	flushLimiter                       *rate.Limiter
 	stopped                            bool
 }
 
@@ -88,9 +90,13 @@ type incomingDpWithDs struct {
 	cds *cachedDs
 }
 
-func New(clstr clusterer, serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
+// Create a Receiver. The first argument is a SerDe, the second is a
+// MatchingDSSpecFinder used to match previously unknown DS names to a
+// DSSpec with which the DS is to be created. If you pass nil, then
+// the default SimpleDSFinder is used which always returns DftDSSPec.
+func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	if finder == nil {
-		finder = &dftDSFinder{}
+		finder = &SimpleDSFinder{DftDSSPec}
 	}
 	r := &Receiver{
 		serde:             serde,
@@ -100,17 +106,16 @@ func New(clstr clusterer, serde serde.SerDe, finder MatchingDSSpecFinder) *Recei
 		MaxCachedPoints:   256,
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
-		Rcache:            dsl.NewReadCache(serde),
+		Rcache:            dsl.NewReadCache(serde.Fetcher()),
 		dpCh:              make(chan *IncomingDP, 65536), // to be on the safe side
 		aggCh:             make(chan *aggregator.Command, 1024),
 		pacedMetricCh:     make(chan *pacedMetric, 1024),
-		ReportStats:       true,
+		ReportStats:       false,
 		ReportStatsPrefix: "tgres",
 	}
-	r.dsc = newDsCache(serde, finder, clstr, r)
-	if clstr != nil {
-		r.SetCluster(clstr)
-	}
+
+	r.flusher = &dsFlusher{db: serde.Flusher(), sr: r}
+	r.dsc = newDsCache(serde.Fetcher(), finder, r.flusher)
 	return r
 }
 
@@ -140,10 +145,6 @@ func (r *Receiver) SetCluster(c clusterer) {
 			r.ReportStatsPrefix = addr
 		}
 	}
-}
-
-func (r *Receiver) SetMaxFlushRate(mfr int) {
-	r.flushLimiter = rate.NewLimiter(rate.Limit(mfr), mfr)
 }
 
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
@@ -187,20 +188,6 @@ func (r *Receiver) reportStatGauge(name string, f float64) {
 	if r != nil && r.ReportStats {
 		r.QueueGauge(r.ReportStatsPrefix+"."+name, f)
 	}
-}
-
-func (r *Receiver) flushDs(ds serde.DbDataSourcer, block bool) bool {
-	if r.flushLimiter != nil && !r.flushLimiter.Allow() {
-		r.reportStatCount("serde.flushes_rate_limited", 1)
-		return false
-	}
-	r.flusherChs.queueBlocking(ds, block)
-	ds.ClearRRAs(false)
-	return true
-}
-
-type dsFlusherBlocking interface {
-	flushDs(serde.DbDataSourcer, bool) bool
 }
 
 type dataPointQueuer interface {

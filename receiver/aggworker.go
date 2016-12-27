@@ -17,11 +17,12 @@ package receiver
 
 import (
 	"fmt"
+	"log"
+	"time"
+
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/statsd"
-	"log"
-	"time"
 )
 
 var aggWorkerIncomingAggCmds = func(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
@@ -115,9 +116,15 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 	wc.onEnter()
 	defer wc.onExit()
 
-	// Channel for event forwards to other nodes and us
-	snd, rcv := clstr.RegisterMsgType()
-	go aggWorkerIncomingAggCmds(wc.ident(), rcv, aggCh)
+	var (
+		snd, rcv chan *cluster.Msg
+	)
+
+	if clstr != nil {
+		// Channel for event forwards to other nodes and us
+		snd, rcv = clstr.RegisterMsgType()
+		go aggWorkerIncomingAggCmds(wc.ident(), rcv, aggCh)
+	}
 
 	flushCh := make(chan time.Time, 1)
 	go aggWorkerPeriodicFlushSignal(wc.ident(), flushCh, statFlushDuration)
@@ -131,10 +138,12 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 
 	agg := aggregator.NewAggregator(dpq) // aggregator.dataPointQueuer
 	aggDd := &distDatumAggregator{agg}
-	clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
-		log.Printf("%s: adding the aggregator.Aggregator DistDatum to the cluster", wc.ident())
-		return []cluster.DistDatum{aggDd}, nil
-	})
+	if clstr != nil {
+		clstr.LoadDistData(func() ([]cluster.DistDatum, error) {
+			log.Printf("%s: adding the aggregator.Aggregator DistDatum to the cluster", wc.ident())
+			return []cluster.DistDatum{aggDd}, nil
+		})
+	}
 
 	for {
 		// It's nice to flush stats at as precise time as
@@ -156,8 +165,12 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 				return
 			}
 
-			forwarded := aggWorkerProcessOrForward(ac, aggDd, clstr, snd)
-			sr.reportStatCount("receiver.aggworker.agg.forwarded", float64(forwarded))
+			if clstr == nil {
+				aggDd.ProcessCmd(ac)
+			} else {
+				forwarded := aggWorkerProcessOrForward(ac, aggDd, clstr, snd)
+				sr.reportStatCount("receiver.aggworker.agg.forwarded", float64(forwarded))
+			}
 		}
 	}
 }

@@ -28,48 +28,29 @@ type DataSourceNamesFetcher interface {
 	FetchDataSourceNames() (map[string]int64, error)
 }
 
-type DataSourceFetcher interface {
+type Fetcher interface {
+	DataSourceNamesFetcher
 	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
-}
-
-type DataSourcesFetcher interface {
 	FetchDataSources() ([]rrd.DataSourcer, error)
-}
-
-type DataSourcesFetchOrCreator interface {
 	FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
+	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
-type DataSourceFlusher interface {
+type Flusher interface {
 	FlushDataSource(ds rrd.DataSourcer) error
 }
 
-type SeriesQuerier interface {
-	SeriesQuery(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
-}
-
-type DataSourceSerDe interface {
-	DataSourcesFetcher
-	DataSourceFlusher
-	DataSourcesFetchOrCreator
+type SerDe interface {
+	Fetcher() Fetcher
+	Flusher() Flusher
 }
 
 type DbAddresser interface {
-	// Use the database to infer outside IPs of other connected clients
-	ListDbClientIps() ([]string, error)
+	ListDbClientIps() ([]string, error) // Use the database to infer outside IPs of other connected clients
 	MyDbAddr() (*string, error)
 }
 
-// This thing knows how to load/save series in some storage
-type SerDe interface {
-	DataSourceSerDe
-	DataSourceFetcher
-	DataSourceNamesFetcher
-	SeriesQuerier
-}
-
-// This is a relational DB server
 type DbSerDe interface {
 	SerDe
-	DbAddresser
+	DbAddresser() DbAddresser
 }

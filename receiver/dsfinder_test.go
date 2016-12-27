@@ -15,16 +15,11 @@
 
 package receiver
 
-import (
-	"testing"
-	"time"
-)
-
-// dftDSFinder
-func Test_FindMatchingDSSpec(t *testing.T) {
-	df := &dftDSFinder{}
-	d := df.FindMatchingDSSpec("whatever")
-	if d.Step != 10*time.Second || len(d.RRAs) == 0 {
-		t.Errorf("FindMatchingDSSpec: d.Step != 10s || len(d.RRAs) == 0")
-	}
-}
+// DftDSFinder
+// func Test_FindMatchingDSSpec(t *testing.T) {
+// 	df := &DftDSFinder{}
+// 	d := df.FindMatchingDSSpec("whatever")
+// 	if d.Step != 10*time.Second || len(d.RRAs) == 0 {
+// 		t.Errorf("FindMatchingDSSpec: d.Step != 10s || len(d.RRAs) == 0")
+// 	}
+// }

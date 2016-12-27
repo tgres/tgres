@@ -17,10 +17,10 @@ package dsl
 
 import (
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
-	"regexp"
 
 	"github.com/tgres/tgres/serde"
 )
