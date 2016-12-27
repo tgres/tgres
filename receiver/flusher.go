@@ -61,9 +61,25 @@ func (f *dsFlusher) enabled() bool {
 	return f.db != nil
 }
 
+func (f *dsFlusher) statReporter() statReporter {
+	return f.sr
+}
+
+func (f *dsFlusher) flusher() serde.Flusher {
+	return f.db
+}
+
+func (f *dsFlusher) channels() flusherChannels {
+	return f.flusherChs
+}
+
 type dsFlusherBlocking interface {
 	flushDs(serde.DbDataSourcer, bool) bool
 	enabled() bool
+	statReporter() statReporter
+	flusher() serde.Flusher
+	channels() flusherChannels
+	start(n int, flusherWg, startWg *sync.WaitGroup, mfs int)
 }
 
 type dsFlushRequest struct {
@@ -99,11 +115,11 @@ func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statRepo
 	}
 }
 
-var flusher = func(wc wController, dsf *dsFlusher, flusherCh chan *dsFlushRequest) {
+var flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
 
-	go reportFlusherChannelFillPercent(flusherCh, dsf.sr, wc.ident(), time.Second)
+	go reportFlusherChannelFillPercent(flusherCh, dsf.statReporter(), wc.ident(), time.Second)
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
@@ -114,14 +130,14 @@ var flusher = func(wc wController, dsf *dsFlusher, flusherCh chan *dsFlushReques
 			log.Printf("%s: channel closed, exiting", wc.ident())
 			return
 		}
-		err := dsf.db.FlushDataSource(fr.ds)
+		err := dsf.flusher().FlushDataSource(fr.ds)
 		if err != nil {
 			log.Printf("%s: error flushing data source %v: %v", wc.ident(), fr.ds, err)
 		}
 		if fr.resp != nil {
 			fr.resp <- (err == nil)
 		}
-		dsf.sr.reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
-		dsf.sr.reportStatCount("serde.flushes", 1)
+		dsf.statReporter().reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
+		dsf.statReporter().reportStatCount("serde.flushes", 1)
 	}
 }

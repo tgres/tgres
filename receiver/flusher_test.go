@@ -17,6 +17,7 @@ package receiver
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,15 +46,36 @@ func Test_flusherChannels_queueBlocking(t *testing.T) {
 	}
 }
 
-// fake ds flusher
-type fFlusher struct {
-	called int
+// This is a receiver
+type fakeDsFlusher struct {
+	called    int
+	fdsReturn bool
+	sr        statReporter
 }
 
-func (f *fFlusher) FlushDataSource(ds *rrd.DataSource) error {
+func (f *fakeDsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
+	f.called++
+	return f.fdsReturn
+}
+
+func (*fakeDsFlusher) enabled() bool { return true }
+
+func (f *fakeDsFlusher) statReporter() statReporter {
+	return f.sr
+}
+
+func (f *fakeDsFlusher) flusher() serde.Flusher { return f }
+
+func (f *fakeDsFlusher) FlushDataSource(ds rrd.DataSourcer) error {
 	f.called++
 	return fmt.Errorf("Fake error.")
 }
+
+func (f *fakeDsFlusher) channels() flusherChannels {
+	return make(flusherChannels, 0)
+}
+
+func (f *fakeDsFlusher) start(n int, flusherWg, startWg *sync.WaitGroup, mfs int) {}
 
 // fake stats reporter
 type fakeSr struct {
@@ -68,35 +90,35 @@ func (f *fakeSr) reportStatGauge(string, float64) {
 	f.called++
 }
 
-// func Test_flusher(t *testing.T) {
+func Test_flusher(t *testing.T) {
 
-// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
-// 	dsf := &fFlusher{}
-// 	sr := &fakeSr{}
-// 	fc := make(chan *dsFlushRequest)
+	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
+	sr := &fakeSr{}
+	dsf := &fakeDsFlusher{sr: sr}
+	fc := make(chan *dsFlushRequest)
 
-// 	wc.startWg.Add(1)
-// 	go flusher(wc, dsf, sr, fc)
-// 	wc.startWg.Wait()
+	wc.startWg.Add(1)
+	go flusher(wc, dsf, fc)
+	wc.startWg.Wait()
 
-// 	//ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
-// 	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
-// 	rds := &cachedDs{DbDataSourcer: ds}
-// 	resp := make(chan bool)
-// 	fc <- &dsFlushRequest{ds: ds, resp: resp}
-// 	<-resp
+	//ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	rds := &cachedDs{DbDataSourcer: ds}
+	resp := make(chan bool)
+	fc <- &dsFlushRequest{ds: rds, resp: resp}
+	<-resp
 
-// 	if dsf.called != 1 {
-// 		t.Errorf("FlushDataSource() not called.")
-// 	}
+	if dsf.called != 1 {
+		t.Errorf("FlushDataSource() not called.")
+	}
 
-// 	if sr.called != 2 {
-// 		t.Errorf("reportStatCount() should have been called 2 times.")
-// 	}
+	if sr.called != 2 {
+		t.Errorf("reportStatCount() should have been called 2 times.")
+	}
 
-// 	close(fc)
-// 	wc.wg.Wait()
-// }
+	close(fc)
+	wc.wg.Wait()
+}
 
 func Test_reportFlusherChannelFillPercent(t *testing.T) {
 	ch := make(chan *dsFlushRequest, 10)

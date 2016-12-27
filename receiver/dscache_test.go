@@ -159,19 +159,6 @@ func Test_dsCache_fetchDataSourceByName(t *testing.T) {
 // 	}
 // }
 
-// This is a receiver
-type fakeDsFlusher struct {
-	called    int
-	fdsReturn bool
-}
-
-func (f *fakeDsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
-	f.called++
-	return f.fdsReturn
-}
-
-func (*fakeDsFlusher) enabled() bool { return true }
-
 func Test_receiverDs_Relinquish(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}

@@ -129,7 +129,7 @@ var stopAllWorkers = func(r *Receiver) {
 	stopPacedMetricWorker(r.pacedMetricCh, &r.pacedMetricWg)
 	stopAggWorker(r.aggCh, &r.aggWg)
 	stopWorkers(r.workerChs, &r.workerWg)
-	stopFlushers(r.flusher.flusherChs, &r.flusherWg)
+	stopFlushers(r.flusher.channels(), &r.flusherWg)
 }
 
 var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
@@ -146,7 +146,7 @@ var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 }
 
 var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
-	if r.flusher.db == nil { // This serde doesn't support flushing
+	if r.flusher.flusher() == nil { // This serde doesn't support flushing
 		return
 	}
 

@@ -50,7 +50,7 @@ type Receiver struct {
 	MaxFlushRatePerSecond              int
 	dsc                                *dsCache
 	Rcache                             *dsl.ReadCache
-	flusher                            *dsFlusher
+	flusher                            dsFlusherBlocking
 	dpCh                               chan *IncomingDP         // incoming data point
 	workerChs                          workerChannels           // incoming data point with ds
 	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)

@@ -19,8 +19,10 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"net"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,23 +106,18 @@ func Test_Receiver_ClusterReady(t *testing.T) {
 
 func Test_Receiver_SetCluster(t *testing.T) {
 	c := &fakeCluster{}
-	name := "1ibegin_with_a_digit"
-	c.ln = &cluster.Node{Node: &memberlist.Node{Name: name}}
+	c.ln = &cluster.Node{Node: &memberlist.Node{Addr: net.ParseIP("10.10.10.10")}}
+	addr := strings.Replace(c.ln.Addr.String(), ".", "_", -1)
 	dsc := &dsCache{}
 	r := &Receiver{dsc: dsc}
 	r.SetCluster(c)
-	if r.ReportStatsPrefix != "_"+name {
-		t.Errorf("r.ReportStatsPrefix != \"_\"+name")
+	if r.ReportStatsPrefix != addr {
+		t.Errorf("r.ReportStatsPrefix != addr: %v", r.ReportStatsPrefix)
 	}
 	r.ReportStatsPrefix = "foo"
 	r.SetCluster(c)
-	if r.ReportStatsPrefix != "foo._"+name {
-		t.Errorf("r.ReportStatsPrefix != foo.name")
-	}
-	c = &fakeCluster{}
-	r.SetCluster(c)
-	if r.ReportStatsPrefix != "foo._"+name+".nil" {
-		t.Errorf(`r.ReportStatsPrefix != "foo._"+name+".nil"`)
+	if r.ReportStatsPrefix != "foo."+addr {
+		t.Errorf("r.ReportStatsPrefix != foo.addr: %v", r.ReportStatsPrefix)
 	}
 }
 

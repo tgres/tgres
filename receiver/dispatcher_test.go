@@ -278,12 +278,20 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 	// dsc
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
-	sr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: sr}
+	scr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: scr}
 	dsc := newDsCache(db, df, dsf)
 
-	// scr
-	scr := &fakeSr{}
+	// workerChs
+	workerChs := make([]chan *incomingDpWithDs, 1)
+	workerChs[0] = make(chan *incomingDpWithDs)
+	sent := 0
+	go func() {
+		for {
+			<-workerChs[0]
+			sent++
+		}
+	}()
 
 	// NaN
 	dp.Value = math.NaN()
@@ -298,12 +306,12 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 	// A value
 	dp.Value = 1234
 	scr.called = 0
-	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
-	if scr.called != 2 {
-		t.Errorf("dispatcherProcessIncomingDP: With a value, reportStatCount() should be called twice")
+	dispatcherProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
+	if scr.called != 1 {
+		t.Errorf("dispatcherProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
 	}
-	if dpofCalled != 1 {
-		t.Errorf("dispatcherProcessIncomingDP: With a NaN, dispatcherProcessOrForward should be called once")
+	if dpofCalled != 0 {
+		t.Errorf("dispatcherProcessIncomingDP: With a value and no cluster, dispatcherProcessOrForward should not be called: %v", dpofCalled)
 	}
 
 	// A blank name should cause a nil rds

@@ -238,7 +238,7 @@ func Test_stopAllWorkers(t *testing.T) {
 	stopFlushers = func(flusherChs []chan *dsFlushRequest, flusherWg *sync.WaitGroup) { called++ }
 	stopAggWorker = func(aggCh chan *aggregator.Command, aggWg *sync.WaitGroup) { called++ }
 	stopPacedMetricWorker = func(pacedMetricCh chan *pacedMetric, pacedMetricWg *sync.WaitGroup) { called++ }
-	stopAllWorkers(&Receiver{})
+	stopAllWorkers(&Receiver{flusher: &fakeDsFlusher{}})
 	if called != 4 {
 		t.Errorf("stopAllWorkers: called != 4")
 	}
