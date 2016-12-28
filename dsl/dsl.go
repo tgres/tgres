@@ -44,7 +44,8 @@ func ParseDsl(db NamedDSFetcher, src string, from, to, maxPoints int64) (SeriesM
 
 func newDslCtx(db NamedDSFetcher, src string, from, to, maxPoints int64) *dslCtx {
 	return &dslCtx{
-		src:            fixQuotes(escapeBadChars(src)),
+		src:            src,
+		escSrc:         fixQuotes(escapeBadChars(src)),
 		from:           from,
 		to:             to,
 		maxPoints:      maxPoints,
@@ -61,7 +62,7 @@ func (dc *dslCtx) parse() (SeriesMap, error) {
 		return nil, fmt.Errorf("Error parsing %q: %v", dc.src, err)
 	}
 
-	fv := &FuncVisitor{dc, &callStack{}, nil, 0, -1, nil}
+	fv := &funcVisitor{dc, &callStack{}, nil, 0, -1, nil}
 
 	ast.Walk(fv, tr)
 
@@ -101,22 +102,22 @@ func (dc *dslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, 
 	return result, nil
 }
 
-type FuncCall struct {
+type funcCall struct {
 	ast  *ast.CallExpr
 	args []interface{}
 }
 
 type callStack struct {
-	nodes []*FuncCall
+	nodes []*funcCall
 	count int
 }
 
-func (s *callStack) Push(n *FuncCall) {
+func (s *callStack) Push(n *funcCall) {
 	s.nodes = append(s.nodes[:s.count], n)
 	s.count++
 }
 
-func (s *callStack) Pop() *FuncCall {
+func (s *callStack) Pop() *funcCall {
 	if s.count == 0 {
 		return nil
 	}
@@ -124,7 +125,7 @@ func (s *callStack) Pop() *FuncCall {
 	return s.nodes[s.count]
 }
 
-type FuncVisitor struct {
+type funcVisitor struct {
 	dc           *dslCtx
 	stack        *callStack
 	ret          SeriesMap
@@ -133,7 +134,7 @@ type FuncVisitor struct {
 	err          error
 }
 
-func (v *FuncVisitor) processStack() ast.Visitor {
+func (v *funcVisitor) processStack() ast.Visitor {
 
 	var (
 		ret interface{}
@@ -194,7 +195,7 @@ func (v *FuncVisitor) processStack() ast.Visitor {
 	return v
 }
 
-func (v *FuncVisitor) Visit(node ast.Node) ast.Visitor {
+func (v *funcVisitor) Visit(node ast.Node) ast.Visitor {
 
 	if node == nil {
 		v.level--
@@ -209,7 +210,7 @@ func (v *FuncVisitor) Visit(node ast.Node) ast.Visitor {
 
 	switch t := node.(type) {
 	case *ast.CallExpr:
-		v.stack.Push(&FuncCall{t, make([]interface{}, len(t.Args))})
+		v.stack.Push(&funcCall{t, make([]interface{}, len(t.Args))})
 
 		// This ensures that we skip all the subsequent visits since
 		// the CallExpr already contains all the information we need.

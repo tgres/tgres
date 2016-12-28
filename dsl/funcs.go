@@ -49,7 +49,7 @@ type dslFuncType struct {
 	varArg bool
 	args   []argDef
 }
-type FuncMap map[string]dslFuncType
+type funcMap map[string]dslFuncType
 
 type dslCtxFuncType func(*dslCtx, []interface{}) (SeriesMap, error)
 type dslCtxFuncMap map[string]dslCtxFuncType
@@ -58,7 +58,7 @@ var dslCtxFuncs = dslCtxFuncMap{ // functions that require the dslCtx to do thei
 	"sumSeriesWithWildcards": dslSumSeriesWithWildcards,
 }
 
-var preprocessArgFuncs = FuncMap{
+var preprocessArgFuncs = funcMap{
 	"scale": dslFuncType{dslScale, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"factor", argNumber, nil}}},
