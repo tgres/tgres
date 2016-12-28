@@ -1976,13 +1976,8 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 		}
 
 		// This is the actual output
-		ss := &SliceSeries{
-			data:  shw.result,
-			start: nanlessBegin,
-			step:  shw.GroupBy(),
-			pos:   -1,
-			alias: shw.Alias(),
-		}
+		ss := series.NewSliceSeries(shw.result, nanlessBegin, shw.GroupBy())
+		ss.Alias(shw.Alias())
 
 		if strings.Contains(show, "smooth") {
 			result[name] = ss
@@ -1991,58 +1986,45 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 		if strings.Contains(show, "conf") || strings.Contains(show, "aberr") {
 
 			// upper band
-			uc := &SliceSeries{
-				data:  make([]float64, len(shw.result)),
-				start: nanlessBegin,
-				step:  shw.GroupBy(),
-				pos:   -1,
-				alias: shw.Alias(),
-			}
-			uc.Alias(fmt.Sprintf("holtWintersConfidenceUpper(%v)", name))
-
+			ucdata := make([]float64, len(shw.result))
 			for i := 0; i < len(shw.result); i++ {
-				uc.data[i] = shw.result[i] + shw.result[i]*dev[i]*devScale
+				ucdata[i] = shw.result[i] + shw.result[i]*dev[i]*devScale
 			}
+
+			uc := series.NewSliceSeries(ucdata, nanlessBegin, shw.GroupBy())
+			uc.Alias(fmt.Sprintf("holtWintersConfidenceUpper(%v)", name))
 
 			if strings.Contains(show, "conf") {
 				result[name+".upper"] = uc
 			}
 
 			// lower band
-			lc := &SliceSeries{
-				data:  make([]float64, len(shw.result)),
-				start: nanlessBegin,
-				step:  shw.GroupBy(),
-				pos:   -1,
-				alias: shw.Alias(),
+			lcdata := make([]float64, len(shw.result))
+			for i := 0; i < len(shw.result); i++ {
+				lcdata[i] = shw.result[i] - shw.result[i]*dev[i]*devScale
 			}
+
+			lc := series.NewSliceSeries(lcdata, nanlessBegin, shw.GroupBy())
 			lc.Alias(fmt.Sprintf("holtWintersConfidenceLower(%v)", name))
 
-			for i := 0; i < len(shw.result); i++ {
-				lc.data[i] = shw.result[i] - shw.result[i]*dev[i]*devScale
-			}
 			if strings.Contains(show, "conf") {
 				result[name+".lower"] = lc
 			}
+
 			if strings.Contains(show, "aberr") {
 
 				// aberrations
-				ab := &SliceSeries{
-					data:  make([]float64, len(shw.result)),
-					start: nanlessBegin,
-					step:  shw.GroupBy(),
-					pos:   -1,
-					alias: shw.Alias(),
-				}
-				lc.Alias(fmt.Sprintf("holtWintersAberration(%v)", name))
-
+				abdata := make([]float64, len(shw.result))
 				for i := 0; i < len(shw.result); i++ {
-					if shw.result[i] < lc.data[i] {
-						ab.data[i] = shw.result[i] - lc.data[i]
-					} else if shw.result[i] > uc.data[i] {
-						ab.data[i] = shw.result[i] - uc.data[i]
+					if shw.result[i] < lcdata[i] {
+						abdata[i] = shw.result[i] - lcdata[i]
+					} else if shw.result[i] > ucdata[i] {
+						abdata[i] = shw.result[i] - ucdata[i]
 					}
 				}
+
+				ab := series.NewSliceSeries(abdata, nanlessBegin, shw.GroupBy())
+				ab.Alias(fmt.Sprintf("holtWintersAberration(%v)", name))
 
 				result[name+".aberrant"] = ab
 			}

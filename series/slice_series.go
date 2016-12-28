@@ -13,13 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dsl
+package series
 
 import (
 	"math"
 	"time"
 )
 
+// SliceSeries is a Series based on a simple []float64.
 type SliceSeries struct {
 	data  []float64
 	start time.Time
