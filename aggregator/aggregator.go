@@ -13,9 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package aggregator provides the ability to aggregate data points from
-// various sources and passing the consolidated value on to tgres at a
-// pre-defined interval.
+// Package aggregator provides the ability to aggregate data points
+// from various sources similar to statsd. On flush, aggregator passes
+// the consolidated values to a DataPointQueuer
+// (e.g. tgres.receiver). The aggregator only aggregates the data, it
+// does not concern itself with the periodic flushing, that is the job
+// of its user.
 package aggregator
 
 import (
@@ -27,7 +30,7 @@ import (
 	"time"
 )
 
-type dataPointQueuer interface {
+type DataPointQueuer interface {
 	QueueDataPoint(string, time.Time, float64)
 }
 
@@ -45,25 +48,39 @@ type aggregation struct {
 	list  []float64
 }
 
-type Aggregator struct {
-	t          dataPointQueuer
-	m          map[string]*aggregation
-	lastFlush  time.Time
-	thresholds []int
+// The Aggregator keeps the intermediate state for all data that is
+// being aggregated.
+type Aggregator interface {
+	// Process an aggregator command, which is a data point with insturctions on how to process it.
+	ProcessCmd(cmd *Command)
+	// Flush all aggregations to the undelying DataPointQueuer. If now is zero, time.Now() is used.
+	// All internal state is cleared after a flush.
+	Flush(now time.Time)
 }
 
-func NewAggregator(t dataPointQueuer) *Aggregator {
-	return &Aggregator{
+type State struct {
+	t          DataPointQueuer
+	m          map[string]*aggregation
+	lastFlush  time.Time
+	Thresholds []int // List of percentiles for CmdAppend
+}
+
+// Returns a new aggregator. The only argument needs to provide a
+// QueueDataPoint() method which is what the aggregator will use to
+// queue the aggregated points. The returned aggregator state has
+// Thresholds set to {90}.
+func NewAggregator(t DataPointQueuer) *State {
+	return &State{
 		t:          t,
 		m:          make(map[string]*aggregation),
 		lastFlush:  time.Now(),
-		thresholds: []int{90}, // TODO make me configurable?
+		Thresholds: []int{90},
 	}
 }
 
 // Add to an already existing value at key name, created as
 // 0.0/aggKindValue if not existing.
-func (a *Aggregator) add(name string, value float64) {
+func (a *State) add(name string, value float64) {
 	if a.m[name] == nil {
 		a.m[name] = &aggregation{kind: aggKindValue}
 	}
@@ -72,7 +89,7 @@ func (a *Aggregator) add(name string, value float64) {
 
 // Add to an already existing value at key name, created as
 // 0.0/aggKindGauge if not existing.
-func (a *Aggregator) addGauge(name string, value float64) {
+func (a *State) addGauge(name string, value float64) {
 	if a.m[name] == nil {
 		a.m[name] = &aggregation{kind: aggKindGauge}
 	}
@@ -81,7 +98,7 @@ func (a *Aggregator) addGauge(name string, value float64) {
 
 // Set the value at key name overwriting any previous, created as
 // 0.0./aggKindGauge if not existing
-func (a *Aggregator) setGauge(name string, value float64) {
+func (a *State) setGauge(name string, value float64) {
 	if a.m[name] == nil {
 		a.m[name] = &aggregation{kind: aggKindGauge, value: value}
 	} else {
@@ -91,7 +108,7 @@ func (a *Aggregator) setGauge(name string, value float64) {
 
 // Append to values at key name, created as aggKindList if not
 // existing.
-func (a *Aggregator) append(name string, value float64) {
+func (a *State) append(name string, value float64) {
 	if a.m[name] == nil {
 		a.m[name] = &aggregation{kind: aggKindList, list: make([]float64, 0, 2)}
 	}
@@ -100,7 +117,7 @@ func (a *Aggregator) append(name string, value float64) {
 	}
 }
 
-func (a *Aggregator) ProcessCmd(cmd *Command) {
+func (a *State) ProcessCmd(cmd *Command) {
 	if !cmd.ts.IsZero() && cmd.ts.Before(a.lastFlush) {
 		return // this command is too old for this aggregator, ignore it
 	}
@@ -116,7 +133,7 @@ func (a *Aggregator) ProcessCmd(cmd *Command) {
 	}
 }
 
-func (a *Aggregator) Flush(now time.Time) {
+func (a *State) Flush(now time.Time) {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -160,7 +177,7 @@ func (a *Aggregator) Flush(now time.Time) {
 				}
 
 				// TODO may be add "median" and "std"?
-				for _, threshold := range a.thresholds {
+				for _, threshold := range a.Thresholds {
 					idx := round(float64(threshold)/100*float64(len(list))) - 1
 					a.t.QueueDataPoint(name+fmt.Sprintf(".sum_%02d", threshold), now, cumul[idx])
 					a.t.QueueDataPoint(name+fmt.Sprintf(".mean_%02d", threshold), now, cumul[idx]/float64(idx+1))
@@ -178,18 +195,19 @@ func (a *Aggregator) Flush(now time.Time) {
 type AggCmd int
 
 const (
-	CmdAdd AggCmd = iota
-	CmdAddGauge
-	CmdSetGauge
-	CmdAppend
+	CmdAdd      AggCmd = iota // Add the value, the flushed value is a per second rate.
+	CmdAddGauge               // Add the value, the flushed value is the sum as is (e.g. total traffic for all routers).
+	CmdSetGauge               // Overwrite the value, the flushed value is the last value as is.
+	CmdAppend                 // Append the value to a slice. The flushed values will be upper/lower/sum/mean and Threshold percentiles.
 )
 
+// An aggregator command. Use NewCommand() to create one.
 type Command struct {
 	cmd   AggCmd
 	name  string
 	value float64
 	ts    time.Time
-	Hops  int
+	Hops  int // For cluster forwarding
 }
 
 func (ac *Command) GobEncode() ([]byte, error) {
@@ -228,6 +246,8 @@ func (ac *Command) GobDecode(b []byte) error {
 	return err
 }
 
+// Create an aggregator command. The cmd argument dictates how the
+// data will be aggregated, see AggCmd.
 func NewCommand(cmd AggCmd, name string, value float64) *Command {
 	return &Command{cmd: cmd, name: name, value: value, ts: time.Now()}
 }

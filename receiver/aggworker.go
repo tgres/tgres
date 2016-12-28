@@ -177,13 +177,8 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 
 // Implement cluster.DistDatum for stats
 
-type aggregatorer interface {
-	ProcessCmd(cmd *aggregator.Command)
-	Flush(now time.Time)
-}
-
 type distDatumAggregator struct {
-	aggregatorer
+	aggregator.Aggregator
 }
 
 func (d *distDatumAggregator) Id() int64       { return 1 }

@@ -21,10 +21,10 @@ import (
 	"github.com/tgres/tgres/rrd"
 )
 
-// A DS Finder can turn a DS name into a DSSpec. This is for
-// previously unknown DS names that need to be created - this
-// interface provides a mechanism for creating different DS/RRA
-// configurations based on the name.
+// A DSSpec Finder can find a DSSpec for a name. For previously
+// unknown DS names that need to be created on-the-fly this interface
+// provides a mechanism for specifying DS/RRA configurations based on
+// the name.
 type MatchingDSSpecFinder interface {
 	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
