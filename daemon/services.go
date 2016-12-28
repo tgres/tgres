@@ -18,16 +18,18 @@ package daemon
 import (
 	"bufio"
 	"fmt"
-	pickle "github.com/hydrogen18/stalecucumber"
-	"github.com/tgres/tgres/graceful"
-	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/receiver"
-	"github.com/tgres/tgres/statsd"
 	"log"
 	"net"
 	"os"
 	"strings"
 	"time"
+
+	pickle "github.com/hydrogen18/stalecucumber"
+	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/graceful"
+	"github.com/tgres/tgres/misc"
+	"github.com/tgres/tgres/receiver"
+	"github.com/tgres/tgres/statsd"
 )
 
 type trService interface {
@@ -42,14 +44,14 @@ type serviceManager struct {
 	services serviceMap
 }
 
-func newServiceManager(rcvr *receiver.Receiver, cfg *Config) *serviceManager {
+func newServiceManager(rcvr *receiver.Receiver, rcache dsl.ReadCacher, cfg *Config) *serviceManager {
 	return &serviceManager{rcvr: rcvr,
 		services: serviceMap{
 			"gt":  &graphiteTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteTextListenSpec},
 			"gu":  &graphiteUdpTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteUdpListenSpec},
 			"gp":  &graphitePickleServiceManager{rcvr: rcvr, listenSpec: cfg.GraphitePickleListenSpec},
 			"su":  &statsdUdpTextServiceManager{rcvr: rcvr, listenSpec: cfg.StatsdUdpListenSpec},
-			"www": &wwwServer{rcvr: rcvr, listenSpec: cfg.HttpListenSpec},
+			"www": &wwwServer{rcvr: rcvr, rcache: rcache, listenSpec: cfg.HttpListenSpec},
 		},
 	}
 }
@@ -111,6 +113,7 @@ func (r *serviceManager) closeListeners() {
 
 type wwwServer struct {
 	rcvr       *receiver.Receiver
+	rcache     dsl.ReadCacher
 	listener   *graceful.Listener
 	listenSpec string
 }
@@ -154,7 +157,7 @@ func (g *wwwServer) Start(file *os.File) error {
 
 	fmt.Printf("HTTP protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
-	go httpServer(g.listenSpec, g.listener, g.rcvr)
+	go httpServer(g.listenSpec, g.listener, g.rcvr, g.rcache)
 
 	return nil
 }

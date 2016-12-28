@@ -31,7 +31,7 @@ import (
 	"github.com/tgres/tgres/misc"
 )
 
-func GraphiteMetricsFindHandler(rcache *dsl.ReadCache) http.HandlerFunc {
+func GraphiteMetricsFindHandler(rcache dsl.ReadCacher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[\n")
 		nodes := rcache.FsFind(r.FormValue("query"))
@@ -50,7 +50,7 @@ func GraphiteMetricsFindHandler(rcache *dsl.ReadCache) http.HandlerFunc {
 	}
 }
 
-func GraphiteRenderHandler(rcache *dsl.ReadCache) http.HandlerFunc {
+func GraphiteRenderHandler(rcache dsl.ReadCacher) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -169,7 +169,7 @@ func quoteIdentifiers(target string) string {
 	return result
 }
 
-func processTarget(rcache *dsl.ReadCache, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
+func processTarget(rcache dsl.ReadCacher, target string, from, to, maxPoints int64) (dsl.SeriesMap, error) {
 	target = quoteIdentifiers(target)
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)

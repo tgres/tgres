@@ -21,15 +21,18 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tgres/tgres/dsl"
 	h "github.com/tgres/tgres/http"
 	"github.com/tgres/tgres/receiver"
 )
 
-func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver) {
+func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.ReadCacher) {
 
-	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcvr.Rcache))
-	http.HandleFunc("/render", h.GraphiteRenderHandler(rcvr.Rcache))
+	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcache))
+	http.HandleFunc("/render", h.GraphiteRenderHandler(rcache))
+
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
+
 	http.HandleFunc("/pixel", h.PixelHandler(rcvr))
 	http.HandleFunc("/pixel/add", h.PixelAddHandler(rcvr))
 	http.HandleFunc("/pixel/addgauge", h.PixelAddGaugeHandler(rcvr))

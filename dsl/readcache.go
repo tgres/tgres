@@ -30,16 +30,26 @@ type dsFetcher interface {
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
-type ReadCache struct {
+type fsFinder interface {
+	dsIdsFromIdent(ident string) map[string]int64
+	FsFind(pattern string) []*FsFindNode
+}
+
+type ReadCacher interface {
 	dsFetcher
-	dsns *DataSourceNames
+	fsFinder
 }
 
-func NewReadCache(db dsFetcher) *ReadCache {
-	return &ReadCache{dsFetcher: db, dsns: &DataSourceNames{}}
+type readCache struct {
+	dsFetcher
+	dsns *dataSourceNames
 }
 
-func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {
+func NewReadCache(db dsFetcher) *readCache {
+	return &readCache{dsFetcher: db, dsns: &dataSourceNames{}}
+}
+
+func (r *readCache) dsIdsFromIdent(ident string) map[string]int64 {
 	result := r.dsns.dsIdsFromIdent(ident)
 	if len(result) == 0 {
 		r.dsns.reload(r)
@@ -48,16 +58,20 @@ func (r *ReadCache) dsIdsFromIdent(ident string) map[string]int64 {
 	return result
 }
 
-func (r *ReadCache) FsFind(pattern string) []*FsFindNode {
+// FsFind provides a way of searching dot-separated names using same
+// rules as filepath.Match, as well as comma-separated values in curly
+// braces such as "foo.{bar,baz}".
+func (r *readCache) FsFind(pattern string) []*FsFindNode {
 	r.dsns.reload(r)
 	return r.dsns.fsFind(pattern)
 }
 
-func NewReadCacheFromMap(dss map[string]rrd.DataSourcer) *ReadCache {
+// Creates a readCache from a map of DataSourcers.
+func NewReadCacheFromMap(dss map[string]rrd.DataSourcer) *readCache {
 	return NewReadCache(newMapCache(dss))
 }
 
-// A rcacheSeriesQuerier backed by a simple map of DSs
+// A dsFinder backed by a simple map of DSs
 func newMapCache(dss map[string]rrd.DataSourcer) *mapCache {
 	mc := &mapCache{make(map[string]int64), make(map[int64]rrd.DataSourcer)}
 	var n int64

@@ -40,7 +40,7 @@ func (f *fakeLogger) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func Test_dispatcherIncomingDPMessages(t *testing.T) {
+func Test_directorIncomingDPMessages(t *testing.T) {
 	defer func() {
 		// restore default output
 		log.SetOutput(os.Stderr)
@@ -62,7 +62,7 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 		}
 	}()
 
-	go dispatcherIncomingDPMessages(rcv, dpCh)
+	go directorIncomingDPMessages(rcv, dpCh)
 
 	// Sending a bogus message should not cause anything be written to dpCh
 	rcv <- &cluster.Msg{}
@@ -105,11 +105,11 @@ func Test_dispatcherIncomingDPMessages(t *testing.T) {
 	rcv <- m
 
 	// Closing the channel exists (not sure how to really test for that)
-	go dispatcherIncomingDPMessages(rcv, dpCh)
+	go directorIncomingDPMessages(rcv, dpCh)
 	close(rcv)
 }
 
-func Test_dispatcherForwardDPToNode(t *testing.T) {
+func Test_directorForwardDPToNode(t *testing.T) {
 
 	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
 	md := make([]byte, 20)
@@ -129,18 +129,18 @@ func Test_dispatcherForwardDPToNode(t *testing.T) {
 
 	// if hops is > 0, nothing happens
 	dp.Hops = 1
-	dispatcherForwardDPToNode(dp, node, snd)
-	dispatcherForwardDPToNode(dp, node, snd)
+	directorForwardDPToNode(dp, node, snd)
+	directorForwardDPToNode(dp, node, snd)
 
 	if count > 0 {
-		t.Errorf("dispatcherForwardDPToNode: Data points with hops > 0 should not be forwarded")
+		t.Errorf("directorForwardDPToNode: Data points with hops > 0 should not be forwarded")
 	}
 
 	// otherwise it should work
 	dp.Hops = 0
-	dispatcherForwardDPToNode(dp, node, snd)
+	directorForwardDPToNode(dp, node, snd)
 	dp.Hops = 0 // because it just got incremented
-	dispatcherForwardDPToNode(dp, node, snd)
+	directorForwardDPToNode(dp, node, snd)
 
 	if count < 1 {
 		t.Errorf("Data point not sent to channel?")
@@ -149,16 +149,16 @@ func Test_dispatcherForwardDPToNode(t *testing.T) {
 	// mark node not Ready
 	md[0] = 0
 	dp.Hops = 0 // because it just got incremented
-	if err := dispatcherForwardDPToNode(dp, node, snd); err == nil {
+	if err := directorForwardDPToNode(dp, node, snd); err == nil {
 		t.Errorf("not ready node should cause an error")
 	}
 }
 
-func Test_dispatcherProcessOrForward(t *testing.T) {
+func Test_directorProcessOrForward(t *testing.T) {
 
-	saveFn := dispatcherForwardDPToNode
+	saveFn := directorForwardDPToNode
 	forward, fwErr := 0, error(nil)
-	dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+	directorForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
 		forward++
 		return fwErr
 	}
@@ -194,22 +194,22 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	}()
 
 	// Test if we are LocalNode
-	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if sent < 1 {
-		t.Errorf("dispatcherProcessOrForward: Nothing sent to workerChs")
+		t.Errorf("directorProcessOrForward: Nothing sent to workerChs")
 	}
 
 	// Now test we are NOT LN, forward
 	remote := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "remote"}}
 	clstr.nodesForDd = []*cluster.Node{remote}
 
-	n := dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	n := directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if forward != 1 {
-		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not called")
+		t.Errorf("directorProcessOrForward: directorForwardDPToNode not called")
 	}
 	if n != 1 {
-		t.Errorf("dispatcherProcessOrForward: return value != 1")
+		t.Errorf("directorProcessOrForward: return value != 1")
 	}
 
 	fl := &fakeLogger{}
@@ -220,12 +220,12 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	}()
 
 	fwErr = fmt.Errorf("some error")
-	n = dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	n = directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if n != 0 {
-		t.Errorf("dispatcherProcessOrForward: return value != 0")
+		t.Errorf("directorProcessOrForward: return value != 0")
 	}
 	if !strings.Contains(string(fl.last), "some error") {
-		t.Errorf("dispatcherProcessOrForward: dispatcherForwardDPToNode not logged")
+		t.Errorf("directorProcessOrForward: directorForwardDPToNode not logged")
 	}
 	fwErr = nil
 
@@ -244,23 +244,23 @@ func Test_dispatcherProcessOrForward(t *testing.T) {
 	ds.ProcessDataPoint(123, time.Unix(3000, 0))
 	rds = &cachedDs{DbDataSourcer: ds}
 
-	dispatcherProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
+	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
 	if !strings.Contains(string(fl.last), "PointCount") {
-		t.Errorf("dispatcherProcessOrForward: Missing the PointCount warning log")
+		t.Errorf("directorProcessOrForward: Missing the PointCount warning log")
 	}
 	if rds.PointCount() != 0 {
-		t.Errorf("dispatcherProcessOrForward: ClearRRAs(true) not called")
+		t.Errorf("directorProcessOrForward: ClearRRAs(true) not called")
 	}
 
-	// restore dispatcherForwardDPToNode
-	dispatcherForwardDPToNode = saveFn
+	// restore directorForwardDPToNode
+	directorForwardDPToNode = saveFn
 }
 
-func Test_dispatcherProcessIncomingDP(t *testing.T) {
+func Test_directorProcessIncomingDP(t *testing.T) {
 
-	saveFn := dispatcherProcessOrForward
+	saveFn := directorProcessOrForward
 	dpofCalled := 0
-	dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+	directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
 		dpofCalled++
 		return 0
 	}
@@ -295,34 +295,34 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 
 	// NaN
 	dp.Value = math.NaN()
-	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
 	if scr.called != 1 {
-		t.Errorf("dispatcherProcessIncomingDP: With a NaN, reportStatCount() should only be called once")
+		t.Errorf("directorProcessIncomingDP: With a NaN, reportStatCount() should only be called once")
 	}
 	if dpofCalled > 0 {
-		t.Errorf("dispatcherProcessIncomingDP: With a NaN, dispatcherProcessOrForward should not be called")
+		t.Errorf("directorProcessIncomingDP: With a NaN, directorProcessOrForward should not be called")
 	}
 
 	// A value
 	dp.Value = 1234
 	scr.called = 0
-	dispatcherProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
+	directorProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
 	if scr.called != 1 {
-		t.Errorf("dispatcherProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
+		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
 	}
 	if dpofCalled != 0 {
-		t.Errorf("dispatcherProcessIncomingDP: With a value and no cluster, dispatcherProcessOrForward should not be called: %v", dpofCalled)
+		t.Errorf("directorProcessIncomingDP: With a value and no cluster, directorProcessOrForward should not be called: %v", dpofCalled)
 	}
 
 	// A blank name should cause a nil rds
 	dp.Name = ""
 	scr.called, dpofCalled = 0, 0
-	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
 	if scr.called != 1 {
-		t.Errorf("dispatcherProcessIncomingDP: With a blank name, reportStatCount() should be called once")
+		t.Errorf("directorProcessIncomingDP: With a blank name, reportStatCount() should be called once")
 	}
 	if dpofCalled > 0 {
-		t.Errorf("dispatcherProcessIncomingDP: With a blank name, dispatcherProcessOrForward should not be called")
+		t.Errorf("directorProcessIncomingDP: With a blank name, directorProcessOrForward should not be called")
 	}
 	if !strings.Contains(string(fl.last), "No spec matched") {
 		t.Errorf("should log 'No spec matched'")
@@ -332,28 +332,28 @@ func Test_dispatcherProcessIncomingDP(t *testing.T) {
 	dp.Name = "blah"
 	db.fakeErr = true
 	scr.called, dpofCalled = 0, 0
-	dispatcherProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
+	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
 	if scr.called != 1 {
-		t.Errorf("dispatcherProcessIncomingDP: With a db error, reportStatCount() should be called once")
+		t.Errorf("directorProcessIncomingDP: With a db error, reportStatCount() should be called once")
 	}
 	if dpofCalled > 0 {
-		t.Errorf("dispatcherProcessIncomingDP: With a db error, dispatcherProcessOrForward should not be called")
+		t.Errorf("directorProcessIncomingDP: With a db error, directorProcessOrForward should not be called")
 	}
 	if !strings.Contains(string(fl.last), "error") {
 		t.Errorf("should log 'error'")
 	}
 
-	dispatcherProcessOrForward = saveFn
+	directorProcessOrForward = saveFn
 }
 
-func Test_theDispatcher(t *testing.T) {
+func Test_theDirector(t *testing.T) {
 
-	saveFn1 := dispatcherIncomingDPMessages
-	saveFn2 := dispatcherProcessIncomingDP
+	saveFn1 := directorIncomingDPMessages
+	saveFn2 := directorProcessIncomingDP
 	dimCalled := 0
-	dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) { dimCalled++ }
+	directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) { dimCalled++ }
 	dpidpCalled := 0
-	dispatcherProcessIncomingDP = func(dp *IncomingDP, scr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+	directorProcessIncomingDP = func(dp *IncomingDP, scr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 		dpidpCalled++
 	}
 
@@ -376,21 +376,21 @@ func Test_theDispatcher(t *testing.T) {
 	dsc := newDsCache(db, df, dsf)
 
 	wc.startWg.Add(1)
-	go dispatcher(wc, dpCh, clstr, sr, dsc, nil)
+	go director(wc, dpCh, clstr, sr, dsc, nil)
 	wc.startWg.Wait()
 
 	if clstr.nReady == 0 {
-		t.Errorf("dispatcher: Ready(true) not called on cluster")
+		t.Errorf("director: Ready(true) not called on cluster")
 	}
 
 	if clstr.nReg == 0 {
-		t.Errorf("dispatcher: cluster.RegisterMsgType() not called")
+		t.Errorf("director: cluster.RegisterMsgType() not called")
 	}
 
 	// This sometimes can fail because we don't wait for that goroutine in this test...
 	time.Sleep(5 * time.Millisecond)
 	if dimCalled == 0 {
-		t.Errorf("dispatcher: dispatcherIncomingDPMessages not started")
+		t.Errorf("director: directorIncomingDPMessages not started")
 	}
 
 	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
@@ -398,7 +398,7 @@ func Test_theDispatcher(t *testing.T) {
 	dpCh <- dp
 
 	if dpidpCalled == 0 {
-		t.Errorf("dispatcher: dispatcherProcessIncomingDP not called")
+		t.Errorf("director: directorProcessIncomingDP not called")
 	}
 
 	// Trigger a transition
@@ -406,7 +406,7 @@ func Test_theDispatcher(t *testing.T) {
 	dpCh <- dp
 
 	if clstr.nTrans == 0 {
-		t.Errorf("dispatcher: on cluster change, Transition() not called")
+		t.Errorf("director: on cluster change, Transition() not called")
 	}
 
 	// Transition with error
@@ -415,7 +415,7 @@ func Test_theDispatcher(t *testing.T) {
 	dpCh <- dp
 
 	if !strings.Contains(string(fl.last), "some error") {
-		t.Errorf("dispatcher: on transition error, 'some error' missing from logs")
+		t.Errorf("director: on transition error, 'some error' missing from logs")
 	}
 
 	dpidpCalled = 0
@@ -423,18 +423,18 @@ func Test_theDispatcher(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	if dpidpCalled > 0 {
-		t.Errorf("dispatcher: dispatcherProcessIncomingDP must not be called on channel close")
+		t.Errorf("director: directorProcessIncomingDP must not be called on channel close")
 	}
 
 	if !strings.Contains(string(fl.last), "shutting down") {
-		t.Errorf("dispatcher: on channel close, missing 'shutting down' log entry")
+		t.Errorf("director: on channel close, missing 'shutting down' log entry")
 	}
 
-	dispatcherIncomingDPMessages = saveFn1
-	dispatcherProcessIncomingDP = saveFn2
+	directorIncomingDPMessages = saveFn1
+	directorProcessIncomingDP = saveFn2
 }
 
-func Test_reportDispatcherChannelFillPercent(t *testing.T) {
+func Test_reportDirectorChannelFillPercent(t *testing.T) {
 	defer func() {
 		// restore default output
 		log.SetOutput(os.Stderr)
@@ -450,13 +450,13 @@ func Test_reportDispatcherChannelFillPercent(t *testing.T) {
 	}
 	queue := &dpQueue{}
 	queue.push(&IncomingDP{})
-	go reportDispatcherChannelFillPercent(ch, queue, sr, time.Millisecond)
+	go reportDirectorChannelFillPercent(ch, queue, sr, time.Millisecond)
 	time.Sleep(50 * time.Millisecond)
 	if sr.called == 0 {
-		t.Errorf("reportDispatcherChannelFillPercent: statReporter should have been called a bunch of times")
+		t.Errorf("reportDirectorChannelFillPercent: statReporter should have been called a bunch of times")
 	}
 	if !strings.Contains(string(fl.last), "WARNING") {
-		t.Errorf("reportDispatcherChannelFillPercent: there should be a warning about dispatcher channel nearly full")
+		t.Errorf("reportDirectorChannelFillPercent: there should be a warning about director channel nearly full")
 	}
 }
 

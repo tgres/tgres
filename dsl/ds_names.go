@@ -25,8 +25,10 @@ import (
 	"github.com/tgres/tgres/serde"
 )
 
-// for Graphite-like listings
-type DataSourceNames struct {
+// DataSourceNames provides a way of searching dot-separated names
+// using same rules as filepath.Match, as well as comma-separated
+// values in curly braces such as "foo.{bar,baz}".
+type dataSourceNames struct {
 	sync.RWMutex
 	names    map[string]int64
 	prefixes map[string]bool
@@ -54,7 +56,7 @@ func (fns fsNodes) Swap(i, j int) {
 // Add prefixes given a name:
 // "abcd" => []
 // "abcd.efg.hij" => ["abcd.efg", "abcd"]
-func (dsns *DataSourceNames) addPrefixes(name string) {
+func (dsns *dataSourceNames) addPrefixes(name string) {
 	prefix := name
 	for ext := filepath.Ext(prefix); ext != ""; {
 		prefix = name[0 : len(prefix)-len(ext)]
@@ -63,7 +65,7 @@ func (dsns *DataSourceNames) addPrefixes(name string) {
 	}
 }
 
-func (dsns *DataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
+func (dsns *dataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
 	names, err := db.FetchDataSourceNames()
 	if err != nil {
 		return err
@@ -82,7 +84,7 @@ func (dsns *DataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
 	return nil
 }
 
-func (dsns *DataSourceNames) fsFind(pattern string) []*FsFindNode {
+func (dsns *dataSourceNames) fsFind(pattern string) []*FsFindNode {
 
 	if strings.Count(pattern, ",") > 0 {
 		subres := make(fsNodes, 0)
@@ -129,7 +131,7 @@ func (dsns *DataSourceNames) fsFind(pattern string) []*FsFindNode {
 	return result
 }
 
-func (dsns *DataSourceNames) dsIdsFromIdent(ident string) map[string]int64 {
+func (dsns *dataSourceNames) dsIdsFromIdent(ident string) map[string]int64 {
 	result := make(map[string]int64)
 	for _, node := range dsns.fsFind(ident) {
 		if node.Leaf { // only leaf nodes are series names

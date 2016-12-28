@@ -30,10 +30,10 @@ type DslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	rcache              *ReadCache
+	rcache              ReadCacher
 }
 
-func NewDslCtx(rcache *ReadCache, src string, from, to, maxPoints int64) *DslCtx {
+func NewDslCtx(rcache ReadCacher, src string, from, to, maxPoints int64) *DslCtx {
 	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, rcache}
 }
 

@@ -24,7 +24,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 )
 
-var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) {
+var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -36,13 +36,13 @@ var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *Incomi
 		// To get an event back:
 		var dp IncomingDP
 		if err := m.Decode(&dp); err != nil {
-			log.Printf("dispatcher: msg <- rcv data point decoding FAILED, ignoring this data point.")
+			log.Printf("director: msg <- rcv data point decoding FAILED, ignoring this data point.")
 			continue
 		}
 
 		maxHops := 2
 		if dp.Hops > maxHops {
-			log.Printf("dispatcher: dropping data point, max hops (%d) reached", maxHops)
+			log.Printf("director: dropping data point, max hops (%d) reached", maxHops)
 			continue
 		}
 
@@ -50,34 +50,34 @@ var dispatcherIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *Incomi
 	}
 }
 
-var dispatcherForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+var directorForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
 	if dp.Hops == 0 { // we do not forward more than once
 		if node.Ready() {
 			dp.Hops++
 			msg, _ := cluster.NewMsg(node, dp) // can't possibly error
 			snd <- msg
 		} else {
-			return fmt.Errorf("dispatcherForwardDPToNode: Node is not ready")
+			return fmt.Errorf("directorForwardDPToNode: Node is not ready")
 		}
 	}
 	return nil
 }
 
-var dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
 			workerChs.queue(dp, cds)
 		} else {
-			if err := dispatcherForwardDPToNode(dp, node, snd); err != nil {
-				log.Printf("dispatcher: Error forwarding a data point: %v", err)
+			if err := directorForwardDPToNode(dp, node, snd); err != nil {
+				log.Printf("director: Error forwarding a data point: %v", err)
 				// TODO For not ready error - sleep and return the dp to the channel?
 				continue
 			}
 			forwarded++
 			// Always clear RRAs to prevent it from being saved
 			if pc := cds.PointCount(); pc > 0 {
-				log.Printf("dispatcher: WARNING: Clearing DS with PointCount > 0: %v", pc)
+				log.Printf("director: WARNING: Clearing DS with PointCount > 0: %v", pc)
 			}
 			cds.ClearRRAs(true)
 		}
@@ -85,9 +85,9 @@ var dispatcherProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr cluster
 	return
 }
 
-var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+var directorProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 
-	sr.reportStatCount("receiver.dispatcher.datapoints.total", 1)
+	sr.reportStatCount("receiver.datapoints.total", 1)
 
 	if math.IsNaN(dp.Value) {
 		// NaN is meaningless, e.g. "the thermometer is
@@ -99,11 +99,11 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsC
 
 	cds, err := dsc.fetchDataSourceByName(dp.Name)
 	if err != nil {
-		log.Printf("dispatcher: dsCache error: %v", err)
+		log.Printf("director: dsCache error: %v", err)
 		return
 	}
 	if cds == nil {
-		log.Printf("dispatcher: No spec matched name: %q, ignoring data point", dp.Name)
+		log.Printf("director: No spec matched name: %q, ignoring data point", dp.Name)
 		return
 	}
 
@@ -111,35 +111,35 @@ var dispatcherProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsC
 		if clstr == nil {
 			workerChs.queue(dp, cds)
 		} else {
-			forwarded := dispatcherProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
-			sr.reportStatCount("receiver.dispatcher.datapoints.forwarded", float64(forwarded))
+			forwarded := directorProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
+			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
 		}
 	}
 }
 
-func reportDispatcherChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
+func reportDirectorChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
 	cp := float64(cap(dpCh))
 	for {
 		time.Sleep(nap) // TODO this should be a ticker really
 		ln := float64(len(dpCh))
 		if cp > 0 {
 			fillPct := (ln / cp) * 100
-			sr.reportStatGauge("receiver.dispatcher.channel.fill_percent", fillPct)
+			sr.reportStatGauge("receiver.channel.fill_percent", fillPct)
 			if fillPct > 75 {
-				log.Printf("WARNING: dispatcher channel %v percent full!", fillPct)
+				log.Printf("WARNING: receiver channel %v percent full!", fillPct)
 			}
 		}
-		sr.reportStatGauge("receiver.dispatcher.channel.len", ln)
+		sr.reportStatGauge("receiver.channel.len", ln)
 
 		// Overrun queue
 		qsz := queue.size()
 		pct := (float64(qsz) / cp) * 100
-		sr.reportStatGauge("receiver.dispatcher.overrun_queue.len", float64(qsz))
-		sr.reportStatGauge("receiver.dispatcher.overrun_queue.pct", pct)
+		sr.reportStatGauge("receiver.overrun_queue.len", float64(qsz))
+		sr.reportStatGauge("receiver.overrun_queue.pct", pct)
 	}
 }
 
-var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
+var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -152,13 +152,13 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 	if clstr != nil {
 		clusterChgCh = clstr.NotifyClusterChanges() // Monitor Cluster changes
 		snd, rcv = clstr.RegisterMsgType()          // Channel for event forwards to other nodes and us
-		go dispatcherIncomingDPMessages(rcv, dpCh)
-		log.Printf("dispatcher: marking cluster node as Ready.")
+		go directorIncomingDPMessages(rcv, dpCh)
+		log.Printf("director: marking cluster node as Ready.")
 		clstr.Ready(true)
 	}
 
 	// Monitor channel fill TODO: this is wrong, there should be better ways
-	go reportDispatcherChannelFillPercent(dpCh, queue, sr, time.Second)
+	go reportDirectorChannelFillPercent(dpCh, queue, sr, time.Second)
 
 	go func() {
 		defer func() { recover() }()
@@ -178,14 +178,14 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 		case _, ok = <-clusterChgCh:
 			if ok {
 				if err := clstr.Transition(45 * time.Second); err != nil {
-					log.Printf("dispatcher: Transition error: %v", err)
+					log.Printf("director: Transition error: %v", err)
 				}
 			}
 			continue
 		case dp, ok = <-dpCh:
 		}
 		if !ok {
-			log.Printf("dispatcher: channel closed, shutting down")
+			log.Printf("director: channel closed, shutting down")
 			break
 		}
 
@@ -193,13 +193,13 @@ var dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr
 		dp = checkSetAside(dp, queue, queueOnly)
 
 		if dp != nil {
-			dispatcherProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+			directorProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
 		}
 
 		// Try to flush the queue if we are idle
 		for (len(dpCh) == 0) && (queue.size() > 0) {
 			if dp = checkSetAside(dp, queue, false); dp != nil {
-				dispatcherProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+				directorProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
 			}
 		}
 	}

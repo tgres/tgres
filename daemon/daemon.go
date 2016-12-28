@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/receiver"
 	"github.com/tgres/tgres/serde"
 )
@@ -193,7 +194,8 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	rcvr := createReceiver(cfg, nil, db)
 
 	// Create and run the Service Manager
-	serviceMgr := newServiceManager(rcvr, cfg)
+	rcache := dsl.NewReadCache(db.Fetcher())
+	serviceMgr := newServiceManager(rcvr, rcache, cfg)
 	if err := serviceMgr.run(gracefulProtos); err != nil {
 		log.Printf("Could not run the service manager: %v", err)
 		return

@@ -26,7 +26,6 @@ import (
 
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/cluster"
-	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/serde"
 )
 
@@ -36,33 +35,45 @@ func init() {
 	debug = os.Getenv("TGRES_RCVR_DEBUG") != ""
 }
 
-// Receiver sends incoming datapoints to one of n workers, which is
-// done to provides some parallelism, especially when it comes to
-// flushing data to the database.
+// Receiver receives and directs incoming datapoints to one of n
+// workers, which is done to provide some parallelism, especially when
+// it comes to flushing data to the database. The job of the workers
+// is to update and maintain an in-memory RRD, and the job of the
+// flushers is to persist the data to a database. The Receiver
+// orchestrates this flow, providing a caching layer which reduces the
+// database I/O.
 type Receiver struct {
-	cluster                            clusterer
-	serde                              serde.SerDe
-	NWorkers                           int
+	cluster  clusterer   // cluster or nil
+	serde    serde.SerDe // the database, required
+	NWorkers int         // number of workers, must be > 0
+
+	// MaxMaxCacheDuration, MinCacheDuration and MaxCachedPoints control the cache
 	MaxCacheDuration, MinCacheDuration time.Duration
 	MaxCachedPoints                    int
-	StatFlushDuration                  time.Duration
-	StatsNamePrefix                    string
-	MaxFlushRatePerSecond              int
-	dsc                                *dsCache
-	Rcache                             *dsl.ReadCache
-	flusher                            dsFlusherBlocking
-	dpCh                               chan *IncomingDP         // incoming data point
-	workerChs                          workerChannels           // incoming data point with ds
-	aggCh                              chan *aggregator.Command // aggregator commands (for statsd type stuff)
-	workerWg                           sync.WaitGroup
-	flusherWg                          sync.WaitGroup
-	aggWg                              sync.WaitGroup
-	dispatcherWg                       sync.WaitGroup
-	pacedMetricWg                      sync.WaitGroup
-	ReportStats                        bool
-	ReportStatsPrefix                  string
-	pacedMetricCh                      chan *pacedMetric
-	stopped                            bool
+
+	StatFlushDuration time.Duration // Period after which stats are flushed
+	StatsNamePrefix   string        // Stat names are prefixed with this
+
+	MaxFlushRatePerSecond int // At most we will write to db at this rate
+
+	dsc *dsCache // the DS cache
+
+	flusher       dsFlusherBlocking        // orchestration of flush queues
+	dpCh          chan *IncomingDP         // incoming data points
+	workerChs     workerChannels           // incoming data points with ds
+	aggCh         chan *aggregator.Command // aggregator commands (for statsd type stuff)
+	pacedMetricCh chan *pacedMetric        // paced metrics (only flushed periodically)
+
+	workerWg      sync.WaitGroup
+	flusherWg     sync.WaitGroup
+	aggWg         sync.WaitGroup
+	directorWg    sync.WaitGroup
+	pacedMetricWg sync.WaitGroup
+
+	ReportStats       bool   // report internal stats?
+	ReportStatsPrefix string // prefix for internal stats
+
+	stopped bool
 }
 
 // IncomingDP is incoming data, i.e. this is the form in which input
@@ -106,7 +117,6 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 		MaxCachedPoints:   256,
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
-		Rcache:            dsl.NewReadCache(serde.Fetcher()),
 		dpCh:              make(chan *IncomingDP, 65536), // to be on the safe side
 		aggCh:             make(chan *aggregator.Command, 1024),
 		pacedMetricCh:     make(chan *pacedMetric, 1024),
@@ -119,10 +129,12 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	return r
 }
 
+// Before using the receiver it must be Started
 func (r *Receiver) Start() {
 	doStart(r)
 }
 
+// Stops processing, waits for everything to finish and shuts down all workers/flushers
 func (r *Receiver) Stop() {
 	r.stopped = true
 	doStop(r, r.cluster)

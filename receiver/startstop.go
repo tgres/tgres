@@ -63,24 +63,24 @@ var doStart = func(r *Receiver) {
 
 	// Wait for workers/flushers to start correctly
 	startWg.Wait()
-	log.Printf("Receiver: All workers running, starting dispatcher.")
+	log.Printf("Receiver: All workers running, starting director.")
 
 	startWg.Add(1)
-	go dispatcher(&wrkCtl{wg: &r.dispatcherWg, startWg: &startWg, id: "dispatcher"}, r.dpCh, r.cluster, r, r.dsc, r.workerChs)
+	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.cluster, r, r.dsc, r.workerChs)
 	startWg.Wait()
 
 	log.Printf("Receiver: Ready.")
 }
 
-var stopDispatcher = func(r *Receiver) {
-	log.Printf("Closing dispatcher channel...")
+var stopDirector = func(r *Receiver) {
+	log.Printf("Closing director channel...")
 	close(r.dpCh)
-	r.dispatcherWg.Wait()
-	log.Printf("Dispatcher finished.")
+	r.directorWg.Wait()
+	log.Printf("Director finished.")
 }
 
 var doStop = func(r *Receiver, clstr clusterer) {
-	stopDispatcher(r)
+	stopDirector(r)
 	stopAllWorkers(r)
 	log.Printf("Leaving cluster...")
 	clstr.Leave(1 * time.Second)
