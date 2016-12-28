@@ -25,7 +25,7 @@ type MatchingDSSpecFinder interface {
 	FindMatchingDSSpec(name string) *rrd.DSSpec
 }
 
-// A default "reasonable" spec
+// A default "reasonable" spec for those who do not want to think about it.
 var DftDSSPec = &rrd.DSSpec{
 	Step:      10 * time.Second,
 	Heartbeat: 2 * time.Hour,

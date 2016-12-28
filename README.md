@@ -17,7 +17,7 @@ using the same database as the rest of the application data.
 
 While Tgres is very performant, it isn't meant to compete with high
 end TS databases where specialized storage is a must. It is meant to
-address the needs of apps that need time-series processing without
+address the needs of apps that require time-series processing without
 having to rely on complex external infrastructure.
 
 Whether you use standalone Tgres or as a package, the time series data

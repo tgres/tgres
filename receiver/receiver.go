@@ -55,7 +55,7 @@ func init() {
 // that can come in at a very fast rate (e.g. counting function calls
 // within a process). Paced metrics are similar to aggregator metrics,
 // but in a clustered set up they are accumulated locally in the
-// process, and then sent to the aggregator (if is a sum) or to the
+// process, and then sent to the aggregator (counter) or to the
 // receiver (gauge), at which point they may end up getting forwarded
 // to the appropriate node for handling. By default metrics are paced
 // to be send once per second.
@@ -95,13 +95,12 @@ type Receiver struct {
 	stopped bool
 }
 
-// IncomingDP is incoming data, i.e. this is the form in which input
-// data is expected. This is not an internal representation of a data
-// point, it's the format in which they are expected to arrive and is
-// easy to convert to from most any data point representation out
-// there. This data point representation has no notion of duration and
-// therefore must rely on some kind of an externally stored "last
-// update" time.
+// IncomingDP is incoming data (aka observation, measurement or
+// sample). This is not the internal representation of a data point,
+// it's the format in which points are expected to arrive and is easy
+// to create from most any data point representation out there. This
+// data point representation has no notion of duration and therefore
+// must rely on some kind of a separately stored "last update" time.
 type IncomingDP struct {
 	Name      string
 	TimeStamp time.Time
@@ -137,21 +136,27 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	return r
 }
 
-// Before using the receiver it must be Started
+// Before using the receiver it must be Started. This starts all the
+// worker and flusher goroutines, etc.
 func (r *Receiver) Start() {
 	doStart(r)
 }
 
-// Stops processing, waits for everything to finish and shuts down all workers/flushers
+// Stops processing, waits for everything to finish and shuts down all
+// workers/flushers.
 func (r *Receiver) Stop() {
 	r.stopped = true
 	doStop(r, r.cluster)
 }
 
+// In a clustered set up informes other nodes that we are ready to
+// handle data.
 func (r *Receiver) ClusterReady(ready bool) {
 	r.cluster.Ready(ready)
 }
 
+// Make the receiver clustered. It will also cause internal stats to
+// be prefixed with the node address by setting ReportStatsPrefix.
 func (r *Receiver) SetCluster(c clusterer) {
 	r.cluster = c
 	r.dsc.clstr = c
@@ -167,7 +172,11 @@ func (r *Receiver) SetCluster(c clusterer) {
 	}
 }
 
-// Sends a data point to the receiver channel.
+// Sends a data point to the receiver channel. A Data Source PDP
+// always treats incoming data as a rate, it is the responsibility of
+// the caller to present non-rate values such as counters as a
+// rate. Consider using the Aggregator (QueueAggregatorCommand) or
+// paced metrics (QueueSum/QueueGauge) for non-rate data.
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
 	if !r.stopped {
 		r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
@@ -182,12 +191,16 @@ func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 	}
 }
 
+// Send a counter/sum. This is a paced metric which will periodically
+// be passed to the aggregator and from the aggregator to the data
+// source as a rate.
 func (r *Receiver) QueueSum(name string, v float64) {
 	if !r.stopped {
 		r.pacedMetricCh <- &pacedMetric{pacedSum, name, v}
 	}
 }
 
+// Send a gauge (i.e. a rate). This is a paced metric.
 func (r *Receiver) QueueGauge(name string, v float64) {
 	if !r.stopped {
 		r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
