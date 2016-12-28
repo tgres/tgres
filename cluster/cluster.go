@@ -18,7 +18,9 @@
 // The assumption behind this package is that you have identical
 // nodes, each responsible for a certain part of the data, a datum,
 // identified by an integer id, and any node forwards requests to the
-// node designated for the datum. There is no leader.
+// node designated for the datum. The designation is determined by a
+// simple mod operation of datum id against the number of nodes,
+// therefore id distribution matters. There is no leader.
 //
 // If a node must terminate, it is given an opportunity to save the
 // data it is responsible for, then signal the nodes now responsible
@@ -28,7 +30,7 @@
 // each datum is "relinquished", and upon the relinquish the next
 // responsible node is notified. All this is managed by Cluster, all
 // that is required from the application is to enure that each datum
-// implements the DistDatum interface..
+// implements the DistDatum interface.
 package cluster
 
 import (
@@ -37,7 +39,6 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
-	"github.com/hashicorp/memberlist"
 	"log"
 	"net"
 	"net/rpc"
@@ -46,6 +47,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/memberlist"
 )
 
 var (
@@ -587,7 +590,8 @@ func (l *logger) Write(b []byte) (int, error) {
 // node.
 type DistDatum interface {
 	// Id returns an integer that uniquely identifies this datum for
-	// this type.
+	// this type. Datum -> node designation is determined by id %
+	// numNodes, which means id distribution matters.
 	Id() int64
 
 	// Type returns a string that identifies the type. The value
