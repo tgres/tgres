@@ -51,10 +51,10 @@ type dslFuncType struct {
 }
 type FuncMap map[string]dslFuncType
 
-type dslCtxFuncType func(*DslCtx, []interface{}) (SeriesMap, error)
+type dslCtxFuncType func(*dslCtx, []interface{}) (SeriesMap, error)
 type dslCtxFuncMap map[string]dslCtxFuncType
 
-var dslCtxFuncs = dslCtxFuncMap{ // functions that require the DslCtx to do their stuff
+var dslCtxFuncs = dslCtxFuncMap{ // functions that require the dslCtx to do their stuff
 	"sumSeriesWithWildcards": dslSumSeriesWithWildcards,
 }
 
@@ -293,7 +293,7 @@ var preprocessArgFuncs = FuncMap{
 	// ?? substr
 }
 
-func processArgs(dc *DslCtx, fn *dslFuncType, args []interface{}) (map[string]interface{}, []interface{}, error) {
+func processArgs(dc *dslCtx, fn *dslFuncType, args []interface{}) (map[string]interface{}, []interface{}, error) {
 
 	result := make(map[string]interface{})
 	asSlice := make([]interface{}, 0)
@@ -448,7 +448,7 @@ func processArgs(dc *DslCtx, fn *dslFuncType, args []interface{}) (map[string]in
 	return result, asSlice, nil
 }
 
-func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap, error) {
+func seriesFromFunction(dc *dslCtx, name string, args []interface{}) (SeriesMap, error) {
 
 	argFunc, ok := preprocessArgFuncs[name]
 	if !ok {
@@ -481,25 +481,25 @@ func seriesFromFunction(dc *DslCtx, name string, args []interface{}) (SeriesMap,
 
 }
 
-func NewSeriesSliceFromArgs(dc *DslCtx, args []interface{}) (series.SeriesSlice, error) {
+// func NewSeriesSliceFromArgs(dc *dslCtx, args []interface{}) (series.SeriesSlice, error) {
 
-	if len(args) == 0 {
-		return nil, fmt.Errorf("NewSeriesSliceFromArgs(): at least 1 arg required, 0 given")
-	}
+// 	if len(args) == 0 {
+// 		return nil, fmt.Errorf("NewSeriesSliceFromArgs(): at least 1 arg required, 0 given")
+// 	}
 
-	result := series.SeriesSlice{}
-	for _, arg := range args {
-		series, err := dc.seriesFromSeriesOrIdent(arg)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range series {
-			result = append(result, s)
-		}
-	}
-	result.Align()
-	return result, nil
-}
+// 	result := series.SeriesSlice{}
+// 	for _, arg := range args {
+// 		series, err := dc.seriesFromSeriesOrIdent(arg)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		for _, s := range series {
+// 			result = append(result, s)
+// 		}
+// 	}
+// 	result.Align()
+// 	return result, nil
+// }
 
 func argsAsString(args []interface{}) string {
 	sargs := make([]string, 0, len(args))
@@ -595,7 +595,7 @@ func dslDiffSeries(args map[string]interface{}) (SeriesMap, error) {
 }
 
 // sumSeriesWithWildcards()
-func dslSumSeriesWithWildcards(dc *DslCtx, args []interface{}) (SeriesMap, error) {
+func dslSumSeriesWithWildcards(dc *dslCtx, args []interface{}) (SeriesMap, error) {
 
 	if len(args) < 2 {
 		return nil, fmt.Errorf("Expecting at least 2 arguments, got %d", len(args))

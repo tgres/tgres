@@ -17,8 +17,10 @@ package dsl
 
 import "github.com/tgres/tgres/series"
 
+// A Series which supports Alias()
 type AliasSeries interface {
 	series.Series
+	// With argument sets the alias. Returns the alias.
 	Alias(s ...string) string
 }
 

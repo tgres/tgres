@@ -48,6 +48,9 @@ type namedDsFetcher struct {
 	dsns *dataSourceNames
 }
 
+// Returns a new instance of a NamedDSFetcher. The current
+// implementation will re-fetch all series names any time a series
+// cannot be found. TODO: Make this better.
 func NewNamedDSFetcher(db dsFetcher) *namedDsFetcher {
 	return &namedDsFetcher{dsFetcher: db, dsns: &dataSourceNames{}}
 }

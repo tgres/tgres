@@ -13,7 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dsl is the Domain Specific Language for the series query.
+// Package dsl is the Domain Specific Language for the series
+// query. Presently it mostly mimics the Graphite API functions. The
+// parser used for the language is Go standard lib parser.ParseExpr(),
+// which basically means the syntax is Go, and so the user of this
+// package might need to ensure to wrap series names in quotes, etc.
 package dsl
 
 import (
@@ -26,19 +30,29 @@ import (
 	"time"
 )
 
-type DslCtx struct {
+type dslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	rcache              NamedDSFetcher
+	NamedDSFetcher
 }
 
-func NewDslCtx(rcache NamedDSFetcher, src string, from, to, maxPoints int64) *DslCtx {
-	return &DslCtx{src, fixQuotes(escapeBadChars(src)), from, to, maxPoints, rcache}
+// Parse a DSL expression given by src and other params.
+func ParseDsl(db NamedDSFetcher, src string, from, to, maxPoints int64) (SeriesMap, error) {
+	return newDslCtx(db, src, from, to, maxPoints).parse()
 }
 
-func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
+func newDslCtx(db NamedDSFetcher, src string, from, to, maxPoints int64) *dslCtx {
+	return &dslCtx{
+		src:            fixQuotes(escapeBadChars(src)),
+		from:           from,
+		to:             to,
+		maxPoints:      maxPoints,
+		NamedDSFetcher: db}
+}
 
+// Parse a DSL context. Returns a SeriesMap or error.
+func (dc *dslCtx) parse() (SeriesMap, error) {
 	// parser.ParseExpr produces an AST in accordance with Go syntax,
 	// which is just fine in our case.
 
@@ -47,7 +61,7 @@ func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
 		return nil, fmt.Errorf("Error parsing %q: %v", dc.src, err)
 	}
 
-	fv := &FuncVisitor{dc, &CallStack{}, nil, 0, -1, nil}
+	fv := &FuncVisitor{dc, &callStack{}, nil, 0, -1, nil}
 
 	ast.Walk(fv, tr)
 
@@ -58,7 +72,7 @@ func (dc *DslCtx) ParseDsl() (SeriesMap, error) {
 	return fv.ret, nil
 }
 
-func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
+func (dc *dslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	switch obj := what.(type) {
 	case SeriesMap:
 		return obj, nil
@@ -70,15 +84,15 @@ func (dc *DslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
 }
 
-func (dc *DslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, error) {
-	ids := dc.rcache.dsIdsFromIdent(ident)
+func (dc *dslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, error) {
+	ids := dc.dsIdsFromIdent(ident)
 	result := make(SeriesMap)
 	for name, id := range ids {
-		ds, err := dc.rcache.FetchDataSourceById(id)
+		ds, err := dc.FetchDataSourceById(id)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}
-		dps, err := dc.rcache.FetchSeries(ds, from, to, dc.maxPoints)
+		dps, err := dc.FetchSeries(ds, from, to, dc.maxPoints)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
 		}
@@ -92,17 +106,17 @@ type FuncCall struct {
 	args []interface{}
 }
 
-type CallStack struct {
+type callStack struct {
 	nodes []*FuncCall
 	count int
 }
 
-func (s *CallStack) Push(n *FuncCall) {
+func (s *callStack) Push(n *FuncCall) {
 	s.nodes = append(s.nodes[:s.count], n)
 	s.count++
 }
 
-func (s *CallStack) Pop() *FuncCall {
+func (s *callStack) Pop() *FuncCall {
 	if s.count == 0 {
 		return nil
 	}
@@ -111,8 +125,8 @@ func (s *CallStack) Pop() *FuncCall {
 }
 
 type FuncVisitor struct {
-	dc           *DslCtx
-	stack        *CallStack
+	dc           *dslCtx
+	stack        *callStack
 	ret          SeriesMap
 	level        int
 	processLevel int
