@@ -26,7 +26,7 @@ import (
 	"github.com/tgres/tgres/receiver"
 )
 
-func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.ReadCacher) {
+func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher) {
 
 	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcache))
 	http.HandleFunc("/render", h.GraphiteRenderHandler(rcache))

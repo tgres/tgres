@@ -42,10 +42,25 @@ func init() {
 // flushers is to persist the data to a database. The Receiver
 // orchestrates this flow, providing a caching layer which reduces the
 // database I/O.
+//
+// The Receiver is cluster-aware. In a clustered set up points are
+// forwarded to the node responsible for a particular DS.
+//
+// The Receiver also creates an Aggregator which can aggregate metrics
+// and send as aggregated data points periodically. In a clustered set
+// up there is one Aggregator per cluster. Default aggregation period
+// is 10 seconds.
+//
+// Receiver also handles paced metrics. A paced metric is a metric
+// that can come in at a very fast rate (e.g. counting function calls
+// within a process). Paced metrics are similar to aggregator metrics,
+// but in a clustered set up they are accumulated locally in the
+// process, and then sent to the aggregator (if is a sum) or to the
+// receiver (gauge), at which point they may end up getting forwarded
+// to the appropriate node for handling. By default metrics are paced
+// to be send once per second.
 type Receiver struct {
-	cluster  clusterer   // cluster or nil
-	serde    serde.SerDe // the database, required
-	NWorkers int         // number of workers, must be > 0
+	NWorkers int // number of workers, must be > 0
 
 	// MaxMaxCacheDuration, MinCacheDuration and MaxCachedPoints control the cache
 	MaxCacheDuration, MinCacheDuration time.Duration
@@ -56,7 +71,14 @@ type Receiver struct {
 
 	MaxFlushRatePerSecond int // At most we will write to db at this rate
 
-	dsc *dsCache // the DS cache
+	ReportStats       bool   // report internal stats?
+	ReportStatsPrefix string // prefix for internal stats
+
+	// unexported internal stuff
+
+	cluster clusterer   // cluster or nil
+	serde   serde.SerDe // the database, required
+	dsc     *dsCache    // the DS cache
 
 	flusher       dsFlusherBlocking        // orchestration of flush queues
 	dpCh          chan *IncomingDP         // incoming data points
@@ -69,9 +91,6 @@ type Receiver struct {
 	aggWg         sync.WaitGroup
 	directorWg    sync.WaitGroup
 	pacedMetricWg sync.WaitGroup
-
-	ReportStats       bool   // report internal stats?
-	ReportStatsPrefix string // prefix for internal stats
 
 	stopped bool
 }
@@ -88,17 +107,6 @@ type IncomingDP struct {
 	TimeStamp time.Time
 	Value     float64
 	Hops      int
-}
-
-type workerChannels []chan *incomingDpWithDs
-
-func (w workerChannels) queue(dp *IncomingDP, cds *cachedDs) {
-	w[cds.Id()%int64(len(w))] <- &incomingDpWithDs{dp, cds}
-}
-
-type incomingDpWithDs struct {
-	dp  *IncomingDP
-	cds *cachedDs
 }
 
 // Create a Receiver. The first argument is a SerDe, the second is a
@@ -159,17 +167,15 @@ func (r *Receiver) SetCluster(c clusterer) {
 	}
 }
 
+// Sends a data point to the receiver channel.
 func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
 	if !r.stopped {
 		r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
 	}
 }
 
-// TODO we could have shorthands such as:
-// QueueGauge()
-// QueueGaugeDelta()
-// QueueAppendValue()
-// ... but for now QueueAggregatorCommand seems sufficient
+// Sends a data point (in the form of an aggregator.Command) to the
+// aggregator.
 func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 	if !r.stopped {
 		r.aggCh <- agg

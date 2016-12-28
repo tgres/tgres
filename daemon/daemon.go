@@ -194,7 +194,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	rcvr := createReceiver(cfg, nil, db)
 
 	// Create and run the Service Manager
-	rcache := dsl.NewReadCache(db.Fetcher())
+	rcache := dsl.NewNamedDSFetcher(db.Fetcher())
 	serviceMgr := newServiceManager(rcvr, rcache, cfg)
 	if err := serviceMgr.run(gracefulProtos); err != nil {
 		log.Printf("Could not run the service manager: %v", err)

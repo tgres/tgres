@@ -19,56 +19,13 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/rrd"
-	"github.com/tgres/tgres/serde"
 	"github.com/tgres/tgres/series"
 )
 
-// This is a subset of serde.Fetcher
-type dsFetcher interface {
-	serde.DataSourceNamesFetcher
-	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
-	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
-}
-
-type fsFinder interface {
-	dsIdsFromIdent(ident string) map[string]int64
-	FsFind(pattern string) []*FsFindNode
-}
-
-type ReadCacher interface {
-	dsFetcher
-	fsFinder
-}
-
-type readCache struct {
-	dsFetcher
-	dsns *dataSourceNames
-}
-
-func NewReadCache(db dsFetcher) *readCache {
-	return &readCache{dsFetcher: db, dsns: &dataSourceNames{}}
-}
-
-func (r *readCache) dsIdsFromIdent(ident string) map[string]int64 {
-	result := r.dsns.dsIdsFromIdent(ident)
-	if len(result) == 0 {
-		r.dsns.reload(r)
-		result = r.dsns.dsIdsFromIdent(ident)
-	}
-	return result
-}
-
-// FsFind provides a way of searching dot-separated names using same
-// rules as filepath.Match, as well as comma-separated values in curly
-// braces such as "foo.{bar,baz}".
-func (r *readCache) FsFind(pattern string) []*FsFindNode {
-	r.dsns.reload(r)
-	return r.dsns.fsFind(pattern)
-}
-
-// Creates a readCache from a map of DataSourcers.
-func NewReadCacheFromMap(dss map[string]rrd.DataSourcer) *readCache {
-	return NewReadCache(newMapCache(dss))
+// Creates a NamedDsFetcher from a map of DataSourcers. This is useful
+// to bootstrap a DSL Context without any database.
+func NewNamedDSFetcherMap(dss map[string]rrd.DataSourcer) *namedDsFetcher {
+	return NewNamedDSFetcher(newMapCache(dss))
 }
 
 // A dsFinder backed by a simple map of DSs

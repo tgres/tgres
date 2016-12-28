@@ -44,7 +44,7 @@ type serviceManager struct {
 	services serviceMap
 }
 
-func newServiceManager(rcvr *receiver.Receiver, rcache dsl.ReadCacher, cfg *Config) *serviceManager {
+func newServiceManager(rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher, cfg *Config) *serviceManager {
 	return &serviceManager{rcvr: rcvr,
 		services: serviceMap{
 			"gt":  &graphiteTextServiceManager{rcvr: rcvr, listenSpec: cfg.GraphiteTextListenSpec},
@@ -113,7 +113,7 @@ func (r *serviceManager) closeListeners() {
 
 type wwwServer struct {
 	rcvr       *receiver.Receiver
-	rcache     dsl.ReadCacher
+	rcache     dsl.NamedDSFetcher
 	listener   *graceful.Listener
 	listenSpec string
 }

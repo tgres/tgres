@@ -121,6 +121,8 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 	}
 }
 
+// cachedDs is a DS that keeps track of the last time it was flushed
+// and provides a shouldByFlushed() method.
 type cachedDs struct {
 	serde.DbDataSourcer
 	lastFlushRT time.Time // Last time this DS was flushed (actual real time).
@@ -139,6 +141,8 @@ func (cds *cachedDs) shouldBeFlushed(maxCachedPoints int, minCache, maxCache tim
 	return false
 }
 
+// distDs keeps a pointer to the dsCache so that it can delete itself
+// from it, as well as access the Flusher to persist during Relinquish
 type distDs struct {
 	serde.DbDataSourcer
 	dsc *dsCache

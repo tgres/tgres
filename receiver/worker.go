@@ -21,6 +21,17 @@ import (
 	"time"
 )
 
+type workerChannels []chan *incomingDpWithDs
+
+func (w workerChannels) queue(dp *IncomingDP, cds *cachedDs) {
+	w[cds.Id()%int64(len(w))] <- &incomingDpWithDs{dp, cds}
+}
+
+type incomingDpWithDs struct {
+	dp  *IncomingDP
+	cds *cachedDs
+}
+
 var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[int64]*cachedDs, minCacheDur, maxCacheDur time.Duration, maxPoints, maxFlushes int) map[int64]*cachedDs {
 	leftover := make(map[int64]*cachedDs)
 	n := 0
