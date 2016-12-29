@@ -97,7 +97,7 @@ var directorProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCac
 		return
 	}
 
-	cds, err := dsc.fetchDataSourceByName(dp.Name)
+	cds, err := dsc.fetchOrCreateByName(dp.Name)
 	if err != nil {
 		log.Printf("director: dsCache error: %v", err)
 		return

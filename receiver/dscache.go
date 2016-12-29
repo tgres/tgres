@@ -24,8 +24,7 @@ import (
 	"github.com/tgres/tgres/serde"
 )
 
-// A collection of data sources kept by an integer id as well as a
-// string name.
+// A collection of data sources kept by name (string).
 type dsCache struct {
 	sync.RWMutex
 	byName map[string]*cachedDs
@@ -35,10 +34,7 @@ type dsCache struct {
 	clstr  clusterer
 }
 
-// Returns a new dsCache object. If locking is true, the resulting
-// dsCache will maintain a lock, otherwise there is no locking,
-// but the caller needs to ensure that it is never used concurrently
-// (e.g. always in the same goroutine).
+// Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
 		byName: make(map[string]*cachedDs),
@@ -89,7 +85,7 @@ func (d *dsCache) preLoad() error {
 }
 
 // get a cached ds
-func (d *dsCache) fetchDataSourceByName(name string) (*cachedDs, error) {
+func (d *dsCache) fetchOrCreateByName(name string) (*cachedDs, error) {
 	result := d.getByName(name)
 	if result == nil {
 		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
