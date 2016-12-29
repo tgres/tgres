@@ -16,14 +16,15 @@
 package receiver
 
 import (
-	"github.com/tgres/tgres/aggregator"
-	"github.com/tgres/tgres/rrd"
 	"log"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/rrd"
 )
 
 type fakeAggregatorCommandQueuer struct {
@@ -93,6 +94,7 @@ func Test_pacedMetricPeriodicFlushSignal(t *testing.T) {
 	}()
 
 	close(flushCh)
+	time.Sleep(10 * time.Millisecond) // cause panic/recover
 }
 
 func Test_pacedMetricWorker(t *testing.T) {
@@ -150,8 +152,8 @@ func Test_pacedMetricWorker(t *testing.T) {
 	pacedMetricFlush, pacedMetricPeriodicFlushSignal = saveFn1, saveFn2
 }
 
-func Test_reportPaceMetricChannelFillPercent(t *testing.T) {
-	ch := make(chan *pacedMetric, 10)
+func Test_paced_reportPaceMetricChannelFillPercent(t *testing.T) {
+	ch := make(chan *pacedMetric, 4)
 	sr := &fakeSr{}
 	go reportPacedMetricChannelFillPercent(ch, sr, time.Millisecond)
 	time.Sleep(50 * time.Millisecond)
