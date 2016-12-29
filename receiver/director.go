@@ -198,7 +198,7 @@ var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr s
 
 		// Try to flush the queue if we are idle
 		for (len(dpCh) == 0) && (queue.size() > 0) {
-			if dp = checkSetAside(dp, queue, false); dp != nil {
+			if dp = checkSetAside(nil, queue, false); dp != nil {
 				directorProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
 			}
 		}
@@ -226,11 +226,16 @@ func (q *dpQueue) size() int {
 func checkSetAside(dp *IncomingDP, queue *dpQueue, skip bool) *IncomingDP {
 
 	if skip {
-		queue.push(dp)
+		if dp != nil {
+			queue.push(dp)
+		}
 		return nil
 	}
 
 	if queue.size() > 0 {
+		if dp != nil {
+			queue.push(dp)
+		}
 		return queue.pop()
 	}
 

@@ -17,15 +17,16 @@ package receiver
 
 import (
 	"fmt"
-	"github.com/hashicorp/memberlist"
-	"github.com/tgres/tgres/aggregator"
-	"github.com/tgres/tgres/cluster"
 	"log"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/memberlist"
+	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/cluster"
 )
 
 func Test_aggworkerIncomingAggCmds(t *testing.T) {
@@ -135,7 +136,7 @@ func Test_aggworkerPeriodicFlushSignal(t *testing.T) {
 	}
 }
 
-func Test_aggWorkerForwardACToNode(t *testing.T) {
+func Test_aggworkerForwardACToNode(t *testing.T) {
 	ac := aggregator.NewCommand(aggregator.CmdAdd, "foo", 123)
 	md := make([]byte, 20)
 	md[0] = 1 // Ready
@@ -187,7 +188,7 @@ type fakeAggregatorer struct {
 func (f *fakeAggregatorer) ProcessCmd(cmd *aggregator.Command) { f.pcCalled++ }
 func (f *fakeAggregatorer) Flush(_ time.Time)                  { f.flushCalled++ }
 
-func Test_aggWorkerProcessOrForward(t *testing.T) {
+func Test_aggworkerProcessOrForward(t *testing.T) {
 
 	saveFn := aggWorkerForwardACToNode
 	forward, fwErr := 0, error(nil)
@@ -248,7 +249,7 @@ func Test_aggWorkerProcessOrForward(t *testing.T) {
 	aggWorkerForwardACToNode = saveFn
 }
 
-func Test_theAggworker(t *testing.T) {
+func Test_aggworker_theAggworker(t *testing.T) {
 
 	fl := &fakeLogger{}
 	log.SetOutput(fl)
@@ -323,10 +324,30 @@ func Test_theAggworker(t *testing.T) {
 		t.Errorf("aggworker: 'last flush' log message messing on channel close")
 	}
 
+	// Now with nil cluster
+	aggCh = make(chan *aggregator.Command)
+	awpofCalled = 0
+
+	wc.startWg.Add(1)
+	go aggWorker(wc, aggCh, nil, 5*time.Millisecond, "prefix", scr, r)
+	wc.startWg.Wait()
+
+	// send some data
+	cmd = aggregator.NewCommand(aggregator.CmdAdd, "foo", 123)
+
+	aggCh <- cmd
+	aggCh <- cmd
+
+	if awpofCalled != 0 {
+		t.Errorf("aggworker: aggWorkerProcessOrForward called but should not be with nil cluster")
+	}
+
+	close(aggCh)
+
 	aggWorkerIncomingAggCmds, aggWorkerPeriodicFlushSignal, aggWorkerProcessOrForward = saveFn1, saveFn2, saveFn3
 }
 
-func Test_distDatumAggregator(t *testing.T) {
+func Test_aggworker_distDatumAggregator(t *testing.T) {
 	agg := &fakeAggregatorer{}
 	aggDd := &distDatumAggregator{agg}
 
@@ -349,7 +370,7 @@ func Test_distDatumAggregator(t *testing.T) {
 
 }
 
-func Test_reportAggChannelFillPercent(t *testing.T) {
+func Test_aggworker_reportAggChannelFillPercent(t *testing.T) {
 	ch := make(chan *aggregator.Command, 10)
 	sr := &fakeSr{}
 	go reportAggChannelFillPercent(ch, sr, time.Millisecond)

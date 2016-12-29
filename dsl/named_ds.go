@@ -23,7 +23,7 @@ import (
 	"github.com/tgres/tgres/series"
 )
 
-// A NamedDSFetcher is a serde.Fetch which also implements a method
+// A NamedDSFetcher is a serde.Fetcher which also implements a method
 // for finding DS's by its dotted name using filepath.Match-like
 // syntax.
 type NamedDSFetcher interface {

@@ -282,6 +282,9 @@ func Test_directorProcessIncomingDP(t *testing.T) {
 	dsf := &dsFlusher{db: db, sr: scr}
 	dsc := newDsCache(db, df, dsf)
 
+	// cluster
+	clstr := &fakeCluster{cChange: make(chan bool)}
+
 	// workerChs
 	workerChs := make([]chan *incomingDpWithDs, 1)
 	workerChs[0] = make(chan *incomingDpWithDs)
@@ -305,13 +308,13 @@ func Test_directorProcessIncomingDP(t *testing.T) {
 
 	// A value
 	dp.Value = 1234
-	scr.called = 0
-	directorProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
-	if scr.called != 1 {
-		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
+	scr.called, dpofCalled = 0, 0
+	directorProcessIncomingDP(dp, scr, dsc, workerChs, clstr, nil)
+	if scr.called != 2 {
+		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called twice: %v", scr.called)
 	}
-	if dpofCalled != 0 {
-		t.Errorf("directorProcessIncomingDP: With a value and no cluster, directorProcessOrForward should not be called: %v", dpofCalled)
+	if dpofCalled != 1 {
+		t.Errorf("directorProcessIncomingDP: With a value, directorProcessOrForward should be called once: %v", dpofCalled)
 	}
 
 	// A blank name should cause a nil rds
@@ -343,10 +346,22 @@ func Test_directorProcessIncomingDP(t *testing.T) {
 		t.Errorf("should log 'error'")
 	}
 
+	// nil cluster
+	dp.Value = 1234
+	db.fakeErr = false
+	scr.called = 0
+	directorProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
+	if scr.called != 1 {
+		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
+	}
+	if dpofCalled != 0 {
+		t.Errorf("directorProcessIncomingDP: With a value and no cluster, directorProcessOrForward should not be called: %v", dpofCalled)
+	}
+
 	directorProcessOrForward = saveFn
 }
 
-func Test_theDirector(t *testing.T) {
+func Test_the_director(t *testing.T) {
 
 	saveFn1 := directorIncomingDPMessages
 	saveFn2 := directorProcessIncomingDP
@@ -420,7 +435,7 @@ func Test_theDirector(t *testing.T) {
 
 	dpidpCalled = 0
 	close(dpCh)
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(1 * time.Second) // so that nil dp goroutine panics/recovers
 
 	if dpidpCalled > 0 {
 		t.Errorf("director: directorProcessIncomingDP must not be called on channel close")
@@ -430,11 +445,26 @@ func Test_theDirector(t *testing.T) {
 		t.Errorf("director: on channel close, missing 'shutting down' log entry")
 	}
 
+	// overrun
+	dpCh = make(chan *IncomingDP, 5)
+	dpCh <- dp
+	dpCh <- dp
+	dpCh <- dp
+	dpCh <- dp
+
+	wc.startWg.Add(1)
+	go director(wc, dpCh, clstr, sr, dsc, nil)
+	wc.startWg.Wait()
+
+	time.Sleep(100 * time.Millisecond)
+
+	close(dpCh)
+
 	directorIncomingDPMessages = saveFn1
 	directorProcessIncomingDP = saveFn2
 }
 
-func Test_reportDirectorChannelFillPercent(t *testing.T) {
+func Test_director_reportDirectorChannelFillPercent(t *testing.T) {
 	defer func() {
 		// restore default output
 		log.SetOutput(os.Stderr)
@@ -460,7 +490,7 @@ func Test_reportDirectorChannelFillPercent(t *testing.T) {
 	}
 }
 
-func Test_queue(t *testing.T) {
+func Test_director_queue(t *testing.T) {
 
 	queue := &dpQueue{}
 	dp := &IncomingDP{}
@@ -477,9 +507,10 @@ func Test_queue(t *testing.T) {
 	}
 }
 
-func Test_checkSetAside(t *testing.T) {
+func Test_director_checkSetAside(t *testing.T) {
 	queue := &dpQueue{}
 	dp := &IncomingDP{}
+	dp2 := &IncomingDP{}
 
 	r := checkSetAside(dp, queue, true)
 	if r != nil {
@@ -488,8 +519,12 @@ func Test_checkSetAside(t *testing.T) {
 	if queue.size() != 1 {
 		t.Errorf("checkSetAside: queue size != 1")
 	}
-	r = checkSetAside(nil, queue, false)
+	r = checkSetAside(dp2, queue, false)
 	if r != dp {
+		t.Errorf("checkSetAside returned wrong point")
+	}
+	r = checkSetAside(nil, queue, false)
+	if r != dp2 {
 		t.Errorf("checkSetAside returned wrong point")
 	}
 	if queue.size() != 0 {

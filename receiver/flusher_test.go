@@ -129,3 +129,38 @@ func Test_reportFlusherChannelFillPercent(t *testing.T) {
 		t.Errorf("reportFlusherChannelFillPercent: statReporter should have been called a bunch of times")
 	}
 }
+
+// func Test_Receiver_flushDs(t *testing.T) {
+// 	// So we need to test that this calls queueblocking...
+// 	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1), flushLimiter: rate.NewLimiter(10, 10)}
+// 	r.flusherChs[0] = make(chan *dsFlushRequest)
+// 	called := 0
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	go func() {
+// 		defer wg.Done()
+// 		for {
+// 			if _, ok := <-r.flusherChs[0]; !ok {
+// 				break
+// 			}
+// 			called++
+// 		}
+// 	}()
+// 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+// 	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
+// 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
+// 	ds.ProcessDataPoint(10, time.Unix(100, 0))
+// 	ds.ProcessDataPoint(10, time.Unix(101, 0))
+// 	rds := &receiverDs{DataSource: ds}
+// 	r.SetMaxFlushRate(1)
+// 	r.flushDs(rds, false)
+// 	r.flushDs(rds, false)
+// 	close(r.flusherChs[0])
+// 	wg.Wait()
+// 	if called != 1 {
+// 		t.Errorf("flushDs call count not 1: %d", called)
+// 	}
+// 	if ds.PointCount() != 0 {
+// 		t.Errorf("ClearRRAs was not called by flushDs")
+// 	}
+// }

@@ -20,6 +20,24 @@ import (
 	"time"
 )
 
+// func Test_workerChannels_queue(t *testing.T) {
+// 	var wcs workerChannels = make([]chan *incomingDpWithDs, 2)
+// 	wcs[0] = make(chan *incomingDpWithDs)
+// 	wcs[1] = make(chan *incomingDpWithDs)
+
+// 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
+// 	rds := &receiverDs{DataSource: ds}
+// 	called := 0
+// 	go func() {
+// 		<-wcs[0]
+// 		called++
+// 	}()
+// 	wcs.queue(nil, rds)
+// 	if called != 1 {
+// 		t.Errorf("id 0 should be send to worker 0")
+// 	}
+// }
+
 // func Test_workerPeriodicFlush(t *testing.T) {
 
 // 	// fake logger

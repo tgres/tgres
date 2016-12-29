@@ -91,22 +91,22 @@ func Test_startAllWorkers(t *testing.T) {
 // 	startAllWorkers = saveSaw
 // }
 
-func Test_Receiver_doStop(t *testing.T) {
-	f1, f2 := stopDispatcher, stopAllWorkers
-	called, calledSAW := 0, 0
-	stopDispatcher = func(_ *Receiver) { called++ }
-	stopAllWorkers = func(_ *Receiver) { calledSAW++ }
-	r := &Receiver{}
-	c := &fakeCluster{}
-	doStop(r, c)
-	if c.nLeave != 1 {
-		t.Errorf("doStop: never called cluster.Leave, or not first: %d", c.nLeave)
-	}
-	if c.nShutdown != 2 {
-		t.Errorf("doStop: never called cluster.Shutdown, or not second: %d", c.nShutdown)
-	}
-	stopDispatcher, stopAllWorkers = f1, f2
-}
+// func Test_Receiver_doStop(t *testing.T) {
+// 	f1, f2 := stopDispatcher, stopAllWorkers
+// 	called, calledSAW := 0, 0
+// 	stopDispatcher = func(_ *Receiver) { called++ }
+// 	stopAllWorkers = func(_ *Receiver) { calledSAW++ }
+// 	r := &Receiver{}
+// 	c := &fakeCluster{}
+// 	doStop(r, c)
+// 	if c.nLeave != 1 {
+// 		t.Errorf("doStop: never called cluster.Leave, or not first: %d", c.nLeave)
+// 	}
+// 	if c.nShutdown != 2 {
+// 		t.Errorf("doStop: never called cluster.Shutdown, or not second: %d", c.nShutdown)
+// 	}
+// 	stopDispatcher, stopAllWorkers = f1, f2
+// }
 
 func Test_stopWorkers(t *testing.T) {
 	workerChs := make([]chan *incomingDpWithDs, 0)
