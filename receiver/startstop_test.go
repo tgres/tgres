@@ -23,7 +23,14 @@ import (
 	"github.com/tgres/tgres/aggregator"
 )
 
-func Test_startAllWorkers(t *testing.T) {
+func Test_startstop_wrkCtl(t *testing.T) {
+	wc := &wrkCtl{id: "foo"}
+	if wc.ident() != "foo" {
+		t.Errorf(`wc.ident() != "foo"`)
+	}
+}
+
+func Test_startstop_startAllWorkers(t *testing.T) {
 	// Save and replace the start funcs
 	f1, f2, f3, f4 := startWorkers, startFlushers, startAggWorker, startPacedMetricWorker
 	called := 0
@@ -37,78 +44,80 @@ func Test_startAllWorkers(t *testing.T) {
 	startWorkers, startFlushers, startAggWorker, startPacedMetricWorker = f1, f2, f3, f4
 }
 
-// func Test_doStart(t *testing.T) {
-// 	delay := 100 * time.Millisecond
+func Test_startstop_doStart(t *testing.T) {
+	delay := 100 * time.Millisecond
 
-// 	clstr := &fakeCluster{cChange: make(chan bool)}
-// 	db := &fakeSerde{}
-// 	df := &dftDSFinder{}
-// 	dsc := newDsCache(db, df, clstr, nil, true)
+	//clstr := &fakeCluster{cChange: make(chan bool)}
+	db := &fakeSerde{}
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	fl := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, fl)
 
-// 	r := &Receiver{dpCh: make(chan *IncomingDP), dsc: dsc}
+	r := &Receiver{dpCh: make(chan *IncomingDP), dsc: dsc}
 
-// 	saveDisp := dispatcher
-// 	saveSaw := startAllWorkers
-// 	called := 0
-// 	stopped := false
-// 	dispatcher = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statReporter, dss *dsCache, workerChs workerChannels) {
-// 		wc.onEnter()
-// 		defer wc.onExit()
-// 		called++
-// 		wc.onStarted()
-// 		if _, ok := <-dpCh; !ok {
-// 			stopped = true
-// 		}
-// 	}
-// 	calledSAW := 0
-// 	startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
-// 		calledSAW++
-// 		startWg.Add(1)
-// 		go func() {
-// 			time.Sleep(delay)
-// 			startWg.Done()
-// 		}()
-// 	}
-// 	started := time.Now()
-// 	doStart(r)
-// 	if called == 0 {
-// 		t.Errorf("doStart: didn't call dispatcher()?")
-// 	}
-// 	if calledSAW == 0 {
-// 		t.Errorf("doStart: calledSAW == 0, didn't call startAllWorkers()?")
-// 	}
-// 	if time.Now().Sub(started) < delay {
-// 		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
-// 	}
+	saveDisp := director
+	saveSaw := startAllWorkers
+	called := 0
+	stopped := false
+	director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, scr statReporter, dss *dsCache, workerChs workerChannels) {
+		wc.onEnter()
+		defer wc.onExit()
+		called++
+		wc.onStarted()
+		if _, ok := <-dpCh; !ok {
+			stopped = true
+		}
+	}
+	calledSAW := 0
+	startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
+		calledSAW++
+		startWg.Add(1)
+		go func() {
+			time.Sleep(delay)
+			startWg.Done()
+		}()
+	}
+	started := time.Now()
+	doStart(r)
+	if called == 0 {
+		t.Errorf("doStart: didn't call director()?")
+	}
+	if calledSAW == 0 {
+		t.Errorf("doStart: calledSAW == 0, didn't call startAllWorkers()?")
+	}
+	if time.Now().Sub(started) < delay {
+		t.Errorf("doStart: not enough time passed, didn't call startAllWorkers()?")
+	}
 
-// 	// test stopDispatcher here too
-// 	stopDispatcher(r)
-// 	if !stopped {
-// 		t.Errorf("stopDispatcher didn't stop dispatcher")
-// 	}
+	// test stopDirector here too
+	stopDirector(r)
+	if !stopped {
+		t.Errorf("stopDirector didn't stop dispatcher")
+	}
 
-// 	dispatcher = saveDisp
-// 	startAllWorkers = saveSaw
-// }
+	director = saveDisp
+	startAllWorkers = saveSaw
+}
 
-// func Test_Receiver_doStop(t *testing.T) {
-// 	f1, f2 := stopDispatcher, stopAllWorkers
-// 	called, calledSAW := 0, 0
-// 	stopDispatcher = func(_ *Receiver) { called++ }
-// 	stopAllWorkers = func(_ *Receiver) { calledSAW++ }
-// 	r := &Receiver{}
-// 	c := &fakeCluster{}
-// 	doStop(r, c)
-// 	if c.nLeave != 1 {
-// 		t.Errorf("doStop: never called cluster.Leave, or not first: %d", c.nLeave)
-// 	}
-// 	if c.nShutdown != 2 {
-// 		t.Errorf("doStop: never called cluster.Shutdown, or not second: %d", c.nShutdown)
-// 	}
-// 	stopDispatcher, stopAllWorkers = f1, f2
-// }
+func Test_startstop_Receiver_doStop(t *testing.T) {
+	f1, f2 := stopDirector, stopAllWorkers
+	called, calledSAW := 0, 0
+	stopDirector = func(_ *Receiver) { called++ }
+	stopAllWorkers = func(_ *Receiver) { calledSAW++ }
+	r := &Receiver{}
+	c := &fakeCluster{}
+	doStop(r, c)
+	if c.nLeave != 1 {
+		t.Errorf("doStop: never called cluster.Leave, or not first: %d", c.nLeave)
+	}
+	if c.nShutdown != 2 {
+		t.Errorf("doStop: never called cluster.Shutdown, or not second: %d", c.nShutdown)
+	}
+	stopDirector, stopAllWorkers = f1, f2
+}
 
-func Test_stopWorkers(t *testing.T) {
+func Test_startstop_stopWorkers(t *testing.T) {
 	workerChs := make([]chan *incomingDpWithDs, 0)
 	workerChs = append(workerChs, make(chan *incomingDpWithDs))
 	closed := 0
@@ -139,7 +148,7 @@ func Test_stopWorkers(t *testing.T) {
 	}
 }
 
-func Test_stopFlushers(t *testing.T) {
+func Test_startstop_stopFlushers(t *testing.T) {
 	workerChs := make([]chan *dsFlushRequest, 0)
 	workerChs = append(workerChs, make(chan *dsFlushRequest))
 	closed := 0
@@ -170,7 +179,7 @@ func Test_stopFlushers(t *testing.T) {
 	}
 }
 
-func Test_stopPacedMetricWorker(t *testing.T) {
+func Test_startstop_stopPacedMetricWorker(t *testing.T) {
 	workerCh := make(chan *pacedMetric)
 	closed := 0
 	var closeWatchWg sync.WaitGroup
@@ -200,7 +209,7 @@ func Test_stopPacedMetricWorker(t *testing.T) {
 	}
 }
 
-func Test_stopAggWorker(t *testing.T) {
+func Test_startstop_stopAggWorker(t *testing.T) {
 	workerCh := make(chan *aggregator.Command)
 	closed := 0
 	var closeWatchWg sync.WaitGroup
@@ -230,7 +239,7 @@ func Test_stopAggWorker(t *testing.T) {
 	}
 }
 
-func Test_stopAllWorkers(t *testing.T) {
+func Test_startstop_stopAllWorkers(t *testing.T) {
 	// Save
 	f1, f2, f3, f4 := stopWorkers, stopFlushers, stopAggWorker, stopPacedMetricWorker
 	called := 0
@@ -246,7 +255,7 @@ func Test_stopAllWorkers(t *testing.T) {
 	stopWorkers, stopFlushers, stopAggWorker, stopPacedMetricWorker = f1, f2, f3, f4
 }
 
-func Test_startWorkers(t *testing.T) {
+func Test_startstop_startWorkers(t *testing.T) {
 	nWorkers := 0
 	saveWorker := worker
 	worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incomingDpWithDs, minCacheDur, maxCacheDur time.Duration, maxPoints int, flushInt time.Duration, sr statReporter) {
@@ -267,28 +276,42 @@ func Test_startWorkers(t *testing.T) {
 	worker = saveWorker
 }
 
-// func Test_startFlushers(t *testing.T) {
-// 	nFlushers := 0
-// 	saveFlusher := flusher
-// 	flusher = func(wc wController, db serde.DataSourceFlusher, scr statReporter, flusherCh chan *dsFlushRequest) {
-// 		wc.onEnter()
-// 		defer wc.onExit()
-// 		nFlushers++
-// 		wc.onStarted()
-// 	}
+func Test_startstop_startFlushers(t *testing.T) {
+	nFlushers := 0
+	saveFlusher := flusher
+	flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {
+		wc.onEnter()
+		defer wc.onExit()
+		nFlushers++
+		wc.onStarted()
+	}
 
-// 	var startWg sync.WaitGroup
-// 	r := &Receiver{NWorkers: 5}
-// 	startFlushers(r, &startWg)
-// 	startWg.Wait()
+	var startWg sync.WaitGroup
+	db := &fakeSerde{}
+	sr := &fakeSr{}
+	r := &Receiver{NWorkers: 5}
+	r.flusher = &dsFlusher{db: db, sr: sr}
+	startFlushers(r, &startWg)
+	startWg.Wait()
 
-// 	if nFlushers != 5 {
-// 		t.Errorf("startFlushers: nFlushers started != 5")
-// 	}
-// 	flusher = saveFlusher
-// }
+	if nFlushers != 5 {
+		t.Errorf("startFlushers: nFlushers started != 5")
+	}
 
-func Test_startAggWorker(t *testing.T) {
+	// no flusher support
+	nFlushers = 0
+	r.flusher = &dsFlusher{}
+	startFlushers(r, &startWg)
+	startWg.Wait()
+
+	if nFlushers != 0 {
+		t.Errorf("nil flusher: nFlushers != 0")
+	}
+
+	flusher = saveFlusher
+}
+
+func Test_startstop_startAggWorker(t *testing.T) {
 	started := 0
 	saveAW := aggWorker
 	aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clusterer, statFlushDuration time.Duration, statsNamePrefix string, scr statReporter, dpq *Receiver) {
@@ -308,7 +331,7 @@ func Test_startAggWorker(t *testing.T) {
 	aggWorker = saveAW
 }
 
-func Test_startPacedMetricWorker(t *testing.T) {
+func Test_startstop_startPacedMetricWorker(t *testing.T) {
 	started := 0
 	savePMW := pacedMetricWorker
 	pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration, sr statReporter) {
