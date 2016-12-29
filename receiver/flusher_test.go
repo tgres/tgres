@@ -25,7 +25,7 @@ import (
 	"github.com/tgres/tgres/serde"
 )
 
-func Test_flusherChannels_queueBlocking(t *testing.T) {
+func Test_flusher_flusherChannels_queueBlocking(t *testing.T) {
 	var fcs flusherChannels = make([]chan *dsFlushRequest, 2)
 	fcs[0] = make(chan *dsFlushRequest)
 	fcs[1] = make(chan *dsFlushRequest)
@@ -120,7 +120,7 @@ func Test_flusher(t *testing.T) {
 	wc.wg.Wait()
 }
 
-func Test_reportFlusherChannelFillPercent(t *testing.T) {
+func Test_flusher_reportFlusherChannelFillPercent(t *testing.T) {
 	ch := make(chan *dsFlushRequest, 10)
 	sr := &fakeSr{}
 	go reportFlusherChannelFillPercent(ch, sr, "IdenT", time.Millisecond)
@@ -130,37 +130,78 @@ func Test_reportFlusherChannelFillPercent(t *testing.T) {
 	}
 }
 
-// func Test_Receiver_flushDs(t *testing.T) {
-// 	// So we need to test that this calls queueblocking...
-// 	r := &Receiver{flusherChs: make([]chan *dsFlushRequest, 1), flushLimiter: rate.NewLimiter(10, 10)}
-// 	r.flusherChs[0] = make(chan *dsFlushRequest)
-// 	called := 0
-// 	var wg sync.WaitGroup
-// 	wg.Add(1)
-// 	go func() {
-// 		defer wg.Done()
-// 		for {
-// 			if _, ok := <-r.flusherChs[0]; !ok {
-// 				break
-// 			}
-// 			called++
-// 		}
-// 	}()
-// 	ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
-// 	rra, _ := rrd.NewRoundRobinArchive(0, 0, "WMEAN", time.Second, 10, 10, 0, time.Time{})
-// 	ds.SetRRAs([]*rrd.RoundRobinArchive{rra})
-// 	ds.ProcessDataPoint(10, time.Unix(100, 0))
-// 	ds.ProcessDataPoint(10, time.Unix(101, 0))
-// 	rds := &receiverDs{DataSource: ds}
-// 	r.SetMaxFlushRate(1)
-// 	r.flushDs(rds, false)
-// 	r.flushDs(rds, false)
-// 	close(r.flusherChs[0])
-// 	wg.Wait()
-// 	if called != 1 {
-// 		t.Errorf("flushDs call count not 1: %d", called)
-// 	}
-// 	if ds.PointCount() != 0 {
-// 		t.Errorf("ClearRRAs was not called by flushDs")
-// 	}
-// }
+func Test_flusher_start(t *testing.T) {
+	db := &fakeSerde{}
+	sr := &fakeSr{}
+	f := &dsFlusher{db: db.Flusher(), sr: sr}
+	var (
+		startWg, flusherWg sync.WaitGroup
+	)
+	fCalled := 0
+	save1 := flusher
+	flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {
+		fCalled++
+		wc.onStarted()
+	}
+	startWg.Add(1)
+	f.start(1, &flusherWg, &startWg, 10)
+	startWg.Wait()
+	if fCalled == 0 {
+		t.Errorf("fCalled == 0")
+	}
+	if f.flushLimiter == nil {
+		t.Errorf("f.flushLimiter == nil")
+	}
+	flusher = save1
+}
+
+func Test_flusher_flushDs(t *testing.T) {
+	db := &fakeSerde{}
+	sr := &fakeSr{}
+	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+
+	f := &dsFlusher{}
+	if !f.flushDs(nil, false) {
+		t.Errorf("nil database should return true")
+	}
+
+	var (
+		startWg, flusherWg sync.WaitGroup
+	)
+	save1 := flusher
+	flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {}
+	f = &dsFlusher{db: db, sr: sr}
+	f.start(1, &flusherWg, &startWg, 1)
+
+	f.flushDs(ds, false)
+	f.flushDs(ds, false)
+
+	if len(f.flusherChs[0]) != 1 {
+		t.Errorf("len(f.flusherChs[0])) != 1")
+	}
+	if sr.called != 1 {
+		fmt.Printf("sr.called != 1 (second flushDs should be rate limited)")
+	}
+
+	flusher = save1
+}
+
+func Test_flusher_methods(t *testing.T) {
+	db := &fakeSerde{}
+	sr := &fakeSr{}
+
+	f := &dsFlusher{db: db, sr: sr}
+
+	if !f.enabled() {
+		t.Errorf("enabled() should be true")
+	}
+	if db != f.flusher() {
+		t.Errorf("db != f.flusher()")
+	}
+	if sr != f.statReporter() {
+		t.Errorf("sr != f.statReporter()")
+	}
+	if len(f.channels()) != 0 {
+		t.Errorf("len(f.channels()) != 0")
+	}
+}

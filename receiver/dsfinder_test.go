@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-func Test_FindMatchingDSSpec(t *testing.T) {
+func Test_dsfinder_FindMatchingDSSpec(t *testing.T) {
 	df := &SimpleDSFinder{DftDSSPec}
 	d := df.FindMatchingDSSpec("whatever")
 	if d.Step != 10*time.Second || len(d.RRAs) == 0 {
