@@ -19,21 +19,24 @@ package main
 
 import (
 	"flag"
-	"github.com/tgres/tgres/daemon"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"github.com/tgres/tgres/daemon"
 )
 
-func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool) {
+func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool, version bool) {
 
 	// Parse the flags, if any
 	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
 	flag.StringVar(&join, "join", "", "List of add:port,addr:port,... of nodes to join")
 	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
 	flag.BoolVar(&bg, "bg", false, "Immediately background itself")
+	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.Parse()
 
 	return
@@ -41,7 +44,12 @@ func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool) {
 
 func main() {
 
-	textCfgPath, gracefulProtos, join, bg := parseFlags()
+	textCfgPath, gracefulProtos, join, bg, version := parseFlags()
+
+	if version {
+		fmt.Printf("Tgres version: %v\n", Version)
+		return
+	}
 
 	if bg {
 		if !filepath.IsAbs(textCfgPath) {
