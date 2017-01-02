@@ -18,6 +18,33 @@
 // parser used for the language is Go standard lib parser.ParseExpr(),
 // which basically means the syntax is Go, and so the user of this
 // package might need to ensure to wrap series names in quotes, etc.
+//
+// For example, consider
+//
+//   scale(foo.bar.baz, 2)
+//
+// is a valid Go expression. foo.bar.baz is called a selector
+// expression. However,
+//
+//   scale(foo.1bar.baz, 2)
+//
+// is not valid because an identifier cannot begin with a digit. In
+// any case,
+//
+//   scale("foo.1bar.b*", 2)
+//
+// is always valid, and is the preferred method.
+//
+// Tgres DSL also supports function chaining, e.g.:
+//
+//   group("foo.*").scale(2)
+//
+// Internally this is done by taking the return value of the
+// preceeding function and inserting it as the first argument to the
+// current one, thus the above expression is equivalent to:
+//
+//   scale(group("foo.*", 2))
+//
 package dsl
 
 import (
@@ -54,9 +81,9 @@ func newDslCtx(db NamedDSFetcher, src string, from, to, maxPoints int64) *dslCtx
 
 // Parse a DSL context. Returns a SeriesMap or error.
 func (dc *dslCtx) parse() (SeriesMap, error) {
+
 	// parser.ParseExpr produces an AST in accordance with Go syntax,
 	// which is just fine in our case.
-
 	tr, err := parser.ParseExpr(dc.escSrc)
 	if err != nil {
 		return nil, fmt.Errorf("Error parsing %q: %v", dc.src, err)
@@ -82,7 +109,7 @@ func (dc *dslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 		series, err := dc.seriesFromIdent(obj, fromT, toT)
 		return series, err
 	}
-	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T", what)
+	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T of %v", what, what)
 }
 
 func (dc *dslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, error) {
@@ -140,8 +167,7 @@ func (v *funcVisitor) processStack() ast.Visitor {
 		ret interface{}
 	)
 
-	c := v.stack.Pop()
-	for c != nil && v.err == nil {
+	for c := v.stack.Pop(); c != nil && v.err == nil; c = v.stack.Pop() {
 		for n, arg := range c.ast.Args {
 
 			// We walk the arguments of this function. If an argument
@@ -186,9 +212,23 @@ func (v *funcVisitor) processStack() ast.Visitor {
 		}
 
 		// if we got this far, all args for the function we are processing are satisfied
-		name := v.dc.escSrc[c.ast.Fun.Pos()-1 : c.ast.Fun.End()-1]
+		name := "UNDEFINED"
+		switch fn := c.ast.Fun.(type) {
+		case *ast.SelectorExpr:
+			// Function chaining, e.g. group("abc").scale(3)
+			name = fn.Sel.Name
+			if ret == nil { // Is this even possible?
+				src := v.dc.escSrc[c.ast.Fun.Pos()-1 : c.ast.Fun.End()-1]
+				v.err = fmt.Errorf("Function chaining and previous return nil: %v", src)
+				return v
+			}
+			// Prepend ret as first argument
+			c.args = append([]interface{}{ret}, c.args...)
+		case *ast.Ident:
+			name = fn.Name
+		}
+
 		ret, v.err = seriesFromFunction(v.dc, name, c.args)
-		c = v.stack.Pop()
 	}
 
 	v.ret = ret.(SeriesMap)
