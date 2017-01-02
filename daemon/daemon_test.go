@@ -16,10 +16,15 @@
 package daemon
 
 import (
+	"fmt"
+	"testing"
+	"time"
+
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/receiver"
+	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
-	"testing"
+	"github.com/tgres/tgres/series"
 )
 
 func Test_Init(t *testing.T) {
@@ -46,17 +51,17 @@ func Test_Init(t *testing.T) {
 
 	// initDb
 	save_initDb := initDb
-	initDb = func(connectString string) (serde.SerDe, error) { return nil, nil }
+	initDb = func(connectString string) (serde.DbSerDe, error) { return &fakeSerde{}, nil }
 
 	// determineClusterBindAddress
 	save_determineClusterBindAddress := determineClusterBindAddress
-	determineClusterBindAddress = func(db serde.SerDe) (bindAddr, advAddr string, err error) {
+	determineClusterBindAddress = func(db serde.DbAddresser) (bindAddr, advAddr string, err error) {
 		return "", "", nil
 	}
 
 	// determineClusterJoinAddress
 	save_determineClusterJoinAddress := determineClusterJoinAddress
-	determineClusterJoinAddress = func(join string, db serde.SerDe) (ips []string, err error) {
+	determineClusterJoinAddress = func(join string, db serde.DbAddresser) (ips []string, err error) {
 		return ips, err
 	}
 
@@ -69,7 +74,7 @@ func Test_Init(t *testing.T) {
 	// createReceiver
 	save_createReceiver := createReceiver
 	createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *receiver.Receiver {
-		return nil
+		return receiver.New(db, nil)
 	}
 
 	save_startReceiver := startReceiver
@@ -77,7 +82,7 @@ func Test_Init(t *testing.T) {
 
 	// waitForSignal
 	save_waitForSignal := waitForSignal
-	waitForSignal = func(r *receiver.Receiver, sm *ServiceManager, cfgPath string) {}
+	waitForSignal = func(r *receiver.Receiver, sm *serviceManager, cfgPath, join string) {}
 
 	Init("", "", "")
 
@@ -93,4 +98,50 @@ func Test_Init(t *testing.T) {
 	createReceiver = save_createReceiver
 	startReceiver = save_startReceiver
 	waitForSignal = save_waitForSignal
+}
+
+type fakeSerde struct {
+	flushCalled, createCalled, fetchCalled int
+	fakeErr                                bool
+	returnDss                              []rrd.DataSourcer
+	nondb                                  bool
+}
+
+func (m *fakeSerde) Fetcher() serde.Fetcher                                { return m }
+func (m *fakeSerde) Flusher() serde.Flusher                                { return nil } // Flushing not supported
+func (m *fakeSerde) DbAddresser() serde.DbAddresser                        { return m }
+func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error) { return nil, nil }
+func (m *fakeSerde) FetchDataSourceNames() (map[string]int64, error)       { return nil, nil }
+func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
+	return nil, nil
+}
+func (*fakeSerde) ListDbClientIps() ([]string, error) { return nil, nil }
+func (*fakeSerde) MyDbAddr() (*string, error)         { return nil, nil }
+
+func (f *fakeSerde) FetchDataSources() ([]rrd.DataSourcer, error) {
+	f.fetchCalled++
+	if f.fakeErr {
+		return nil, fmt.Errorf("some error")
+	}
+	if len(f.returnDss) == 0 {
+		return make([]rrd.DataSourcer, 0), nil
+	}
+	return f.returnDss, nil
+}
+
+func (f *fakeSerde) FlushDataSource(ds rrd.DataSourcer) error {
+	f.flushCalled++
+	return nil
+}
+
+func (f *fakeSerde) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+	f.createCalled++
+	if f.fakeErr {
+		return nil, fmt.Errorf("some error")
+	}
+	if f.nondb {
+		return rrd.NewDataSource(*receiver.DftDSSPec), nil
+	} else {
+		return serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*receiver.DftDSSPec)), nil
+	}
 }

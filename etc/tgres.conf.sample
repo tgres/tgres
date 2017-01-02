@@ -32,7 +32,7 @@ db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 regexp = "foo"
 step = "10s"
 heartbeat = "2h"
-# rra is "[Average|Min|Max|last:]ts:ts[:xff]"
+# rra is "[wmean|min|max|last:]ts:ts[:xff]"
 # function is not case-sensitive, default is "wmean".
 rras = ["10s:6h", "1m:10d", "10m:93d", "1d:5y:1"]
 

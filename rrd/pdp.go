@@ -21,9 +21,8 @@ import (
 )
 
 // Pdp is a Primary Data Point. It provides intermediate state and
-// logic to interpolate and store incoming DP data in a consolidated way,
-// using a choice of consolidations such as Weighted Mean, Min, Max or
-// Last.
+// logic to interpolate and store incoming DP data in a consolidated way
+// using weighted mean.
 //
 // This is an illustration of how incoming data points are
 // consolidated into a PDP using weighted mean. The PDP below is 4
