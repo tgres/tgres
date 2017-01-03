@@ -62,14 +62,25 @@ func init() {
 type Receiver struct {
 	NWorkers int // number of workers, must be > 0
 
-	// MaxMaxCacheDuration, MinCacheDuration and MaxCachedPoints control the cache
-	MaxCacheDuration, MinCacheDuration time.Duration
-	MaxCachedPoints                    int
+	// Cache parameters. These are tracked per Data Source.
+	// MinCacheDuration means data points will always be kept in the cache at least this long,
+	// or, in other words, the DS will not be flushed more frequently than every MinCacheDuration
+	MinCacheDuration time.Duration
+	// MaxMaxCacheDuration is the most time data points will be kept in the cache, or, in other words,
+	// the DS will be flushed at least every MaxFlushDuration provided it has data points.
+	MaxCacheDuration time.Duration
+	// MaxCachedPoints is the maximum number of cached points allowed
+	// in a Data Source. Note that MinCacheDuration trumps this
+	// parameter. Also note that with max duration of n, the number of
+	// data points in a DS can never exceed n/step.
+	MaxCachedPoints int
+
+	// MaxFlushRatePerSecond controls how frequently we write to the
+	// database across all DSs. This trumps all other caching parameters.
+	MaxFlushRatePerSecond int
 
 	StatFlushDuration time.Duration // Period after which stats are flushed
 	StatsNamePrefix   string        // Stat names are prefixed with this
-
-	MaxFlushRatePerSecond int // At most we will write to db at this rate
 
 	ReportStats       bool   // report internal stats?
 	ReportStatsPrefix string // prefix for internal stats
@@ -117,18 +128,19 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 		finder = &SimpleDSFinder{DftDSSPec}
 	}
 	r := &Receiver{
-		serde:             serde,
-		NWorkers:          4,
-		MaxCacheDuration:  5 * time.Second,
-		MinCacheDuration:  1 * time.Second,
-		MaxCachedPoints:   256,
-		StatFlushDuration: 10 * time.Second,
-		StatsNamePrefix:   "stats",
-		dpCh:              make(chan *IncomingDP, 65536), // to be on the safe side
-		aggCh:             make(chan *aggregator.Command, 1024),
-		pacedMetricCh:     make(chan *pacedMetric, 1024),
-		ReportStats:       false,
-		ReportStatsPrefix: "tgres",
+		serde:                 serde,
+		NWorkers:              4,
+		MaxCacheDuration:      5 * time.Second,
+		MinCacheDuration:      1 * time.Second,
+		MaxCachedPoints:       256,
+		MaxFlushRatePerSecond: 100,
+		StatFlushDuration:     10 * time.Second,
+		StatsNamePrefix:       "stats",
+		dpCh:                  make(chan *IncomingDP, 65536), // to be on the safe side
+		aggCh:                 make(chan *aggregator.Command, 1024),
+		pacedMetricCh:         make(chan *pacedMetric, 1024),
+		ReportStats:           false,
+		ReportStatsPrefix:     "tgres",
 	}
 
 	r.flusher = &dsFlusher{db: serde.Flusher(), sr: r}

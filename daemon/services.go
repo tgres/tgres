@@ -482,7 +482,13 @@ func parseGraphitePacket(packetStr string) (string, time.Time, float64, error) {
 		return "", time.Time{}, 0, fmt.Errorf("error %v scanning input: %q", err, packetStr)
 	}
 
-	return misc.SanitizeName(name), time.Unix(tstamp, 0), value, nil
+	var t time.Time
+	if tstamp == -1 { // https://github.com/graphite-project/carbon/issues/54
+		t = time.Now()
+	} else {
+		t = time.Unix(tstamp, 0)
+	}
+	return misc.SanitizeName(name), t, value, nil
 }
 
 // TODO isn't this identical to handleGraphiteTextProtocol?
