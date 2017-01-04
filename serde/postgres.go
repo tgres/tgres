@@ -44,6 +44,7 @@ package serde
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -165,10 +166,10 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (name, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
+	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (tags, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
 		// PG 9.5 required. NB: DO NOTHING causes RETURNING to return nothing, so we're using this dummy UPDATE to work around.
-		"ON CONFLICT (name) DO UPDATE SET step_ms = ds.step_ms "+
-		"RETURNING id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
+		"ON CONFLICT (tags) DO UPDATE SET step_ms = ds.step_ms "+
+		"RETURNING id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
@@ -184,11 +185,11 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE name = $1",
+	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE tags ->> 'name' = $1",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -200,14 +201,15 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 	create_sql := `
        CREATE TABLE IF NOT EXISTS %[1]sds (
        id SERIAL NOT NULL PRIMARY KEY,
-       name TEXT NOT NULL,
+       tags JSONB NOT NULL DEFAULT '{}',
        step_ms BIGINT NOT NULL,
        heartbeat_ms BIGINT NOT NULL,
        lastupdate TIMESTAMPTZ,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        duration_ms BIGINT NOT NULL DEFAULT 0);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_name ON %[1]sds (name);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_tags_uniq ON %[1]sds (tags);
+       CREATE INDEX IF NOT EXISTS %[1]sidx_ds_tags ON %[1]sds USING gin(tags);
 
        CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
@@ -301,9 +303,10 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 		durationMs, stepMs, hbMs int64
 		value                    float64
 		id                       int64
-		name                     string
+		tags                     []byte
+		tmap                     map[string]string
 	)
-	err := rows.Scan(&id, &name, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
+	err := rows.Scan(&id, &tags, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -313,7 +316,13 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 		lastupdate = &time.Time{}
 	}
 
-	ds := NewDbDataSource(id, name,
+	err = json.Unmarshal(tags, &tmap)
+	if err != nil {
+		log.Printf("dataSourceFromRow(): error unmarshalling tags: %v", err)
+		return nil, err
+	}
+
+	ds := NewDbDataSource(id, tmap["name"],
 		rrd.NewDataSource(
 			rrd.DSSpec{
 				Step:       time.Duration(stepMs) * time.Millisecond,
@@ -416,6 +425,10 @@ func (p *pgSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
+		if err != nil {
+			log.Printf("FetchDataSourceById(): error scanning DS: %v", err)
+			return nil, err
+		}
 		rras, err := p.fetchRoundRobinArchives(ds)
 		if err != nil {
 			log.Printf("FetchDataSourceById(): error fetching RRAs: %v", err)
@@ -455,7 +468,7 @@ func (p *pgSerDe) FetchDataSourceByName(name string) (*DbDataSource, error) {
 
 func (p *pgSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
-	const sql = `SELECT id, name, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
+	const sql = `SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
@@ -638,7 +651,18 @@ func (p *pgSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 // e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
 // pre-inserting rows in ts here.
 func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
-	rows, err := p.sql4.Query(name, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
+	var (
+		tmap = map[string]string{"name": name}
+		tags []byte
+		err  error
+		rows *sql.Rows
+	)
+	tags, err = json.Marshal(tmap)
+	if err != nil {
+		log.Printf("FetchOrCreateDataSource(): error marshalling tags: %v", err)
+		return nil, err
+	}
+	rows, err = p.sql4.Query(tags, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
 		return nil, err

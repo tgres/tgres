@@ -19,7 +19,7 @@ import "github.com/tgres/tgres/rrd"
 
 type DbDataSource struct {
 	rrd.DataSourcer
-	name string
+	tags map[string]string
 	id   int64
 }
 
@@ -29,21 +29,25 @@ type DbDataSourcer interface {
 	Id() int64
 }
 
-func (ds *DbDataSource) Name() string { return ds.name }
+func (ds *DbDataSource) Name() string { return ds.tags["name"] }
 func (ds *DbDataSource) Id() int64    { return ds.id }
 
 func NewDbDataSource(id int64, name string, ds rrd.DataSourcer) *DbDataSource {
 	return &DbDataSource{
 		DataSourcer: ds,
 		id:          id,
-		name:        name,
+		tags:        map[string]string{"name": name},
 	}
 }
 
 func (ds *DbDataSource) Copy() rrd.DataSourcer {
-	return &DbDataSource{
+	result := &DbDataSource{
 		DataSourcer: ds.DataSourcer.Copy(),
 		id:          ds.id,
-		name:        ds.name,
+		tags:        make(map[string]string, len(ds.tags)),
 	}
+	for k, v := range ds.tags {
+		result.tags[k] = v
+	}
+	return result
 }
