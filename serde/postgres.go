@@ -389,7 +389,7 @@ func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*DbRoundRob
 
 func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
 
-	const sql = `SELECT id, name FROM %[1]sds ds`
+	const sql = `SELECT id, tags FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
@@ -402,14 +402,24 @@ func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
 	for rows.Next() {
 		var (
 			id   int64
-			name string
+			tags []byte
+			tmap map[string]string
 		)
-		err := rows.Scan(&id, &name)
+		err := rows.Scan(&id, &tags)
 		if err != nil {
 			log.Printf("FetchDataSourceNames(): error scanning row: %v", err)
 			return nil, err
 		}
-		result[name] = id
+		err = json.Unmarshal(tags, &tmap)
+		if err != nil {
+			log.Printf("FetchDataSourceNames(): error unmarshalling tags: %v", err)
+			return nil, err
+		}
+		if name := tmap["name"]; name == "" {
+			log.Printf("FetchDataSourceNames(): nil name in tags: %v", tags)
+		} else {
+			result[name] = id
+		}
 	}
 	return result, nil
 }
