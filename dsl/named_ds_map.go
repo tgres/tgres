@@ -64,7 +64,7 @@ type mapCache struct {
 	byId   map[int64]rrd.DataSourcer
 }
 
-func (m *mapCache) Search(query map[string]string) (serde.SearchResult, error) {
+func (m *mapCache) Search(query serde.SearchQuery) (serde.SearchResult, error) {
 	sr := &memSearchResult{pos: -1}
 	for k, v := range m.byName {
 		sr.result = append(sr.result, &srRow{map[string]string{"name": k}, v})
