@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 	"github.com/tgres/tgres/series"
 )
 
@@ -40,13 +41,35 @@ func newMapCache(dss map[string]rrd.DataSourcer) *mapCache {
 	return mc
 }
 
+type srRow struct {
+	ident serde.IdentTags
+	id    int64
+}
+
+type memSearchResult struct {
+	result []*srRow
+	pos    int
+}
+
+func (sr *memSearchResult) Next() bool {
+	sr.pos++
+	return sr.pos < len(sr.result)
+}
+func (sr *memSearchResult) Id() int64              { return sr.result[sr.pos].id }
+func (sr *memSearchResult) Ident() serde.IdentTags { return sr.result[sr.pos].ident }
+func (sr *memSearchResult) Close() error           { return nil }
+
 type mapCache struct {
 	byName map[string]int64
 	byId   map[int64]rrd.DataSourcer
 }
 
-func (m *mapCache) FetchDataSourceNames() (map[string]int64, error) {
-	return m.byName, nil
+func (m *mapCache) Search(query map[string]string) (serde.SearchResult, error) {
+	sr := &memSearchResult{pos: -1}
+	for k, v := range m.byName {
+		sr.result = append(sr.result, &srRow{map[string]string{"name": k}, v})
+	}
+	return sr, nil
 }
 
 func (m *mapCache) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {

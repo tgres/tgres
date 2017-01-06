@@ -51,7 +51,7 @@ var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 var doStart = func(r *Receiver) {
 	log.Printf("Receiver: Caching data sources...")
 	r.dsc.preLoad()
-	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byName))
+	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byIdent))
 
 	log.Printf("Receiver: starting...")
 

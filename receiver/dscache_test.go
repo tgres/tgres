@@ -33,24 +33,27 @@ func Test_dscache_newDsCache(t *testing.T) {
 
 func Test_dscache_getByName(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
-	d.byName["foo"] = &cachedDs{}
-	if rds := d.getByName("foo"); rds == nil {
-		t.Errorf("getByName did not return correct value")
+	foo := serde.IdentTags{"name": "foo"}
+	bar := serde.IdentTags{"name": "bar"}
+	d.byIdent[foo.String()] = &cachedDs{}
+	if rds := d.getByIdent(foo); rds == nil {
+		t.Errorf("getByIdent did not return correct value")
 	}
-	if rds := d.getByName("bar"); rds != nil {
-		t.Errorf("getByName did not return nil")
+	if rds := d.getByIdent(bar); rds != nil {
+		t.Errorf("getByIdent did not return nil")
 	}
 }
 
 func Test_dscache_insert(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
 	d.insert(rds)
 
-	if rds2 := d.getByName("foo"); rds2 != rds {
+	if rds2 := d.getByIdent(foo); rds2 != rds {
 		t.Errorf("insert: getByName did not return correct value")
 	}
 }
@@ -58,13 +61,14 @@ func Test_dscache_insert(t *testing.T) {
 func Test_dscache_delete(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	d.insert(rds)
 
-	d.delete("foo")
+	d.delete(foo)
 
-	if rds = d.getByName("foo"); rds != nil {
+	if rds = d.getByIdent(foo); rds != nil {
 		t.Errorf("delete: did not delete")
 	}
 }
@@ -78,11 +82,12 @@ func Test_dscache_preLoad(t *testing.T) {
 		t.Errorf("db.fetchCalled == 0")
 	}
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	db.returnDss = []rrd.DataSourcer{ds}
 	d.preLoad()
-	if len(d.byName) == 0 {
-		t.Errorf("len(d.byName) == 0")
+	if len(d.byIdent) == 0 {
+		t.Errorf("len(d.byIdent) == 0")
 	}
 	db.fakeErr = true
 	if err := d.preLoad(); err == nil {
@@ -108,7 +113,7 @@ type fakeSerde struct {
 func (m *fakeSerde) Fetcher() serde.Fetcher                                { return m }
 func (m *fakeSerde) Flusher() serde.Flusher                                { return nil } // Flushing not supported
 func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error) { return nil, nil }
-func (m *fakeSerde) FetchDataSourceNames() (map[string]int64, error)       { return nil, nil }
+func (m *fakeSerde) Search(serde.SearchQuery) (serde.SearchResult, error)  { return nil, nil }
 func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return nil, nil
 }
@@ -129,7 +134,7 @@ func (f *fakeSerde) FlushDataSource(ds rrd.DataSourcer) error {
 	return nil
 }
 
-func (f *fakeSerde) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (f *fakeSerde) FetchOrCreateDataSource(ident serde.IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	f.createCalled++
 	if f.fakeErr {
 		return nil, fmt.Errorf("some error")
@@ -137,7 +142,8 @@ func (f *fakeSerde) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rr
 	if f.nondb {
 		return rrd.NewDataSource(*DftDSSPec), nil
 	} else {
-		return serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec)), nil
+		foo := serde.IdentTags{"name": "foo"}
+		return serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec)), nil
 	}
 }
 
@@ -185,12 +191,14 @@ func Test_dscache_register(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 	d.clstr = &fakeCluster{}
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	d.register(ds) // not sure what we are testing here...
 }
 
 func Test_dscache_cachedDs_shouldBeFlushed(t *testing.T) {
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
 	// When rds.LastUpdate().IsZero() it should be false
@@ -249,7 +257,8 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 	dsf := &fakeDsFlusher{}
 	dsc := newDsCache(db, df, dsf)
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &distDs{DbDataSourcer: ds, dsc: dsc}
 
 	err := rds.Relinquish()
@@ -283,8 +292,8 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 		t.Errorf(`rds.Type() != "DataSource"`)
 	}
 
-	if rds.GetName() != "foo" {
-		t.Errorf(`rds.GetName() != "foo"`)
+	if rds.GetName() != foo.String() {
+		t.Errorf(`rds.GetName() != foo.String(): %v`, rds.GetName())
 	}
 
 	if rds.Id() != 0 {

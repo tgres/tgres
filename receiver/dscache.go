@@ -27,43 +27,43 @@ import (
 // A collection of data sources kept by name (string).
 type dsCache struct {
 	sync.RWMutex
-	byName map[string]*cachedDs
-	db     serde.Fetcher
-	dsf    dsFlusherBlocking
-	finder MatchingDSSpecFinder
-	clstr  clusterer
+	byIdent map[string]*cachedDs
+	db      serde.Fetcher
+	dsf     dsFlusherBlocking
+	finder  MatchingDSSpecFinder
+	clstr   clusterer
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
-		byName: make(map[string]*cachedDs),
-		db:     db,
-		finder: finder,
-		dsf:    dsf,
+		byIdent: make(map[string]*cachedDs),
+		db:      db,
+		finder:  finder,
+		dsf:     dsf,
 	}
 	return d
 }
 
 // getByName rlocks and gets a DS pointer.
-func (d *dsCache) getByName(name string) *cachedDs {
+func (d *dsCache) getByIdent(ident serde.IdentTags) *cachedDs {
 	d.RLock()
 	defer d.RUnlock()
-	return d.byName[name]
+	return d.byIdent[ident.String()]
 }
 
 // Insert locks and inserts a DS.
 func (d *dsCache) insert(cds *cachedDs) {
 	d.Lock()
 	defer d.Unlock()
-	d.byName[cds.Name()] = cds
+	d.byIdent[cds.Ident().String()] = cds
 }
 
 // Delete a DS
-func (d *dsCache) delete(name string) {
+func (d *dsCache) delete(ident serde.IdentTags) {
 	d.Lock()
 	defer d.Unlock()
-	delete(d.byName, name)
+	delete(d.byIdent, ident.String())
 }
 
 func (d *dsCache) preLoad() error {
@@ -75,7 +75,7 @@ func (d *dsCache) preLoad() error {
 	for _, ds := range dss {
 		dbds, ok := ds.(serde.DbDataSourcer)
 		if !ok {
-			return fmt.Errorf("preLoad: ds must be a serde.NamedDataSource")
+			return fmt.Errorf("preLoad: ds must be a serde.DbDataSourcer")
 		}
 		d.insert(&cachedDs{DbDataSourcer: dbds})
 		d.register(dbds)
@@ -86,10 +86,11 @@ func (d *dsCache) preLoad() error {
 
 // get a cached ds
 func (d *dsCache) fetchOrCreateByName(name string) (*cachedDs, error) {
-	result := d.getByName(name)
+	ident := serde.IdentTags{"name": name}
+	result := d.getByIdent(ident)
 	if result == nil {
 		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
-			ds, err := d.db.FetchOrCreateDataSource(name, dsSpec)
+			ds, err := d.db.FetchOrCreateDataSource(serde.IdentTags{"name": name}, dsSpec)
 			if err != nil {
 				return nil, err
 			}
@@ -149,18 +150,18 @@ type distDs struct {
 func (ds *distDs) Relinquish() error {
 	if !ds.LastUpdate().IsZero() {
 		ds.dsc.dsf.flushDs(ds.DbDataSourcer, true)
-		ds.dsc.delete(ds.Name())
+		ds.dsc.delete(ds.Ident())
 	}
 	return nil
 }
 
 func (ds *distDs) Acquire() error {
-	ds.dsc.delete(ds.Name())
+	ds.dsc.delete(ds.Ident())
 	return nil
 }
 
 func (ds *distDs) Id() int64       { return ds.DbDataSourcer.Id() }
 func (ds *distDs) Type() string    { return "DataSource" }
-func (ds *distDs) GetName() string { return ds.DbDataSourcer.Name() }
+func (ds *distDs) GetName() string { return ds.DbDataSourcer.Ident().String() }
 
 // end cluster.DistDatum interface

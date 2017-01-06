@@ -171,7 +171,8 @@ func Test_directorProcessOrForward(t *testing.T) {
 	dsc := newDsCache(db, df, dsf)
 
 	// rds
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
 	// cluster
@@ -230,7 +231,8 @@ func Test_directorProcessOrForward(t *testing.T) {
 	fwErr = nil
 
 	// make an rds with points
-	ds = serde.NewDbDataSource(0, "foo", rrd.NewDataSource(rrd.DSSpec{
+	foo = serde.IdentTags{"name": "foo"}
+	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{
 			rrd.RRASpec{Function: rrd.WMEAN,

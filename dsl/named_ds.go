@@ -33,7 +33,7 @@ type NamedDSFetcher interface {
 
 // This is a subset of serde.Fetcher
 type dsFetcher interface {
-	serde.DataSourceNamesFetcher
+	serde.DataSourceSearcher
 	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }

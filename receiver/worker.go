@@ -108,7 +108,7 @@ var worker = func(wc wController, dsf dsFlusherBlocking, workerCh chan *incoming
 					recent[cds.Id()] = cds
 				}
 			} else {
-				log.Printf("%s: dp.process(%s) error: %v", wc.ident(), cds.Name(), err)
+				log.Printf("%s: ds.ProcessDataPoint [%v] error: %v", wc.ident(), cds.Ident(), err)
 			}
 		}
 

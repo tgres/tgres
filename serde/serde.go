@@ -24,15 +24,30 @@ import (
 	"github.com/tgres/tgres/series"
 )
 
-type DataSourceNamesFetcher interface {
-	FetchDataSourceNames() (map[string]int64, error)
+// An iterator, similar to sql.Rows.
+type SearchResult interface {
+	Next() bool
+	Close() error
+	Ident() IdentTags
+	Id() int64
+}
+
+type SearchQuery map[string]string
+
+type DataSourceSearcher interface {
+	// Return a list od DS ids based on the query. How the query works
+	// is up to the serde, it can even ignore the argumen, but the
+	// general idea was a key: regex list where the underlying engine
+	// would return all DSs whose ident tags named key match the
+	// regex. Remember to Close() the SearchResult in the end.
+	Search(query SearchQuery) (SearchResult, error)
 }
 
 type Fetcher interface {
-	DataSourceNamesFetcher
+	DataSourceSearcher
 	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
 	FetchDataSources() ([]rrd.DataSourcer, error)
-	FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
+	FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 

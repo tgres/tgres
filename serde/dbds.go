@@ -15,35 +15,72 @@
 
 package serde
 
-import "github.com/tgres/tgres/rrd"
+import (
+	"bytes"
+	"fmt"
+	"sort"
+
+	"github.com/tgres/tgres/rrd"
+)
 
 type DbDataSource struct {
 	rrd.DataSourcer
-	name string
-	id   int64
+	ident IdentTags
+	id    int64
 }
 
 type DbDataSourcer interface {
 	rrd.DataSourcer
-	Name() string
+	Ident() IdentTags
 	Id() int64
 }
 
-func (ds *DbDataSource) Name() string { return ds.name }
-func (ds *DbDataSource) Id() int64    { return ds.id }
+func (ds *DbDataSource) Ident() IdentTags { return ds.ident }
+func (ds *DbDataSource) Id() int64        { return ds.id }
 
-func NewDbDataSource(id int64, name string, ds rrd.DataSourcer) *DbDataSource {
+func NewDbDataSource(id int64, ident IdentTags, ds rrd.DataSourcer) *DbDataSource {
 	return &DbDataSource{
 		DataSourcer: ds,
 		id:          id,
-		name:        name,
+		ident:       ident,
 	}
 }
 
 func (ds *DbDataSource) Copy() rrd.DataSourcer {
-	return &DbDataSource{
+	result := &DbDataSource{
 		DataSourcer: ds.DataSourcer.Copy(),
 		id:          ds.id,
-		name:        ds.name,
+		ident:       make(IdentTags, len(ds.ident)),
 	}
+	for k, v := range ds.ident {
+		result.ident[k] = v
+	}
+	return result
+}
+
+type IdentTags map[string]string
+
+func (it IdentTags) String() string {
+
+	// It's tempting to cache the resulting string in the receiver,
+	// but given that most of what we do is look up newly arriving
+	// data points, this cache wouldn't really be used that much and
+	// only take up additional space.
+
+	keys := make([]string, 0, len(it))
+	for k, _ := range it {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	buf := &bytes.Buffer{}
+	buf.WriteByte('{')
+	for i, k := range keys {
+		fmt.Fprintf(buf, `%q: %q`, k, it[k])
+		if i < len(keys)-1 {
+			buf.WriteByte(',')
+		}
+	}
+	buf.WriteByte('}')
+	return buf.String()
 }

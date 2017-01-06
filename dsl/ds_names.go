@@ -16,6 +16,7 @@
 package dsl
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -65,8 +66,9 @@ func (dsns *dataSourceNames) addPrefixes(name string) {
 	}
 }
 
-func (dsns *dataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
-	names, err := db.FetchDataSourceNames()
+func (dsns *dataSourceNames) reload(db serde.DataSourceSearcher) error {
+	sr, err := db.Search(map[string]string{"name": ".*"})
+	defer sr.Close()
 	if err != nil {
 		return err
 	}
@@ -76,8 +78,13 @@ func (dsns *dataSourceNames) reload(db serde.DataSourceNamesFetcher) error {
 
 	dsns.names = make(map[string]int64)
 	dsns.prefixes = make(map[string]bool)
-	for name, id := range names {
-		dsns.names[name] = id
+
+	for sr.Next() {
+		name := sr.Ident()["name"]
+		if name == "" {
+			return fmt.Errorf("reload(): 'name' tag missing for DS id: %d", sr.Id())
+		}
+		dsns.names[name] = sr.Id()
 		dsns.addPrefixes(name)
 	}
 
