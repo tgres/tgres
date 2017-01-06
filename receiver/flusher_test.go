@@ -37,7 +37,8 @@ func Test_flusher_flusherChannels_queueBlocking(t *testing.T) {
 		called++
 	}()
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	fcs.queueBlocking(rds, true)
 
@@ -101,8 +102,8 @@ func Test_flusher(t *testing.T) {
 	go flusher(wc, dsf, fc)
 	wc.startWg.Wait()
 
-	//ds := rrd.NewDataSource(0, "", 0, 0, time.Time{}, 0)
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	resp := make(chan bool)
 	fc <- &dsFlushRequest{ds: rds, resp: resp}
@@ -158,7 +159,8 @@ func Test_flusher_start(t *testing.T) {
 func Test_flusher_flushDs(t *testing.T) {
 	db := &fakeSerde{}
 	sr := &fakeSr{}
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 
 	f := &dsFlusher{}
 	if !f.flushDs(nil, false) {

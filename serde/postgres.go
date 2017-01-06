@@ -65,9 +65,9 @@ func init() {
 }
 
 type pgSerDe struct {
-	dbConn                                               *sql.DB
-	sql1, sql2, sql3, sql4, sql5, sql6, sql7, sql8, sql9 *sql.Stmt
-	prefix                                               string
+	dbConn                                         *sql.DB
+	sql1, sql2, sql3, sql4, sql5, sql6, sql7, sql8 *sql.Stmt
+	prefix                                         string
 }
 
 func sqlOpen(a, b string) (*sql.DB, error) {
@@ -166,10 +166,10 @@ func (p *pgSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (tags, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
+	if p.sql4, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]sds AS ds (ident, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
 		// PG 9.5 required. NB: DO NOTHING causes RETURNING to return nothing, so we're using this dummy UPDATE to work around.
-		"ON CONFLICT (tags) DO UPDATE SET step_ms = ds.step_ms "+
-		"RETURNING id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
+		"ON CONFLICT (ident) DO UPDATE SET step_ms = ds.step_ms "+
+		"RETURNING id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql5, err = p.dbConn.Prepare(fmt.Sprintf("INSERT INTO %[1]srra AS rra (ds_id, cf, steps_per_row, size, xff) VALUES ($1, $2, $3, $4, $5) "+
@@ -185,14 +185,15 @@ func (p *pgSerDe) prepareSqlStatements() error {
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE tags ->> 'name' = $1",
-		p.prefix)); err != nil {
-		return err
-	}
+	// // TODO This is WRONG, a "ident ->>" is NOT searchable using index, it must be ident @> '{"name":$1}'
+	// if p.sql9, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE ident ->> 'name' = $1",
+	// 	p.prefix)); err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
@@ -201,19 +202,19 @@ func (p *pgSerDe) createTablesIfNotExist() error {
 	create_sql := `
        CREATE TABLE IF NOT EXISTS %[1]sds (
        id SERIAL NOT NULL PRIMARY KEY,
-       tags JSONB NOT NULL DEFAULT '{}',
+       ident JSONB NOT NULL DEFAULT '{}' CONSTRAINT nonempty_ident CHECK (ident <> '{}'),
        step_ms BIGINT NOT NULL,
        heartbeat_ms BIGINT NOT NULL,
        lastupdate TIMESTAMPTZ,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        duration_ms BIGINT NOT NULL DEFAULT 0);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_tags_uniq ON %[1]sds (tags);
-       CREATE INDEX IF NOT EXISTS %[1]sidx_ds_tags ON %[1]sds USING gin(tags);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_ident_uniq ON %[1]sds (ident);
+       CREATE INDEX IF NOT EXISTS %[1]sidx_ds_ident ON %[1]sds USING gin(ident);
 
        CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
-       ds_id INT NOT NULL,
+       ds_id INT NOT NULL REFERENCES %[1]sds(id) ON DELETE CASCADE,
        cf TEXT NOT NULL,
        steps_per_row INT NOT NULL,
        size INT NOT NULL,
@@ -226,7 +227,7 @@ func (p *pgSerDe) createTablesIfNotExist() error {
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_spec ON %[1]srra (ds_id, cf, steps_per_row, size);
 
        CREATE TABLE IF NOT EXISTS %[1]sts (
-       rra_id INT NOT NULL,
+       rra_id INT NOT NULL REFERENCES %[1]srra(id) ON DELETE CASCADE,
        n INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
 
@@ -303,10 +304,10 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 		durationMs, stepMs, hbMs int64
 		value                    float64
 		id                       int64
-		tags                     []byte
-		tmap                     map[string]string
+		identJson                []byte
+		ident                    IdentTags
 	)
-	err := rows.Scan(&id, &tags, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
+	err := rows.Scan(&id, &identJson, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -316,13 +317,13 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 		lastupdate = &time.Time{}
 	}
 
-	err = json.Unmarshal(tags, &tmap)
+	err = json.Unmarshal(identJson, &ident)
 	if err != nil {
-		log.Printf("dataSourceFromRow(): error unmarshalling tags: %v", err)
+		log.Printf("dataSourceFromRow(): error unmarshalling ident: %v", err)
 		return nil, err
 	}
 
-	ds := NewDbDataSource(id, tmap["name"],
+	ds := NewDbDataSource(id, ident,
 		rrd.NewDataSource(
 			rrd.DSSpec{
 				Step:       time.Duration(stepMs) * time.Millisecond,
@@ -387,41 +388,81 @@ func roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*DbRoundRob
 	return rra, nil
 }
 
-func (p *pgSerDe) FetchDataSourceNames() (map[string]int64, error) {
+type pgSearchResult struct {
+	rows  *sql.Rows
+	err   error
+	id    int64
+	ident map[string]string
+}
 
-	const sql = `SELECT id, tags FROM %[1]sds ds`
+func (sr *pgSearchResult) Next() bool {
+	if !sr.rows.Next() {
+		return false
+	}
 
-	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
+	var b []byte
+	sr.err = sr.rows.Scan(&sr.id, &b)
+	if sr.err != nil {
+		log.Printf("pgSearchResult.Next(): error scanning row: %v", sr.err)
+		return false
+	}
+	sr.err = json.Unmarshal(b, &sr.ident)
+	if sr.err != nil {
+		log.Printf("Search(): error unmarshalling ident %q: %v", string(b), sr.err)
+		return false
+	}
+	return true
+}
+
+func (sr *pgSearchResult) Id() int64        { return sr.id }
+func (sr *pgSearchResult) Ident() IdentTags { return sr.ident }
+func (sr *pgSearchResult) Close() error     { return sr.rows.Close() }
+
+func buildSearchWhere(query map[string]string) (string, []interface{}) {
+	var (
+		where string
+		args  []interface{}
+	)
+
+	n := 0
+	for k, v := range query {
+		if n > 0 {
+			where += " AND "
+		}
+		// The "ident ?" ensures that we take advantage of the gin
+		// index because a ->> cannot use it. If our only tag is
+		// "name" and it exists for every DS, then this doesn't really
+		// accomplish anyhting, but it will help somewhat when we have
+		// varying tags.
+		where += fmt.Sprintf("ident ? $%d AND ident ->> $%d ~* $%d", n+1, n+1, n+2)
+		args = append(args, k, v)
+		n += 2
+	}
+
+	return where, args
+}
+
+// Given a query in the form of ident keys and regular expressions for
+// values, return all matching idents and the ds ids.
+func (p *pgSerDe) Search(query SearchQuery) (SearchResult, error) {
+
+	var (
+		sql   = `SELECT id, ident FROM %[1]sds ds`
+		where string
+		args  []interface{}
+	)
+
+	if where, args = buildSearchWhere(query); len(args) > 0 {
+		sql += fmt.Sprintf(" WHERE %s", where)
+	}
+
+	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix), args...)
 	if err != nil {
-		log.Printf("FetchDataSourceNames(): error querying database: %v", err)
+		log.Printf("Search(): error querying database: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
 
-	result := make(map[string]int64, 0)
-	for rows.Next() {
-		var (
-			id   int64
-			tags []byte
-			tmap map[string]string
-		)
-		err := rows.Scan(&id, &tags)
-		if err != nil {
-			log.Printf("FetchDataSourceNames(): error scanning row: %v", err)
-			return nil, err
-		}
-		err = json.Unmarshal(tags, &tmap)
-		if err != nil {
-			log.Printf("FetchDataSourceNames(): error unmarshalling tags: %v", err)
-			return nil, err
-		}
-		if name := tmap["name"]; name == "" {
-			log.Printf("FetchDataSourceNames(): nil name in tags: %v", tags)
-		} else {
-			result[name] = id
-		}
-	}
-	return result, nil
+	return &pgSearchResult{rows: rows}, nil
 }
 
 func (p *pgSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
@@ -452,33 +493,33 @@ func (p *pgSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
 	return nil, nil
 }
 
-func (p *pgSerDe) FetchDataSourceByName(name string) (*DbDataSource, error) {
+// func (p *pgSerDe) FetchDataSourceByName(name string) (*DbDataSource, error) {
 
-	rows, err := p.sql9.Query(name)
-	if err != nil {
-		log.Printf("FetchDataSourceByName(): error querying database: %v", err)
-		return nil, err
-	}
-	defer rows.Close()
+// 	rows, err := p.sql9.Query(name)
+// 	if err != nil {
+// 		log.Printf("FetchDataSourceByName(): error querying database: %v", err)
+// 		return nil, err
+// 	}
+// 	defer rows.Close()
 
-	if rows.Next() {
-		ds, err := dataSourceFromRow(rows)
-		rras, err := p.fetchRoundRobinArchives(ds)
-		if err != nil {
-			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
-			return nil, err
-		} else {
-			ds.SetRRAs(rras)
-		}
-		return ds, nil
-	}
+// 	if rows.Next() {
+// 		ds, err := dataSourceFromRow(rows)
+// 		rras, err := p.fetchRoundRobinArchives(ds)
+// 		if err != nil {
+// 			log.Printf("FetchDataSourceByName(): error fetching RRAs: %v", err)
+// 			return nil, err
+// 		} else {
+// 			ds.SetRRAs(rras)
+// 		}
+// 		return ds, nil
+// 	}
 
-	return nil, nil
-}
+// 	return nil, nil
+// }
 
 func (p *pgSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
-	const sql = `SELECT id, tags, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
+	const sql = `SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds ds`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
@@ -652,27 +693,14 @@ func (p *pgSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 // FetchOrCreateDataSource loads or returns an existing DS. This is
 // done by using upserts first on the ds table, then for each
 // RRA. This method also attempt to create the TS empty rows with ON
-// CONFLICT DO NOTHING. (There is no reason to ever load TS data
-// because of the nature of an RRD - we accumulate data points and
-// surgically write them to the proper slots in the TS table). Since
-// PostgreSQL 9.5 introduced upserts and we changed CreateDataSource
-// to FetchOrCreateDataSource the code in this module is a little
-// functionally overlapping and should probably be re-worked,
-// e.g. sql1/sql2 could be upsert and we wouldn't need to bother with
-// pre-inserting rows in ts here.
-func (p *pgSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+// CONFLICT DO NOTHING. The returned DS contains no data, to get data
+// use FetchSeries().
+func (p *pgSerDe) FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	var (
-		tmap = map[string]string{"name": name}
-		tags []byte
 		err  error
 		rows *sql.Rows
 	)
-	tags, err = json.Marshal(tmap)
-	if err != nil {
-		log.Printf("FetchOrCreateDataSource(): error marshalling tags: %v", err)
-		return nil, err
-	}
-	rows, err = p.sql4.Query(tags, dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
+	rows, err = p.sql4.Query(ident.String(), dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
 		return nil, err

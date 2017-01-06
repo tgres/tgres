@@ -16,6 +16,7 @@
 package serde
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -25,28 +26,47 @@ import (
 
 type memSerDe struct {
 	*sync.RWMutex
-	byName map[string]int64
-	byId   map[int64]rrd.DataSourcer
-	lastId int64
+	byIdent map[string]*DbDataSource
+	byId    map[int64]*DbDataSource
+	lastId  int64
 }
 
 // Returns a SerDe which keeps everything in memory.
 func NewMemSerDe() *memSerDe {
-	return &memSerDe{RWMutex: &sync.RWMutex{}, byName: make(map[string]int64), byId: make(map[int64]rrd.DataSourcer)}
+	return &memSerDe{RWMutex: &sync.RWMutex{}, byIdent: make(map[string]*DbDataSource), byId: make(map[int64]*DbDataSource)}
 }
 
 func (m *memSerDe) Fetcher() Fetcher                         { return m }
 func (m *memSerDe) Flusher() Flusher                         { return nil } // Flushing not supported
 func (m *memSerDe) FlushDataSource(ds rrd.DataSourcer) error { return nil }
 
-func (m *memSerDe) FetchDataSourceNames() (map[string]int64, error) {
+type srRow struct {
+	ident IdentTags
+	id    int64
+}
+
+type memSearchResult struct {
+	result []*srRow
+	pos    int
+}
+
+func (sr *memSearchResult) Next() bool {
+	sr.pos++
+	return sr.pos < len(sr.result)
+}
+func (sr *memSearchResult) Id() int64        { return sr.result[sr.pos].id }
+func (sr *memSearchResult) Ident() IdentTags { return sr.result[sr.pos].ident }
+func (sr *memSearchResult) Close() error     { return nil }
+
+func (m *memSerDe) Search(_ SearchQuery) (SearchResult, error) {
 	m.RLock()
 	defer m.RUnlock()
-	result := make(map[string]int64, len(m.byName))
-	for k, v := range m.byName {
-		result[k] = v
+
+	sr := &memSearchResult{pos: -1}
+	for _, v := range m.byIdent {
+		sr.result = append(sr.result, &srRow{v.Ident(), v.Id()})
 	}
-	return result, nil
+	return sr, nil
 }
 
 func (m *memSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
@@ -69,15 +89,18 @@ func (m *memSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	return result, nil
 }
 
-func (m *memSerDe) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (m *memSerDe) FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	m.Lock()
 	defer m.Unlock()
-	if id, ok := m.byName[name]; ok {
-		return m.byId[id], nil
+	if ident["name"] == "" {
+		return nil, fmt.Errorf("ident without name tag")
+	}
+	if ds, ok := m.byIdent[ident.String()]; ok {
+		return ds, nil
 	}
 	m.lastId++
-	ds := NewDbDataSource(m.lastId, name, rrd.NewDataSource(*dsSpec))
-	m.byName[name] = m.lastId
+	ds := NewDbDataSource(m.lastId, ident, rrd.NewDataSource(*dsSpec))
+	m.byIdent[ident.String()] = ds
 	m.byId[m.lastId] = ds
 	return ds, nil
 }

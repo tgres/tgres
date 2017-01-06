@@ -33,7 +33,8 @@ func Test_worker_workerChannels_queue(t *testing.T) {
 	wcs[0] = make(chan *incomingDpWithDs)
 	wcs[1] = make(chan *incomingDpWithDs)
 
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	called := 0
 	go func() {
@@ -69,7 +70,8 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	dsf := &dsFlusher{db: db, sr: sr}
 	dsc := newDsCache(db, df, dsf)
 
-	ds := serde.NewDbDataSource(7, "foo", rrd.NewDataSource(*DftDSSPec))
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(7, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	recent[7] = rds
 	dsc.insert(rds)
@@ -81,7 +83,8 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	}
 
 	// make an rds with points
-	ds = serde.NewDbDataSource(0, "foo", rrd.NewDataSource(rrd.DSSpec{
+	foo = serde.IdentTags{"name": "foo"}
+	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{
 			rrd.RRASpec{Function: rrd.WMEAN,
@@ -163,7 +166,8 @@ func Test_worker_theWorker(t *testing.T) {
 	debug = true
 
 	// make an rds
-	ds := serde.NewDbDataSource(0, "foo", rrd.NewDataSource(rrd.DSSpec{
+	foo := serde.IdentTags{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{
 			rrd.RRASpec{Function: rrd.WMEAN,
