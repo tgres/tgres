@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 // A DSSpec Finder can find a DSSpec for a name. For previously
@@ -26,7 +27,7 @@ import (
 // provides a mechanism for specifying DS/RRA configurations based on
 // the name.
 type MatchingDSSpecFinder interface {
-	FindMatchingDSSpec(name string) *rrd.DSSpec
+	FindMatchingDSSpec(ident serde.Ident) *rrd.DSSpec
 }
 
 // A default "reasonable" spec for those who do not want to think about it.
@@ -59,8 +60,8 @@ type SimpleDSFinder struct {
 	*rrd.DSSpec
 }
 
-func (s *SimpleDSFinder) FindMatchingDSSpec(name string) *rrd.DSSpec {
-	if name == "" {
+func (s *SimpleDSFinder) FindMatchingDSSpec(ident serde.Ident) *rrd.DSSpec {
+	if name := ident["name"]; name == "" {
 		return nil
 	}
 	return s.DSSpec

@@ -24,7 +24,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 )
 
-var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) {
+var directorincomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *incomingDP) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -34,7 +34,7 @@ var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *Incoming
 		}
 
 		// To get an event back:
-		var dp IncomingDP
+		var dp incomingDP
 		if err := m.Decode(&dp); err != nil {
 			log.Printf("director: msg <- rcv data point decoding FAILED, ignoring this data point.")
 			continue
@@ -50,7 +50,7 @@ var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *Incoming
 	}
 }
 
-var directorForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
 	if dp.Hops == 0 { // we do not forward more than once
 		if node.Ready() {
 			dp.Hops++
@@ -63,7 +63,7 @@ var directorForwardDPToNode = func(dp *IncomingDP, node *cluster.Node, snd chan 
 	return nil
 }
 
-var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *incomingDP, snd chan *cluster.Msg) (forwarded int) {
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
@@ -85,7 +85,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer
 	return
 }
 
-var directorProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+var directorProcessincomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
 
 	sr.reportStatCount("receiver.datapoints.total", 1)
 
@@ -97,13 +97,13 @@ var directorProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCac
 		return
 	}
 
-	cds, err := dsc.fetchOrCreateByName(dp.Name)
+	cds, err := dsc.fetchOrCreateByName(dp.Ident)
 	if err != nil {
 		log.Printf("director: dsCache error: %v", err)
 		return
 	}
 	if cds == nil {
-		log.Printf("director: No spec matched name: %q, ignoring data point", dp.Name)
+		log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
 		return
 	}
 
@@ -117,7 +117,7 @@ var directorProcessIncomingDP = func(dp *IncomingDP, sr statReporter, dsc *dsCac
 	}
 }
 
-func reportDirectorChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
+func reportDirectorChannelFillPercent(dpCh chan *incomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
 	cp := float64(cap(dpCh))
 	for {
 		time.Sleep(nap) // TODO this should be a ticker really
@@ -139,7 +139,7 @@ func reportDirectorChannelFillPercent(dpCh chan *IncomingDP, queue *dpQueue, sr 
 	}
 }
 
-var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
+var director = func(wc wController, dpCh chan *incomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -152,7 +152,7 @@ var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr s
 	if clstr != nil {
 		clusterChgCh = clstr.NotifyClusterChanges() // Monitor Cluster changes
 		snd, rcv = clstr.RegisterMsgType()          // Channel for event forwards to other nodes and us
-		go directorIncomingDPMessages(rcv, dpCh)
+		go directorincomingDPMessages(rcv, dpCh)
 		log.Printf("director: marking cluster node as Ready.")
 		clstr.Ready(true)
 	}
@@ -172,7 +172,7 @@ var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr s
 
 	for {
 
-		var dp *IncomingDP
+		var dp *incomingDP
 		var ok bool
 		select {
 		case _, ok = <-clusterChgCh:
@@ -193,25 +193,25 @@ var director = func(wc wController, dpCh chan *IncomingDP, clstr clusterer, sr s
 		dp = checkSetAside(dp, queue, queueOnly)
 
 		if dp != nil {
-			directorProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+			directorProcessincomingDP(dp, sr, dss, workerChs, clstr, snd)
 		}
 
 		// Try to flush the queue if we are idle
 		for (len(dpCh) == 0) && (queue.size() > 0) {
 			if dp = checkSetAside(nil, queue, false); dp != nil {
-				directorProcessIncomingDP(dp, sr, dss, workerChs, clstr, snd)
+				directorProcessincomingDP(dp, sr, dss, workerChs, clstr, snd)
 			}
 		}
 	}
 }
 
-type dpQueue []*IncomingDP
+type dpQueue []*incomingDP
 
-func (q *dpQueue) push(dp *IncomingDP) {
+func (q *dpQueue) push(dp *incomingDP) {
 	*q = append(*q, dp)
 }
 
-func (q *dpQueue) pop() (dp *IncomingDP) {
+func (q *dpQueue) pop() (dp *incomingDP) {
 	dp, *q = (*q)[0], (*q)[1:]
 	return dp
 }
@@ -223,7 +223,7 @@ func (q *dpQueue) size() int {
 // If skip is true, just append to the queue and return
 // nothing. Otherwise, if there is something in the queue, return
 // it. Otherwise, just pass it right through.
-func checkSetAside(dp *IncomingDP, queue *dpQueue, skip bool) *IncomingDP {
+func checkSetAside(dp *incomingDP, queue *dpQueue, skip bool) *incomingDP {
 
 	if skip {
 		if dp != nil {

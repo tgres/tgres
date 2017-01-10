@@ -92,7 +92,7 @@ type Receiver struct {
 	dsc     *dsCache    // the DS cache
 
 	flusher       dsFlusherBlocking        // orchestration of flush queues
-	dpCh          chan *IncomingDP         // incoming data points
+	dpCh          chan *incomingDP         // incoming data points
 	workerChs     workerChannels           // incoming data points with ds
 	aggCh         chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	pacedMetricCh chan *pacedMetric        // paced metrics (only flushed periodically)
@@ -106,18 +106,17 @@ type Receiver struct {
 	stopped bool
 }
 
-// IncomingDP is incoming data (aka observation, measurement or
+// incomingDP is incoming data (aka observation, measurement or
 // sample). This is not the internal representation of a data point,
 // it's the format in which points are expected to arrive and is easy
 // to create from most any data point representation out there. This
 // data point representation has no notion of duration and therefore
 // must rely on some kind of a separately stored "last update" time.
-type IncomingDP struct {
+type incomingDP struct {
 	Ident     serde.Ident
 	TimeStamp time.Time
 	Value     float64
 	Hops      int
-	Name      string // TODO Temporary Backwards Compat.
 }
 
 // Create a Receiver. The first argument is a SerDe, the second is a
@@ -137,7 +136,7 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 		MaxFlushRatePerSecond: 100,
 		StatFlushDuration:     10 * time.Second,
 		StatsNamePrefix:       "stats",
-		dpCh:                  make(chan *IncomingDP, 65536), // to be on the safe side
+		dpCh:                  make(chan *incomingDP, 65536), // to be on the safe side
 		aggCh:                 make(chan *aggregator.Command, 1024),
 		pacedMetricCh:         make(chan *pacedMetric, 1024),
 		ReportStats:           false,
@@ -192,7 +191,7 @@ func (r *Receiver) SetCluster(c clusterer) {
 // paced metrics (QueueSum/QueueGauge) for non-rate data.
 func (r *Receiver) QueueDataPoint(ident serde.Ident, ts time.Time, v float64) {
 	if !r.stopped {
-		r.dpCh <- &IncomingDP{Ident: ident, Name: ident["name"], TimeStamp: ts, Value: v}
+		r.dpCh <- &incomingDP{Ident: ident, TimeStamp: ts, Value: v}
 	}
 }
 

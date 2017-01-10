@@ -29,6 +29,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 type Config struct { // Needs to be exported for TOML to work
@@ -282,8 +283,9 @@ func (c *Config) processDSSpec() error {
 	return nil
 }
 
-func (c *Config) FindMatchingDSSpec(name string) *rrd.DSSpec {
+func (c *Config) FindMatchingDSSpec(ident serde.Ident) *rrd.DSSpec {
 	for _, dsSpec := range c.DSs {
+		name := ident["name"]
 		if dsSpec.Regexp.Regexp.MatchString(name) {
 			return convertDSSpec(&dsSpec)
 		}

@@ -85,12 +85,11 @@ func (d *dsCache) preLoad() error {
 }
 
 // get a cached ds
-func (d *dsCache) fetchOrCreateByName(name string) (*cachedDs, error) {
-	ident := serde.Ident{"name": name}
+func (d *dsCache) fetchOrCreateByName(ident serde.Ident) (*cachedDs, error) {
 	result := d.getByIdent(ident)
 	if result == nil {
-		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
-			ds, err := d.db.FetchOrCreateDataSource(serde.Ident{"name": name}, dsSpec)
+		if dsSpec := d.finder.FindMatchingDSSpec(ident); dsSpec != nil {
+			ds, err := d.db.FetchOrCreateDataSource(ident, dsSpec)
 			if err != nil {
 				return nil, err
 			}

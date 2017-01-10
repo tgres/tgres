@@ -23,12 +23,12 @@ import (
 
 type workerChannels []chan *incomingDpWithDs
 
-func (w workerChannels) queue(dp *IncomingDP, cds *cachedDs) {
+func (w workerChannels) queue(dp *incomingDP, cds *cachedDs) {
 	w[cds.Id()%int64(len(w))] <- &incomingDpWithDs{dp, cds}
 }
 
 type incomingDpWithDs struct {
-	dp  *IncomingDP
+	dp  *incomingDP
 	cds *cachedDs
 }
 
