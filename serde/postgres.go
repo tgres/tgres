@@ -305,7 +305,7 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 		value                    float64
 		id                       int64
 		identJson                []byte
-		ident                    IdentTags
+		ident                    Ident
 	)
 	err := rows.Scan(&id, &identJson, &stepMs, &hbMs, &lastupdate, &value, &durationMs)
 	if err != nil {
@@ -414,9 +414,9 @@ func (sr *pgSearchResult) Next() bool {
 	return true
 }
 
-func (sr *pgSearchResult) Id() int64        { return sr.id }
-func (sr *pgSearchResult) Ident() IdentTags { return sr.ident }
-func (sr *pgSearchResult) Close() error     { return sr.rows.Close() }
+func (sr *pgSearchResult) Id() int64    { return sr.id }
+func (sr *pgSearchResult) Ident() Ident { return sr.ident }
+func (sr *pgSearchResult) Close() error { return sr.rows.Close() }
 
 func buildSearchWhere(query map[string]string) (string, []interface{}) {
 	var (
@@ -695,7 +695,7 @@ func (p *pgSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 // RRA. This method also attempt to create the TS empty rows with ON
 // CONFLICT DO NOTHING. The returned DS contains no data, to get data
 // use FetchSeries().
-func (p *pgSerDe) FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (p *pgSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	var (
 		err  error
 		rows *sql.Rows

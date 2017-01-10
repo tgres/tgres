@@ -17,12 +17,14 @@ package http
 
 import (
 	"fmt"
-	"github.com/tgres/tgres/aggregator"
-	"github.com/tgres/tgres/misc"
-	"github.com/tgres/tgres/receiver"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/misc"
+	"github.com/tgres/tgres/receiver"
+	"github.com/tgres/tgres/serde"
 )
 
 func sendPixel(w http.ResponseWriter) {
@@ -75,7 +77,7 @@ func PixelHandler(rcvr *receiver.Receiver) http.HandlerFunc {
 					ts = time.Unix(int64(ut), nsec)
 				}
 
-				rcvr.QueueDataPoint(misc.SanitizeName(name), ts, val)
+				rcvr.QueueDataPoint(serde.Ident{"name": misc.SanitizeName(name)}, ts, val)
 			}
 		}
 
@@ -134,7 +136,8 @@ func pixelAggHandler(r *http.Request, w http.ResponseWriter, rcvr *receiver.Rece
 				return
 			}
 
-			rcvr.QueueAggregatorCommand(aggregator.NewCommand(cmd, misc.SanitizeName(name), val))
+			// TODO Should use Ident
+			rcvr.QueueAggregatorCommand(aggregator.NewCommand(cmd, serde.Ident{"name": misc.SanitizeName(name)}, val))
 		}
 	}
 

@@ -42,7 +42,7 @@ func newMapCache(dss map[string]rrd.DataSourcer) *mapCache {
 }
 
 type srRow struct {
-	ident serde.IdentTags
+	ident serde.Ident
 	id    int64
 }
 
@@ -55,9 +55,9 @@ func (sr *memSearchResult) Next() bool {
 	sr.pos++
 	return sr.pos < len(sr.result)
 }
-func (sr *memSearchResult) Id() int64              { return sr.result[sr.pos].id }
-func (sr *memSearchResult) Ident() serde.IdentTags { return sr.result[sr.pos].ident }
-func (sr *memSearchResult) Close() error           { return nil }
+func (sr *memSearchResult) Id() int64          { return sr.result[sr.pos].id }
+func (sr *memSearchResult) Ident() serde.Ident { return sr.result[sr.pos].ident }
+func (sr *memSearchResult) Close() error       { return nil }
 
 type mapCache struct {
 	byName map[string]int64

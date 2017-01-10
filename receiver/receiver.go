@@ -113,10 +113,11 @@ type Receiver struct {
 // data point representation has no notion of duration and therefore
 // must rely on some kind of a separately stored "last update" time.
 type IncomingDP struct {
-	Name      string
+	Ident     serde.Ident
 	TimeStamp time.Time
 	Value     float64
 	Hops      int
+	Name      string // TODO Temporary Backwards Compat.
 }
 
 // Create a Receiver. The first argument is a SerDe, the second is a
@@ -189,9 +190,9 @@ func (r *Receiver) SetCluster(c clusterer) {
 // the caller to present non-rate values such as counters as a
 // rate. Consider using the Aggregator (QueueAggregatorCommand) or
 // paced metrics (QueueSum/QueueGauge) for non-rate data.
-func (r *Receiver) QueueDataPoint(name string, ts time.Time, v float64) {
+func (r *Receiver) QueueDataPoint(ident serde.Ident, ts time.Time, v float64) {
 	if !r.stopped {
-		r.dpCh <- &IncomingDP{Name: name, TimeStamp: ts, Value: v}
+		r.dpCh <- &IncomingDP{Ident: ident, Name: ident["name"], TimeStamp: ts, Value: v}
 	}
 }
 
@@ -206,35 +207,35 @@ func (r *Receiver) QueueAggregatorCommand(agg *aggregator.Command) {
 // Send a counter/sum. This is a paced metric which will periodically
 // be passed to the aggregator and from the aggregator to the data
 // source as a rate.
-func (r *Receiver) QueueSum(name string, v float64) {
+func (r *Receiver) QueueSum(ident serde.Ident, v float64) {
 	if !r.stopped {
-		r.pacedMetricCh <- &pacedMetric{pacedSum, name, v}
+		r.pacedMetricCh <- &pacedMetric{kind: pacedSum, ident: ident, value: v}
 	}
 }
 
 // Send a gauge (i.e. a rate). This is a paced metric.
-func (r *Receiver) QueueGauge(name string, v float64) {
+func (r *Receiver) QueueGauge(ident serde.Ident, v float64) {
 	if !r.stopped {
-		r.pacedMetricCh <- &pacedMetric{pacedGauge, name, v}
+		r.pacedMetricCh <- &pacedMetric{kind: pacedGauge, ident: ident, value: v}
 	}
 }
 
 // Reporting internal to Tgres: count
 func (r *Receiver) reportStatCount(name string, f float64) {
 	if r != nil && r.ReportStats && f != 0 {
-		r.QueueSum(r.ReportStatsPrefix+"."+name, f)
+		r.QueueSum(serde.Ident{"name": r.ReportStatsPrefix + "." + name}, f)
 	}
 }
 
 // Reporting internal to Tgres: gauge
 func (r *Receiver) reportStatGauge(name string, f float64) {
 	if r != nil && r.ReportStats {
-		r.QueueGauge(r.ReportStatsPrefix+"."+name, f)
+		r.QueueGauge(serde.Ident{"name": r.ReportStatsPrefix + "." + name}, f)
 	}
 }
 
 type dataPointQueuer interface {
-	QueueDataPoint(string, time.Time, float64)
+	QueueDataPoint(serde.Ident, time.Time, float64)
 }
 
 type aggregatorCommandQueuer interface {

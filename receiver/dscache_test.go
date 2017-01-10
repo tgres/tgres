@@ -33,8 +33,8 @@ func Test_dscache_newDsCache(t *testing.T) {
 
 func Test_dscache_getByName(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
-	foo := serde.IdentTags{"name": "foo"}
-	bar := serde.IdentTags{"name": "bar"}
+	foo := serde.Ident{"name": "foo"}
+	bar := serde.Ident{"name": "bar"}
 	d.byIdent[foo.String()] = &cachedDs{}
 	if rds := d.getByIdent(foo); rds == nil {
 		t.Errorf("getByIdent did not return correct value")
@@ -47,7 +47,7 @@ func Test_dscache_getByName(t *testing.T) {
 func Test_dscache_insert(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
@@ -61,7 +61,7 @@ func Test_dscache_insert(t *testing.T) {
 func Test_dscache_delete(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	d.insert(rds)
@@ -82,7 +82,7 @@ func Test_dscache_preLoad(t *testing.T) {
 		t.Errorf("db.fetchCalled == 0")
 	}
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	db.returnDss = []rrd.DataSourcer{ds}
 	d.preLoad()
@@ -134,7 +134,7 @@ func (f *fakeSerde) FlushDataSource(ds rrd.DataSourcer) error {
 	return nil
 }
 
-func (f *fakeSerde) FetchOrCreateDataSource(ident serde.IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (f *fakeSerde) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	f.createCalled++
 	if f.fakeErr {
 		return nil, fmt.Errorf("some error")
@@ -142,7 +142,7 @@ func (f *fakeSerde) FetchOrCreateDataSource(ident serde.IdentTags, dsSpec *rrd.D
 	if f.nondb {
 		return rrd.NewDataSource(*DftDSSPec), nil
 	} else {
-		foo := serde.IdentTags{"name": "foo"}
+		foo := serde.Ident{"name": "foo"}
 		return serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec)), nil
 	}
 }
@@ -191,13 +191,13 @@ func Test_dscache_register(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 	d.clstr = &fakeCluster{}
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	d.register(ds) // not sure what we are testing here...
 }
 
 func Test_dscache_cachedDs_shouldBeFlushed(t *testing.T) {
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
@@ -257,7 +257,7 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 	dsf := &fakeDsFlusher{}
 	dsc := newDsCache(db, df, dsf)
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &distDs{DbDataSourcer: ds, dsc: dsc}
 

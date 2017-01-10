@@ -29,6 +29,7 @@ import (
 	"github.com/tgres/tgres/graceful"
 	"github.com/tgres/tgres/misc"
 	"github.com/tgres/tgres/receiver"
+	"github.com/tgres/tgres/serde"
 	"github.com/tgres/tgres/statsd"
 )
 
@@ -280,7 +281,7 @@ func handleGraphitePickleProtocol(rcvr *receiver.Receiver, conn net.Conn, timeou
 							}
 						}
 					}
-					rcvr.QueueDataPoint(name, time.Unix(tstamp, 0), value)
+					rcvr.QueueDataPoint(serde.Ident{"name": name}, time.Unix(tstamp, 0), value)
 				} else {
 					err = fmt.Errorf("dp wrong length: %d", len(dp))
 					break
@@ -455,7 +456,7 @@ func handleGraphiteTextProtocol(rcvr *receiver.Receiver, conn net.Conn, timeout 
 		if name, ts, v, err := parseGraphitePacket(packetStr); err != nil {
 			log.Printf("handleGraphiteTextProtocol(): bad backet: %v")
 		} else {
-			rcvr.QueueDataPoint(name, ts, v)
+			rcvr.QueueDataPoint(serde.Ident{"name": name}, ts, v)
 		}
 
 		if timeout != 0 {

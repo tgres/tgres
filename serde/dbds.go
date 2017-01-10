@@ -25,20 +25,20 @@ import (
 
 type DbDataSource struct {
 	rrd.DataSourcer
-	ident IdentTags
+	ident Ident
 	id    int64
 }
 
 type DbDataSourcer interface {
 	rrd.DataSourcer
-	Ident() IdentTags
+	Ident() Ident
 	Id() int64
 }
 
-func (ds *DbDataSource) Ident() IdentTags { return ds.ident }
-func (ds *DbDataSource) Id() int64        { return ds.id }
+func (ds *DbDataSource) Ident() Ident { return ds.ident }
+func (ds *DbDataSource) Id() int64    { return ds.id }
 
-func NewDbDataSource(id int64, ident IdentTags, ds rrd.DataSourcer) *DbDataSource {
+func NewDbDataSource(id int64, ident Ident, ds rrd.DataSourcer) *DbDataSource {
 	return &DbDataSource{
 		DataSourcer: ds,
 		id:          id,
@@ -50,7 +50,7 @@ func (ds *DbDataSource) Copy() rrd.DataSourcer {
 	result := &DbDataSource{
 		DataSourcer: ds.DataSourcer.Copy(),
 		id:          ds.id,
-		ident:       make(IdentTags, len(ds.ident)),
+		ident:       make(Ident, len(ds.ident)),
 	}
 	for k, v := range ds.ident {
 		result.ident[k] = v
@@ -58,9 +58,9 @@ func (ds *DbDataSource) Copy() rrd.DataSourcer {
 	return result
 }
 
-type IdentTags map[string]string
+type Ident map[string]string
 
-func (it IdentTags) String() string {
+func (it Ident) String() string {
 
 	// It's tempting to cache the resulting string in the receiver,
 	// but given that most of what we do is look up newly arriving

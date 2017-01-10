@@ -28,10 +28,12 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/tgres/tgres/serde"
 )
 
 type DataPointQueuer interface {
-	QueueDataPoint(string, time.Time, float64)
+	QueueDataPoint(serde.Ident, time.Time, float64)
 }
 
 type aggKind int
@@ -43,6 +45,7 @@ const (
 )
 
 type aggregation struct {
+	ident serde.Ident
 	kind  aggKind
 	value float64
 	list  []float64
@@ -63,6 +66,7 @@ type State struct {
 	m          map[string]*aggregation
 	lastFlush  time.Time
 	Thresholds []int // List of percentiles for CmdAppend
+	AppendAttr string
 }
 
 // Returns a new aggregator. The only argument needs to provide a
@@ -75,45 +79,50 @@ func NewAggregator(t DataPointQueuer) *State {
 		m:          make(map[string]*aggregation),
 		lastFlush:  time.Now(),
 		Thresholds: []int{90},
+		AppendAttr: "value",
 	}
 }
 
-// Add to an already existing value at key name, created as
+// Add to an already existing value at key ident, created as
 // 0.0/aggKindValue if not existing.
-func (a *State) add(name string, value float64) {
-	if a.m[name] == nil {
-		a.m[name] = &aggregation{kind: aggKindValue}
+func (a *State) add(ident serde.Ident, value float64) {
+	key := ident.String()
+	if a.m[key] == nil {
+		a.m[key] = &aggregation{ident: ident, kind: aggKindValue}
 	}
-	a.m[name].value += value
+	a.m[key].value += value
 }
 
-// Add to an already existing value at key name, created as
+// Add to an already existing value at key ident, created as
 // 0.0/aggKindGauge if not existing.
-func (a *State) addGauge(name string, value float64) {
-	if a.m[name] == nil {
-		a.m[name] = &aggregation{kind: aggKindGauge}
+func (a *State) addGauge(ident serde.Ident, value float64) {
+	key := ident.String()
+	if a.m[key] == nil {
+		a.m[key] = &aggregation{ident: ident, kind: aggKindGauge}
 	}
-	a.m[name].value += value
+	a.m[key].value += value
 }
 
-// Set the value at key name overwriting any previous, created as
+// Set the value at key ident overwriting any previous, created as
 // 0.0./aggKindGauge if not existing
-func (a *State) setGauge(name string, value float64) {
-	if a.m[name] == nil {
-		a.m[name] = &aggregation{kind: aggKindGauge, value: value}
+func (a *State) setGauge(ident serde.Ident, value float64) {
+	key := ident.String()
+	if a.m[key] == nil {
+		a.m[key] = &aggregation{ident: ident, kind: aggKindGauge, value: value}
 	} else {
-		a.m[name].value = value
+		a.m[key].value = value
 	}
 }
 
-// Append to values at key name, created as aggKindList if not
+// Append to values at key ident, created as aggKindList if not
 // existing.
-func (a *State) append(name string, value float64) {
-	if a.m[name] == nil {
-		a.m[name] = &aggregation{kind: aggKindList, list: make([]float64, 0, 2)}
+func (a *State) append(ident serde.Ident, value float64) {
+	key := ident.String()
+	if a.m[key] == nil {
+		a.m[key] = &aggregation{ident: ident, kind: aggKindList, list: make([]float64, 0, 2)}
 	}
-	if a.m[name].list != nil {
-		a.m[name].list = append(a.m[name].list, value)
+	if a.m[key].list != nil {
+		a.m[key].list = append(a.m[key].list, value)
 	}
 }
 
@@ -123,14 +132,24 @@ func (a *State) ProcessCmd(cmd *Command) {
 	}
 	switch cmd.cmd {
 	case CmdAdd:
-		a.add(cmd.name, cmd.value)
+		a.add(cmd.ident, cmd.value)
 	case CmdAddGauge:
-		a.addGauge(cmd.name, cmd.value)
+		a.addGauge(cmd.ident, cmd.value)
 	case CmdSetGauge:
-		a.setGauge(cmd.name, cmd.value)
+		a.setGauge(cmd.ident, cmd.value)
 	case CmdAppend:
-		a.append(cmd.name, cmd.value)
+		a.append(cmd.ident, cmd.value)
 	}
+}
+
+// Copy and modify ident
+func appendIdent(ident serde.Ident, appendAttr, suffix string) serde.Ident {
+	result := make(serde.Ident, len(ident))
+	for k, v := range ident {
+		result[k] = v
+	}
+	result[appendAttr] += suffix
+	return result
 }
 
 func (a *State) Flush(now time.Time) {
@@ -138,24 +157,24 @@ func (a *State) Flush(now time.Time) {
 		now = time.Now()
 	}
 
-	for name, agg := range a.m {
+	for _, agg := range a.m {
 
 		switch agg.kind {
 		case aggKindValue:
 			// store rate
 			if now.After(a.lastFlush) {
-				a.t.QueueDataPoint(name, now, agg.value/now.Sub(a.lastFlush).Seconds())
+				a.t.QueueDataPoint(agg.ident, now, agg.value/now.Sub(a.lastFlush).Seconds())
 			}
 
 		case aggKindGauge:
 			// store as is
-			a.t.QueueDataPoint(name, now, agg.value)
+			a.t.QueueDataPoint(agg.ident, now, agg.value)
 
 		case aggKindList:
 			list := agg.list
 
 			// count
-			a.t.QueueDataPoint(name+".count", now, float64(len(list)))
+			a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, ".count"), now, float64(len(list)))
 
 			// lower, upper, sum, mean
 			if len(list) > 0 {
@@ -166,10 +185,10 @@ func (a *State) Flush(now time.Time) {
 					cumul[n] += v
 				}
 
-				a.t.QueueDataPoint(name+".lower", now, list[0])
-				a.t.QueueDataPoint(name+".upper", now, list[len(list)-1])
-				a.t.QueueDataPoint(name+".sum", now, cumul[len(list)-1])
-				a.t.QueueDataPoint(name+".mean", now, cumul[len(list)-1]/float64(len(list)))
+				a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, ".lower"), now, list[0])
+				a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, ".upper"), now, list[len(list)-1])
+				a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, ".sum"), now, cumul[len(list)-1])
+				a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, ".mean"), now, cumul[len(list)-1]/float64(len(list)))
 
 				// make a little round() since Go doesn't have one...
 				round := func(f float64) int {
@@ -179,9 +198,9 @@ func (a *State) Flush(now time.Time) {
 				// TODO may be add "median" and "std"?
 				for _, threshold := range a.Thresholds {
 					idx := round(float64(threshold)/100*float64(len(list))) - 1
-					a.t.QueueDataPoint(name+fmt.Sprintf(".sum_%02d", threshold), now, cumul[idx])
-					a.t.QueueDataPoint(name+fmt.Sprintf(".mean_%02d", threshold), now, cumul[idx]/float64(idx+1))
-					a.t.QueueDataPoint(name+fmt.Sprintf(".upper_%02d", threshold), now, list[idx])
+					a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, fmt.Sprintf(".sum_%02d", threshold)), now, cumul[idx])
+					a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, fmt.Sprintf(".mean_%02d", threshold)), now, cumul[idx]/float64(idx+1))
+					a.t.QueueDataPoint(appendIdent(agg.ident, a.AppendAttr, fmt.Sprintf(".upper_%02d", threshold)), now, list[idx])
 				}
 			}
 		}
@@ -204,7 +223,7 @@ const (
 // An aggregator command. Use NewCommand() to create one.
 type Command struct {
 	cmd   AggCmd
-	name  string
+	ident serde.Ident
 	value float64
 	ts    time.Time
 	Hops  int // For cluster forwarding
@@ -220,7 +239,7 @@ func (ac *Command) GobEncode() ([]byte, error) {
 		}
 	}
 	check(enc.Encode(ac.cmd))
-	check(enc.Encode(ac.name))
+	check(enc.Encode(ac.ident))
 	check(enc.Encode(ac.value))
 	check(enc.Encode(ac.ts))
 	check(enc.Encode(ac.Hops))
@@ -239,7 +258,7 @@ func (ac *Command) GobDecode(b []byte) error {
 		}
 	}
 	check(dec.Decode(&ac.cmd))
-	check(dec.Decode(&ac.name))
+	check(dec.Decode(&ac.ident))
 	check(dec.Decode(&ac.value))
 	check(dec.Decode(&ac.ts))
 	check(dec.Decode(&ac.Hops))
@@ -248,6 +267,6 @@ func (ac *Command) GobDecode(b []byte) error {
 
 // Create an aggregator command. The cmd argument dictates how the
 // data will be aggregated, see AggCmd.
-func NewCommand(cmd AggCmd, name string, value float64) *Command {
-	return &Command{cmd: cmd, name: name, value: value, ts: time.Now()}
+func NewCommand(cmd AggCmd, ident serde.Ident, value float64) *Command {
+	return &Command{cmd: cmd, ident: ident, value: value, ts: time.Now()}
 }

@@ -46,7 +46,7 @@ func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBloc
 }
 
 // getByName rlocks and gets a DS pointer.
-func (d *dsCache) getByIdent(ident serde.IdentTags) *cachedDs {
+func (d *dsCache) getByIdent(ident serde.Ident) *cachedDs {
 	d.RLock()
 	defer d.RUnlock()
 	return d.byIdent[ident.String()]
@@ -60,7 +60,7 @@ func (d *dsCache) insert(cds *cachedDs) {
 }
 
 // Delete a DS
-func (d *dsCache) delete(ident serde.IdentTags) {
+func (d *dsCache) delete(ident serde.Ident) {
 	d.Lock()
 	defer d.Unlock()
 	delete(d.byIdent, ident.String())
@@ -86,11 +86,11 @@ func (d *dsCache) preLoad() error {
 
 // get a cached ds
 func (d *dsCache) fetchOrCreateByName(name string) (*cachedDs, error) {
-	ident := serde.IdentTags{"name": name}
+	ident := serde.Ident{"name": name}
 	result := d.getByIdent(ident)
 	if result == nil {
 		if dsSpec := d.finder.FindMatchingDSSpec(name); dsSpec != nil {
-			ds, err := d.db.FetchOrCreateDataSource(serde.IdentTags{"name": name}, dsSpec)
+			ds, err := d.db.FetchOrCreateDataSource(serde.Ident{"name": name}, dsSpec)
 			if err != nil {
 				return nil, err
 			}

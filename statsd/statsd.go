@@ -18,9 +18,11 @@ package statsd
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/tgres/tgres/aggregator"
 	"github.com/tgres/tgres/misc"
-	"strings"
+	"github.com/tgres/tgres/serde"
 )
 
 var (
@@ -31,24 +33,24 @@ func (st *Stat) AggregatorCmd() *aggregator.Command {
 	if st.Metric == "c" {
 		return aggregator.NewCommand(
 			aggregator.CmdAdd,
-			Prefix+"."+st.Name,
+			serde.Ident{"name": Prefix + "." + st.Name},
 			st.Value*(1/st.Sample))
 	} else if st.Metric == "g" {
 		if st.Delta {
 			return aggregator.NewCommand(
 				aggregator.CmdAddGauge,
-				Prefix+".gauges."+st.Name,
+				serde.Ident{"name": Prefix + ".gauges." + st.Name},
 				st.Value)
 		} else {
 			return aggregator.NewCommand(
 				aggregator.CmdSetGauge,
-				Prefix+".gauges."+st.Name,
+				serde.Ident{"name": Prefix + ".gauges." + st.Name},
 				st.Value)
 		}
 	} else if st.Metric == "ms" {
 		return aggregator.NewCommand(
 			aggregator.CmdAppend,
-			Prefix+".timers."+st.Name,
+			serde.Ident{"name": Prefix + ".timers." + st.Name},
 			st.Value)
 	}
 	return nil

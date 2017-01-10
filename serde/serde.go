@@ -28,7 +28,7 @@ import (
 type SearchResult interface {
 	Next() bool
 	Close() error
-	Ident() IdentTags
+	Ident() Ident
 	Id() int64
 }
 
@@ -47,7 +47,7 @@ type Fetcher interface {
 	DataSourceSearcher
 	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
 	FetchDataSources() ([]rrd.DataSourcer, error)
-	FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
+	FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 

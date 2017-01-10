@@ -33,7 +33,7 @@ func Test_worker_workerChannels_queue(t *testing.T) {
 	wcs[0] = make(chan *incomingDpWithDs)
 	wcs[1] = make(chan *incomingDpWithDs)
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	called := 0
@@ -70,7 +70,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	dsf := &dsFlusher{db: db, sr: sr}
 	dsc := newDsCache(db, df, dsf)
 
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(7, foo, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	recent[7] = rds
@@ -83,7 +83,7 @@ func Test_workerPeriodicFlush(t *testing.T) {
 	}
 
 	// make an rds with points
-	foo = serde.IdentTags{"name": "foo"}
+	foo = serde.Ident{"name": "foo"}
 	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{
@@ -166,7 +166,7 @@ func Test_worker_theWorker(t *testing.T) {
 	debug = true
 
 	// make an rds
-	foo := serde.IdentTags{"name": "foo"}
+	foo := serde.Ident{"name": "foo"}
 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{

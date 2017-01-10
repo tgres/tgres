@@ -137,6 +137,7 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 	statsd.Prefix = statsNamePrefix
 
 	agg := aggregator.NewAggregator(dpq) // aggregator.dataPointQueuer
+	agg.AppendAttr = "name"
 	aggDd := &distDatumAggregator{agg}
 	if clstr != nil {
 		clstr.LoadDistData(func() ([]cluster.DistDatum, error) {

@@ -27,8 +27,7 @@
 // an RRD.
 //
 // Data Point (DP): There actually isn't a data structure representing
-// a data point (except for an incoming data point IncomingDP). A
-// datapoint is just a float64.
+// a data point. A datapoint is just a float64.
 //
 // Round-Robin Archive (RRA): An array of data points at a specific
 // resolutoin and going back a pre-defined duration of time.

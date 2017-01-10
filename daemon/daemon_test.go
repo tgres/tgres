@@ -107,11 +107,11 @@ type fakeSerde struct {
 	nondb                                  bool
 }
 
-func (m *fakeSerde) Fetcher() serde.Fetcher                                { return m }
-func (m *fakeSerde) Flusher() serde.Flusher                                { return nil } // Flushing not supported
-func (m *fakeSerde) DbAddresser() serde.DbAddresser                        { return m }
-func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error) { return nil, nil }
-func (m *fakeSerde) FetchDataSourceNames() (map[string]int64, error)       { return nil, nil }
+func (m *fakeSerde) Fetcher() serde.Fetcher                                     { return m }
+func (m *fakeSerde) Flusher() serde.Flusher                                     { return nil } // Flushing not supported
+func (m *fakeSerde) DbAddresser() serde.DbAddresser                             { return m }
+func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error)      { return nil, nil }
+func (m *fakeSerde) Search(query serde.SearchQuery) (serde.SearchResult, error) { return nil, nil }
 func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return nil, nil
 }
@@ -134,7 +134,7 @@ func (f *fakeSerde) FlushDataSource(ds rrd.DataSourcer) error {
 	return nil
 }
 
-func (f *fakeSerde) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (f *fakeSerde) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	f.createCalled++
 	if f.fakeErr {
 		return nil, fmt.Errorf("some error")
@@ -142,6 +142,6 @@ func (f *fakeSerde) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rr
 	if f.nondb {
 		return rrd.NewDataSource(*receiver.DftDSSPec), nil
 	} else {
-		return serde.NewDbDataSource(0, "foo", rrd.NewDataSource(*receiver.DftDSSPec)), nil
+		return serde.NewDbDataSource(0, serde.Ident{"name": "foo"}, rrd.NewDataSource(*receiver.DftDSSPec)), nil
 	}
 }

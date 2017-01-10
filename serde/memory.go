@@ -41,7 +41,7 @@ func (m *memSerDe) Flusher() Flusher                         { return nil } // F
 func (m *memSerDe) FlushDataSource(ds rrd.DataSourcer) error { return nil }
 
 type srRow struct {
-	ident IdentTags
+	ident Ident
 	id    int64
 }
 
@@ -54,9 +54,9 @@ func (sr *memSearchResult) Next() bool {
 	sr.pos++
 	return sr.pos < len(sr.result)
 }
-func (sr *memSearchResult) Id() int64        { return sr.result[sr.pos].id }
-func (sr *memSearchResult) Ident() IdentTags { return sr.result[sr.pos].ident }
-func (sr *memSearchResult) Close() error     { return nil }
+func (sr *memSearchResult) Id() int64    { return sr.result[sr.pos].id }
+func (sr *memSearchResult) Ident() Ident { return sr.result[sr.pos].ident }
+func (sr *memSearchResult) Close() error { return nil }
 
 func (m *memSerDe) Search(_ SearchQuery) (SearchResult, error) {
 	m.RLock()
@@ -89,7 +89,7 @@ func (m *memSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	return result, nil
 }
 
-func (m *memSerDe) FetchOrCreateDataSource(ident IdentTags, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (m *memSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	m.Lock()
 	defer m.Unlock()
 	if ident["name"] == "" {
