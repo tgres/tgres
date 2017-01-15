@@ -36,7 +36,7 @@ var workerPeriodicFlush = func(ident string, dsf dsFlusherBlocking, recent map[i
 	leftover := make(map[int64]*cachedDs)
 	n := 0
 	for id, cds := range recent {
-		if cds.shouldBeFlushed(maxPoints, minCacheDur, minCacheDur) {
+		if cds.shouldBeFlushed(maxPoints, minCacheDur, maxCacheDur) {
 			if debug {
 				log.Printf("%s: Requesting (periodic) flush of ds id: %d", ident, id)
 			}

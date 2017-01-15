@@ -66,13 +66,17 @@ type Receiver struct {
 	// MinCacheDuration means data points will always be kept in the cache at least this long,
 	// or, in other words, the DS will not be flushed more frequently than every MinCacheDuration
 	MinCacheDuration time.Duration
-	// MaxMaxCacheDuration is the most time data points will be kept in the cache, or, in other words,
-	// the DS will be flushed at least every MaxFlushDuration provided it has data points.
+	// MaxMaxCacheDuration is the most time data points will be kept
+	// in the cache, or, in other words, the DS will be flushed at
+	// least every MaxFlushDuration provided it has data points. This
+	// parameter mostly matters when the data stopped coming in and
+	// some data points are still cached in memory.
 	MaxCacheDuration time.Duration
-	// MaxCachedPoints is the maximum number of cached points allowed
-	// in a Data Source. Note that MinCacheDuration trumps this
-	// parameter. Also note that with max duration of n, the number of
-	// data points in a DS can never exceed n/step.
+	// MaxCachedPoints is the maximum number of cached points (as
+	// returned by DS.PointCoont(), which is the sum of all RRAs) for
+	// a Data Source. Note that MinCacheDuration trumps this
+	// parameter. This number is only relevant if it is below the
+	// total possible number of points in a MaxCacheDuration.
 	MaxCachedPoints int
 
 	// MaxFlushRatePerSecond controls how frequently we write to the

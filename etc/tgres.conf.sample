@@ -1,10 +1,13 @@
 
 # This is a TOML file: https://github.com/toml-lang/toml
 
-max-cached-points       = 4096
-max-cache-duration      = "20s"
+# tracked per DS
+max-cached-points       = 100    # in all RRAs for a DS
+max-cache-duration      = "10m"
 min-cache-duration      = "10s"
-max-flushes-per-second  = 100   # this setting trumps all the above
+
+# global across all DSs and trumps all the above
+max-flushes-per-second  = 100
 
 workers                 = 4
 
