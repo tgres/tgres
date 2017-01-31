@@ -56,7 +56,7 @@ func main() {
 			log.Fatalf("ERROR: Background only possible when config path is absolute (cfg path: %q).", textCfgPath)
 		}
 		if !filepath.IsAbs(os.Args[0]) {
-			log.Fatalf("ERROR: Background only possible when %q started with absolute path (path: %q).", os.Args[0])
+			log.Fatalf("ERROR: Background only possible when %q started with absolute path.", os.Args[0])
 		}
 		log.Printf("Backgrounding...")
 		if err := std2DevNull(); err != nil {

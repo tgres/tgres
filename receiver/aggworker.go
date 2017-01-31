@@ -163,6 +163,7 @@ var aggWorker = func(wc wController, aggCh chan *aggregator.Command, clstr clust
 			if !ok {
 				log.Printf("%s: channel closed, performing last flush", wc.ident())
 				agg.Flush(time.Now())
+				close(flushCh)
 				return
 			}
 

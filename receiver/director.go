@@ -24,7 +24,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 )
 
-var directorincomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *incomingDP) {
+var directorincomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -63,18 +63,34 @@ var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan 
 	return nil
 }
 
-var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *incomingDP, snd chan *cluster.Msg) (forwarded int) {
+var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) {
+	if err := cds.processIncoming(); err != nil {
+		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
+	}
+	if cds.PointCount() > 0 {
+		dsf.flushDs(cds.DbDataSourcer, false)
+	}
+}
+
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg) (forwarded int) {
+	if clstr == nil {
+		directorProcessDataPoint(cds, dsf)
+		return 0
+	}
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
-			workerChs.queue(dp, cds)
+			directorProcessDataPoint(cds, dsf)
 		} else {
-			if err := directorForwardDPToNode(dp, node, snd); err != nil {
-				log.Printf("director: Error forwarding a data point: %v", err)
-				// TODO For not ready error - sleep and return the dp to the channel?
-				continue
+			for _, dp := range cds.incoming {
+				if err := directorForwardDPToNode(dp, node, snd); err != nil {
+					log.Printf("director: Error forwarding a data point: %v", err)
+					// TODO For not ready error - sleep and return the dp to the channel?
+					continue
+				}
+				forwarded++
 			}
-			forwarded++
+			cds.incoming = nil
 			// Always clear RRAs to prevent it from being saved
 			if pc := cds.PointCount(); pc > 0 {
 				log.Printf("director: WARNING: Clearing DS with PointCount > 0: %v", pc)
@@ -85,7 +101,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer
 	return
 }
 
-var directorProcessincomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
+var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCache, loaderCh chan interface{}, dsf dsFlusherBlocking, clstr clusterer, snd chan *cluster.Msg) {
 
 	sr.reportStatCount("receiver.datapoints.total", 1)
 
@@ -97,56 +113,73 @@ var directorProcessincomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCac
 		return
 	}
 
-	cds, err := dsc.fetchOrCreateByName(dp.Ident)
-	if err != nil {
-		log.Printf("director: dsCache error: %v", err)
-		return
-	}
+	cds := dsc.getByIdentOrCreateEmpty(dp.Ident)
 	if cds == nil {
 		log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
 		return
 	}
 
-	if cds != nil {
-		if clstr == nil {
-			workerChs.queue(dp, cds)
-		} else {
-			forwarded := directorProcessOrForward(dsc, cds, clstr, workerChs, dp, snd)
-			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
-		}
+	cds.appendIncoming(dp)
+
+	if cds.Id() == 0 {
+		// this DS needs to be loaded.
+		loaderCh <- cds
+	} else {
+		forwarded := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
+		sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
 	}
 }
 
-func reportDirectorChannelFillPercent(dpCh chan *incomingDP, queue *dpQueue, sr statReporter, nap time.Duration) {
-	cp := float64(cap(dpCh))
+func reportOverrunQueueSize(queue *fifoQueue, sr statReporter, nap time.Duration) {
 	for {
 		time.Sleep(nap) // TODO this should be a ticker really
-		ln := float64(len(dpCh))
-		if cp > 0 {
-			fillPct := (ln / cp) * 100
-			sr.reportStatGauge("receiver.channel.fill_percent", fillPct)
-			if fillPct > 75 {
-				log.Printf("WARNING: receiver channel %v percent full!", fillPct)
-			}
-		}
-		sr.reportStatGauge("receiver.channel.len", ln)
-
-		// Overrun queue
-		qsz := queue.size()
-		pct := (float64(qsz) / cp) * 100
-		sr.reportStatGauge("receiver.overrun_queue.len", float64(qsz))
-		sr.reportStatGauge("receiver.overrun_queue.pct", pct)
+		sr.reportStatGauge("receiver.overrun_queue.len", float64(queue.size()))
 	}
 }
 
-var director = func(wc wController, dpCh chan *incomingDP, clstr clusterer, sr statReporter, dss *dsCache, workerChs workerChannels) {
+var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter) {
+
+	var queue = &fifoQueue{}
+
+	go func() {
+		for {
+			time.Sleep(time.Second)
+			sr.reportStatGauge("receiver.loader.queue_len", float64(queue.size()))
+		}
+	}()
+
+	loaderOutCh := make(chan interface{})
+	go elasticCh(loaderCh, loaderOutCh, queue)
+
+	for {
+		x, ok := <-loaderOutCh
+		if !ok {
+			log.Printf("loader: channel closed, closing director channel and exiting...")
+			close(dpCh)
+			return
+		}
+
+		cds := x.(*cachedDs)
+
+		if cds.spec != nil { // nil spec means it's been loaded already
+			if err := dsc.fetchOrCreateByIdent(cds); err != nil {
+				log.Printf("loader: database error: %v", err)
+				continue
+			}
+		}
+
+		dpCh <- cds
+	}
+}
+
+var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking) {
 	wc.onEnter()
 	defer wc.onExit()
 
 	var (
 		clusterChgCh chan bool
 		snd, rcv     chan *cluster.Msg
-		queue        = &dpQueue{}
+		queue        = &fifoQueue{}
 	)
 
 	if clstr != nil {
@@ -157,23 +190,23 @@ var director = func(wc wController, dpCh chan *incomingDP, clstr clusterer, sr s
 		clstr.Ready(true)
 	}
 
-	// Monitor channel fill TODO: this is wrong, there should be better ways
-	go reportDirectorChannelFillPercent(dpCh, queue, sr, time.Second)
+	go reportOverrunQueueSize(queue, sr, time.Second)
 
-	go func() {
-		defer func() { recover() }()
-		for {
-			time.Sleep(time.Second)
-			dpCh <- nil // This ensures that overrun queue is flushed
-		}
-	}()
+	dpOutCh := make(chan interface{}, 128)
+	go elasticCh(dpCh, dpOutCh, queue)
+
+	loaderCh := make(chan interface{}, 128)
+	go loader(loaderCh, dpCh, dsc, sr)
 
 	wc.onStarted()
 
 	for {
-
-		var dp *incomingDP
-		var ok bool
+		var (
+			x   interface{}
+			dp  *incomingDP
+			cds *cachedDs
+			ok  bool
+		)
 		select {
 		case _, ok = <-clusterChgCh:
 			if ok {
@@ -182,62 +215,37 @@ var director = func(wc wController, dpCh chan *incomingDP, clstr clusterer, sr s
 				}
 			}
 			continue
-		case dp, ok = <-dpCh:
-		}
-		if !ok {
-			log.Printf("director: channel closed, shutting down")
-			break
-		}
-
-		queueOnly := float32(len(dpCh))/float32(cap(dpCh)) > 0.5
-		dp = checkSetAside(dp, queue, queueOnly)
-
-		if dp != nil {
-			directorProcessincomingDP(dp, sr, dss, workerChs, clstr, snd)
-		}
-
-		// Try to flush the queue if we are idle
-		for (len(dpCh) == 0) && (queue.size() > 0) {
-			if dp = checkSetAside(nil, queue, false); dp != nil {
-				directorProcessincomingDP(dp, sr, dss, workerChs, clstr, snd)
+		case x, ok = <-dpOutCh:
+			switch x := x.(type) {
+			case *incomingDP:
+				dp = x
+			case *cachedDs:
+				cds = x
+			case nil:
+				// close signal
+			default:
+				log.Printf("director(): unknown type: %T", x)
 			}
 		}
-	}
-}
 
-type dpQueue []*incomingDP
-
-func (q *dpQueue) push(dp *incomingDP) {
-	*q = append(*q, dp)
-}
-
-func (q *dpQueue) pop() (dp *incomingDP) {
-	dp, *q = (*q)[0], (*q)[1:]
-	return dp
-}
-
-func (q *dpQueue) size() int {
-	return len(*q)
-}
-
-// If skip is true, just append to the queue and return
-// nothing. Otherwise, if there is something in the queue, return
-// it. Otherwise, just pass it right through.
-func checkSetAside(dp *incomingDP, queue *dpQueue, skip bool) *incomingDP {
-
-	if skip {
-		if dp != nil {
-			queue.push(dp)
+		if !ok {
+			log.Printf("director: exiting the director goroutine.")
+			return
 		}
-		return nil
-	}
 
-	if queue.size() > 0 {
 		if dp != nil {
-			queue.push(dp)
+			// if the dp ident is not found, it will be submitted to
+			// the loader, which will return it to us through the dpCh
+			// as a cachedDs.
+			directorProcessIncomingDP(dp, sr, dsc, loaderCh, dsf, clstr, snd)
+		} else if cds != nil {
+			// this came from the loader, we do not need to look it up
+			forwarded := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
+			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
+		} else {
+			// signal to exit
+			log.Printf("director: closing loader channel.")
+			close(loaderCh)
 		}
-		return queue.pop()
 	}
-
-	return dp
 }

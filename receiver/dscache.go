@@ -18,9 +18,9 @@ package receiver
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
 
@@ -84,27 +84,34 @@ func (d *dsCache) preLoad() error {
 	return nil
 }
 
-// get a cached ds
-func (d *dsCache) fetchOrCreateByName(ident serde.Ident) (*cachedDs, error) {
+// get or create and empty cached ds
+func (d *dsCache) getByIdentOrCreateEmpty(ident serde.Ident) *cachedDs {
 	result := d.getByIdent(ident)
 	if result == nil {
-		if dsSpec := d.finder.FindMatchingDSSpec(ident); dsSpec != nil {
-			ds, err := d.db.FetchOrCreateDataSource(ident, dsSpec)
-			if err != nil {
-				return nil, err
-			}
-			if ds != nil {
-				dbds, ok := ds.(serde.DbDataSourcer)
-				if !ok {
-					return nil, fmt.Errorf("fetchDataSourceByName: ds must be a serde.DbDataSourcer")
-				}
-				result = &cachedDs{DbDataSourcer: dbds}
-				d.insert(result)
-				d.register(dbds)
-			}
+		if spec := d.finder.FindMatchingDSSpec(ident); spec != nil {
+			// return a cachedDs with nil DataSourcer
+			dbds := serde.NewDbDataSource(0, ident, nil)
+			result = &cachedDs{DbDataSourcer: dbds, spec: spec}
+			d.insert(result)
 		}
 	}
-	return result, nil
+	return result
+}
+
+// load (or create) via the SerDe given an empty cachedDs with ident and spec
+func (d *dsCache) fetchOrCreateByIdent(cds *cachedDs) error {
+	ds, err := d.db.FetchOrCreateDataSource(cds.Ident(), cds.spec)
+	if err != nil {
+		return err
+	}
+	dbds, ok := ds.(serde.DbDataSourcer)
+	if !ok {
+		return fmt.Errorf("fetchOrCreateByIdent: ds must be a serde.DbDataSourcer")
+	}
+	cds.DbDataSourcer = dbds
+	cds.spec = nil
+	d.register(dbds)
+	return nil
 }
 
 // register the rds as a DistDatum with the cluster
@@ -117,24 +124,26 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 	}
 }
 
-// cachedDs is a DS that keeps track of the last time it was flushed
-// and provides a shouldByFlushed() method.
+// cachedDs is a DS that keeps a queue of incoming data points, which
+// can all processed at once.
 type cachedDs struct {
 	serde.DbDataSourcer
-	lastFlushRT time.Time // Last time this DS was flushed (actual real time).
+	incoming []*incomingDP
+	spec     *rrd.DSSpec // for when DS needs to be created
 }
 
-func (cds *cachedDs) shouldBeFlushed(maxCachedPoints int, minCache, maxCache time.Duration) bool {
-	if cds.LastUpdate().IsZero() {
-		return false
+func (cds *cachedDs) appendIncoming(dp *incomingDP) {
+	cds.incoming = append(cds.incoming, dp)
+}
+
+func (cds *cachedDs) processIncoming() error {
+	var err error
+	for _, dp := range cds.incoming {
+		// continue on errors
+		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
 	}
-	pc := cds.PointCount()
-	if pc > maxCachedPoints {
-		return cds.lastFlushRT.Add(minCache).Before(time.Now())
-	} else if pc > 0 {
-		return cds.lastFlushRT.Add(maxCache).Before(time.Now())
-	}
-	return false
+	cds.incoming = nil
+	return err
 }
 
 // distDs keeps a pointer to the dsCache so that it can delete itself

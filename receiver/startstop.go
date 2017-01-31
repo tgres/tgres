@@ -16,7 +16,6 @@
 package receiver
 
 import (
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -42,7 +41,6 @@ type wController interface {
 }
 
 var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
-	startWorkers(r, startWg)
 	startFlushers(r, startWg)
 	startAggWorker(r, startWg)
 	startPacedMetricWorker(r, startWg)
@@ -50,8 +48,12 @@ var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 
 var doStart = func(r *Receiver) {
 	log.Printf("Receiver: Caching data sources...")
-	r.dsc.preLoad()
-	log.Printf("Receiver: Cached %d data sources.", len(r.dsc.byIdent))
+	start := time.Now()
+	if err := r.dsc.preLoad(); err != nil {
+		log.Printf("Receiver: error caching data sources: %v", err)
+	}
+	dur := time.Now().Sub(start)
+	log.Printf("Receiver: Cached %d data sources in %v.", len(r.dsc.byIdent), dur)
 
 	log.Printf("Receiver: starting...")
 
@@ -63,7 +65,7 @@ var doStart = func(r *Receiver) {
 	log.Printf("Receiver: All workers running, starting director.")
 
 	startWg.Add(1)
-	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.cluster, r, r.dsc, r.workerChs)
+	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.cluster, r, r.dsc, r.flusher)
 	startWg.Wait()
 
 	log.Printf("Receiver: Ready.")
@@ -71,21 +73,24 @@ var doStart = func(r *Receiver) {
 
 var stopDirector = func(r *Receiver) {
 	log.Printf("Closing director channel...")
-	close(r.dpCh)
+	r.dpCh <- nil // signal to close
 	r.directorWg.Wait()
 	log.Printf("Director finished.")
 }
 
 var doStop = func(r *Receiver, clstr clusterer) {
+	// Order matters here
+	stopPacedMetricWorker(r.pacedMetricCh, &r.pacedMetricWg)
+	stopAggWorker(r.aggCh, &r.aggWg)
 	stopDirector(r)
-	stopAllWorkers(r)
+	stopFlushers(r.flusher, &r.flusherWg)
 	log.Printf("Leaving cluster...")
 	clstr.Leave(1 * time.Second)
 	clstr.Shutdown()
 	log.Printf("Left cluster.")
 }
 
-var stopWorkers = func(workerChs []chan *incomingDpWithDs, workerWg *sync.WaitGroup) {
+var stopWorkers = func(workerChs []chan *cachedDs, workerWg *sync.WaitGroup) {
 	log.Printf("stopWorkers(): closing all worker channels...")
 	for _, ch := range workerChs {
 		close(ch)
@@ -95,11 +100,9 @@ var stopWorkers = func(workerChs []chan *incomingDpWithDs, workerWg *sync.WaitGr
 	log.Printf("stopWorkers(): all workers finished.")
 }
 
-var stopFlushers = func(flusherChs []chan *dsFlushRequest, flusherWg *sync.WaitGroup) {
-	log.Printf("stopFlushers(): closing all flusher channels...")
-	for _, ch := range flusherChs {
-		close(ch)
-	}
+var stopFlushers = func(flusher dsFlusherBlocking, flusherWg *sync.WaitGroup) {
+	log.Printf("stopFlushers(): stopping flusher(s)...")
+	flusher.stop()
 	log.Printf("stopFlushers(): waiting for flushers to finish...")
 	flusherWg.Wait()
 	log.Printf("stopFlushers(): all flushers finished.")
@@ -121,35 +124,13 @@ var stopPacedMetricWorker = func(pacedMetricCh chan *pacedMetric, pacedMetricWg 
 	log.Printf("stopPacedMetricWorker(): paced metric worker finished.")
 }
 
-var stopAllWorkers = func(r *Receiver) {
-	// Order matters here
-	stopPacedMetricWorker(r.pacedMetricCh, &r.pacedMetricWg)
-	stopAggWorker(r.aggCh, &r.aggWg)
-	stopWorkers(r.workerChs, &r.workerWg)
-	stopFlushers(r.flusher.channels(), &r.flusherWg)
-}
-
-var startWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
-
-	r.workerChs = make([]chan *incomingDpWithDs, r.NWorkers)
-
-	log.Printf("Starting %d workers...", r.NWorkers)
-	startWg.Add(r.NWorkers)
-	for i := 0; i < r.NWorkers; i++ {
-		r.workerChs[i] = make(chan *incomingDpWithDs, 1024)
-		go worker(&wrkCtl{wg: &r.flusherWg, startWg: startWg, id: fmt.Sprintf("worker_%d", i)}, r.flusher, r.workerChs[i], r.MinCacheDuration, r.MaxCacheDuration, r.MaxCachedPoints, time.Second, r)
-
-	}
-}
-
 var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 	if r.flusher.flusher() == nil { // This serde doesn't support flushing
 		return
 	}
 
-	log.Printf("Starting %d flushers...", r.NWorkers)
-	startWg.Add(r.NWorkers)
-	r.flusher.start(r.NWorkers, &r.flusherWg, startWg, r.MaxFlushRatePerSecond)
+	log.Printf("Starting flusher(s)...")
+	r.flusher.start(&r.flusherWg, startWg, r.MaxFlushRatePerSecond, r.MinStep)
 }
 
 var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {

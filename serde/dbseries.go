@@ -19,10 +19,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"time"
 )
 
-type dbSeries struct {
+type dbSeriesV2 struct {
 	ds  DbDataSourcer
 	rra DbRoundRobinArchiver
 
@@ -36,7 +37,7 @@ type dbSeries struct {
 	to   time.Time
 
 	// Db stuff
-	db   *pgSerDe
+	db   *pgvSerDe
 	rows *sql.Rows
 
 	// These are not the same:
@@ -49,11 +50,11 @@ type dbSeries struct {
 	alias string
 }
 
-func (dps *dbSeries) Step() time.Duration {
+func (dps *dbSeriesV2) Step() time.Duration {
 	return dps.rra.Step()
 }
 
-func (dps *dbSeries) GroupBy(td ...time.Duration) time.Duration {
+func (dps *dbSeriesV2) GroupBy(td ...time.Duration) time.Duration {
 	if len(td) > 0 {
 		defer func() { dps.groupBy = td[0] }()
 	}
@@ -63,7 +64,7 @@ func (dps *dbSeries) GroupBy(td ...time.Duration) time.Duration {
 	return dps.groupBy
 }
 
-func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
+func (dps *dbSeriesV2) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	if len(t) == 1 {
 		defer func() { dps.from = t[0] }()
 	} else if len(t) == 2 {
@@ -72,27 +73,27 @@ func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return dps.from, dps.to
 }
 
-func (dps *dbSeries) Latest() time.Time {
+func (dps *dbSeriesV2) Latest() time.Time {
 	return dps.rra.Latest()
 }
 
-func (dps *dbSeries) MaxPoints(n ...int64) int64 {
+func (dps *dbSeriesV2) MaxPoints(n ...int64) int64 {
 	if len(n) > 0 { // setter
 		defer func() { dps.maxPoints = n[0] }()
 	}
 	return dps.maxPoints // getter
 }
 
-func (dps *dbSeries) Align() {}
+func (dps *dbSeriesV2) Align() {}
 
-func (dps *dbSeries) Alias(s ...string) string {
+func (dps *dbSeriesV2) Alias(s ...string) string {
 	if len(s) > 0 {
 		dps.alias = s[0]
 	}
 	return dps.alias
 }
 
-func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
+func (dps *dbSeriesV2) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	var (
 		rows *sql.Rows
 		err  error
@@ -150,21 +151,21 @@ func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	return rows, nil
 }
 
-func (dps *dbSeries) Next() bool {
+func (dps *dbSeriesV2) Next() bool {
 
 	if dps.rows == nil { // First Next()
 		rows, err := dps.seriesQuerySqlUsingViewAndSeries()
 		if err == nil {
 			dps.rows = rows
 		} else {
-			log.Printf("dbSeries.Next(): database error: %v", err)
+			log.Printf("dbSeriesV2.Next(): database error: %v", err)
 			return false
 		}
 	}
 
 	if dps.rows.Next() {
 		if ts, value, err := timeValueFromRow(dps.rows); err != nil {
-			log.Printf("dbSeries.Next(): database error: %v", err)
+			log.Printf("dbSeriesV2.Next(): database error: %v", err)
 			return false
 		} else {
 			dps.posBegin = dps.latest
@@ -174,23 +175,38 @@ func (dps *dbSeries) Next() bool {
 		}
 		return true
 	}
-
 	return false
 }
 
-func (dps *dbSeries) CurrentValue() float64 {
+func (dps *dbSeriesV2) CurrentValue() float64 {
 	return dps.value
 }
 
-func (dps *dbSeries) CurrentTime() time.Time {
+func (dps *dbSeriesV2) CurrentTime() time.Time {
 	return dps.posEnd
 }
 
-func (dps *dbSeries) Close() error {
+func (dps *dbSeriesV2) Close() error {
 	if dps.rows == nil {
-		return fmt.Errorf("Close() on dbSeries that isn not open.")
+		return fmt.Errorf("Close() on dbSeriesV2 that isn not open.")
 	}
 	result := dps.rows.Close()
 	dps.rows = nil // next Next() will re-open
 	return result
+}
+
+func timeValueFromRow(rows *sql.Rows) (time.Time, float64, error) {
+	var (
+		value sql.NullFloat64
+		ts    time.Time
+	)
+	if err := rows.Scan(&ts, &value); err == nil {
+		if value.Valid {
+			return ts, value.Float64, nil
+		} else {
+			return ts, math.NaN(), nil
+		}
+	} else {
+		return time.Time{}, math.NaN(), err
+	}
 }

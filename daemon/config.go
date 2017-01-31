@@ -37,9 +37,7 @@ type Config struct { // Needs to be exported for TOML to work
 	LogPath                  string   `toml:"log-file"`
 	LogCycle                 duration `toml:"log-cycle-interval"`
 	DbConnectString          string   `toml:"db-connect-string"`
-	MaxCachedPoints          int      `toml:"max-cached-points"`
-	MaxCache                 duration `toml:"max-cache-duration"`
-	MinCache                 duration `toml:"min-cache-duration"`
+	MinStep                  duration `toml:"min-step"`
 	MaxFlushesPerSecond      int      `toml:"max-flushes-per-second"`
 	GraphiteTextListenSpec   string   `toml:"graphite-text-listen-spec"`
 	GraphiteUdpListenSpec    string   `toml:"graphite-udp-listen-spec"`
@@ -203,30 +201,11 @@ func (c *Config) processDbConnectString() error {
 	return nil
 }
 
-func (c *Config) processMaxCachedPoints() error {
-	if c.MaxCachedPoints == 0 {
-		return fmt.Errorf("max-cached-points missing, must be integer")
-	}
-	log.Printf("Data Sources will be flushed when cached points exceeds %d (max-cached-points).", c.MaxCachedPoints)
-	return nil
-}
-
-func (c *Config) processMaxCacheDuration() error {
-	if c.MaxCache.Duration == 0 {
-		return fmt.Errorf("max-cache-duration is missing")
+func (c *Config) processMinStep() error {
+	if c.MinStep.Duration == 0 {
+		return fmt.Errorf("min-step is missing")
 	} else {
-		log.Printf("Data Sources will be flushed after (approximately) %v (max-cache-duration).", c.MaxCache.Duration)
-	}
-	return nil
-}
-
-func (c *Config) processMinCacheDuration() error {
-	if c.MinCache.Duration == 0 {
-		return fmt.Errorf("min-cache-duration is missing")
-	} else if c.MinCache.Duration > c.MaxCache.Duration/2 {
-		return fmt.Errorf("max-cache-duration should be at least twice min-cache-duration")
-	} else {
-		log.Printf("A Data Source will be flushed at most once per %v (min-cache-duration).", c.MinCache.Duration)
+		log.Printf("Smallest step allowed: %v (min-step).", c.MinStep.Duration)
 	}
 	return nil
 }
@@ -269,6 +248,9 @@ func (c *Config) processDSSpec() error {
 	// TODO validate function, regular expression, all that
 	for _, ds := range c.DSs {
 		for _, rra := range ds.RRAs {
+			if (rra.Step.Nanoseconds() % c.MinStep.Nanoseconds()) != 0 {
+				return fmt.Errorf("DS %q: invalid Step (%v), must be one or multiple min-step (%v).", ds.Regexp.String(), rra.Step, c.MinStep)
+			}
 			if (rra.Step.Nanoseconds() % ds.Step.Duration.Nanoseconds()) != 0 {
 				newStep := time.Duration(rra.Step.Nanoseconds()/ds.Step.Duration.Nanoseconds()*ds.Step.Duration.Nanoseconds()) * time.Nanosecond
 				log.Printf("DS %q: RRA step (%v) is not a multiple of DS Step (%v), auto adjusting Step to %v.", ds.Regexp.String(), rra.Step, ds.Step.Duration, newStep)
@@ -315,9 +297,7 @@ type configer interface {
 	processConfigLogFile(string) error
 	processConfigLogCycleInterval() error
 	processDbConnectString() error
-	processMaxCachedPoints() error
-	processMaxCacheDuration() error
-	processMinCacheDuration() error
+	processMinStep() error
 	processMaxFlushesPerSecond() error
 	processStatFlushInterval() error
 	processStatsNamePrefix() error
@@ -339,13 +319,7 @@ var processConfig = func(c configer, wd string) error {
 	if err := c.processDbConnectString(); err != nil {
 		return err
 	}
-	if err := c.processMaxCachedPoints(); err != nil {
-		return err
-	}
-	if err := c.processMaxCacheDuration(); err != nil {
-		return err
-	}
-	if err := c.processMinCacheDuration(); err != nil {
+	if err := c.processMinStep(); err != nil {
 		return err
 	}
 	if err := c.processMaxFlushesPerSecond(); err != nil {

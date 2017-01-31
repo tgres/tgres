@@ -18,11 +18,21 @@
 package serde
 
 import (
+	"bytes"
+	"fmt"
+	"os"
+	"sort"
 	"time"
 
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/series"
 )
+
+var debug bool
+
+func init() {
+	debug = os.Getenv("TGRES_SERDE_DEBUG") != ""
+}
 
 // An iterator, similar to sql.Rows.
 type SearchResult interface {
@@ -55,9 +65,15 @@ type Flusher interface {
 	FlushDataSource(ds rrd.DataSourcer) error
 }
 
+type VerticalFlusher interface {
+	VerticalFlushDPs(bunlde_id, seg, i int64, dps map[int64]float64) error
+	VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) error
+}
+
 type SerDe interface {
 	Fetcher() Fetcher
 	Flusher() Flusher
+	VerticalFlusher() VerticalFlusher
 }
 
 type DbAddresser interface {
@@ -68,4 +84,31 @@ type DbAddresser interface {
 type DbSerDe interface {
 	SerDe
 	DbAddresser() DbAddresser
+}
+
+type Ident map[string]string
+
+func (it Ident) String() string {
+
+	// It's tempting to cache the resulting string in the receiver,
+	// but given that most of what we do is look up newly arriving
+	// data points, this cache wouldn't really be used that much and
+	// only take up additional space.
+
+	keys := make([]string, 0, len(it))
+	for k, _ := range it {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	buf := &bytes.Buffer{}
+	buf.WriteByte('{')
+	for i, k := range keys {
+		fmt.Fprintf(buf, `%q: %q`, k, it[k])
+		if i < len(keys)-1 {
+			buf.WriteByte(',')
+		}
+	}
+	buf.WriteByte('}')
+	return buf.String()
 }
