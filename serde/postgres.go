@@ -1,5 +1,5 @@
 //
-// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2017 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -135,21 +135,21 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 	var err error
 
 	if p.sqlInsertTs, err = p.dbConn.Prepare(fmt.Sprintf(
-		"INSERT INTO %[1]svts AS ts (rra_bundle_id, seg, i) VALUES ($1, $2, $3) ON CONFLICT(rra_bundle_id, seg, i) DO NOTHING",
+		"INSERT INTO %[1]sts AS ts (rra_bundle_id, seg, i) VALUES ($1, $2, $3) ON CONFLICT(rra_bundle_id, seg, i) DO NOTHING",
 		p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlUpdateTs, err = p.dbConn.Prepare(fmt.Sprintf(
-		"UPDATE %[1]svts AS ts SET dp[$4:$5] = $6 WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3",
+		"UPDATE %[1]sts AS ts SET dp[$4:$5] = $6 WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3",
 		p.prefix)); err != nil {
 		return err
 	}
 
-	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]svrra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
+	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql3, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
-		"LEFT OUTER JOIN (SELECT t, r FROM %[1]svtv tv WHERE ds_id = $4 AND rra_id = $5 "+
+		"LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = $4 AND rra_id = $5 "+
 		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt",
 		p.prefix)); err != nil {
 		return err
@@ -166,13 +166,13 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sqlInsertRRA, err = p.dbConn.Prepare(fmt.Sprintf(
-		"INSERT INTO %[1]svrra AS rra (ds_id, rra_bundle_id, pos, seg, idx, cf, xff) VALUES ($1, $2, $3, $4, $5, $6, $7) "+
+		"INSERT INTO %[1]srra AS rra (ds_id, rra_bundle_id, pos, seg, idx, cf, xff) VALUES ($1, $2, $3, $4, $5, $6, $7) "+
 			"ON CONFLICT (ds_id, rra_bundle_id, cf) DO UPDATE SET ds_id = rra.ds_id "+
 			"RETURNING id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff, value, duration_ms", p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlSelectRRAsByDsId, err = p.dbConn.Prepare(fmt.Sprintf(
-		"SELECT id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff, value, duration_ms FROM %[1]svrra rra WHERE ds_id = $1 ",
+		"SELECT id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff, value, duration_ms FROM %[1]srra rra WHERE ds_id = $1 ",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_latest_bundle_id_seg ON %[1]srra_latest (rra_bundle_id, seg);
 
-       CREATE TABLE IF NOT EXISTS %[1]svrra (
+       CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
        ds_id INT NOT NULL REFERENCES %[1]sds(id) ON DELETE CASCADE,
        rra_bundle_id INT NOT NULL REFERENCES %[1]srra_bundle(id) ON DELETE RESTRICT,
@@ -254,15 +254,15 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
        duration_ms BIGINT NOT NULL DEFAULT 0);
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_rra_bundle_id ON %[1]svrra (ds_id, rra_bundle_id, cf);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_rra_bundle_id ON %[1]srra (ds_id, rra_bundle_id, cf);
 
-       CREATE TABLE IF NOT EXISTS %[1]svts (
+       CREATE TABLE IF NOT EXISTS %[1]sts (
        rra_bundle_id INT NOT NULL REFERENCES %[1]srra_bundle(id) ON DELETE CASCADE,
        seg INT NOT NULL,
        i INT NOT NULL,
        dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]svts (rra_bundle_id, seg, i);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]sts (rra_bundle_id, seg, i);
     `
 	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
@@ -271,15 +271,15 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 		rows.Close()
 	}
 	create_sql = `
-       CREATE VIEW %[1]svtv AS
+       CREATE VIEW %[1]stv AS
        SELECT rra.ds_id AS ds_id, rra.id AS rra_id,
          rra_latest.latest[rra.idx] - INTERVAL '1 MILLISECOND' * rra_bundle.step_ms *
            MOD(rra_bundle.size + MOD(EXTRACT(EPOCH FROM rra_latest.latest[rra.idx])::BIGINT*1000/rra_bundle.step_ms, rra_bundle.size) - i, rra_bundle.size) AS t,
          dp[rra.idx] AS r
-       FROM %[1]svrra AS rra
+       FROM %[1]srra AS rra
        JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
        JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
-       JOIN %[1]svts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
+       JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
 
        -- TODO: tvd view
     `
@@ -408,7 +408,7 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	       rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff, rra.value, rra.duration_ms,
 	       b.id, b.step_ms, b.size, b.width, rl.latest[rra.idx] AS latest
 	FROM %[1]sds ds
-	JOIN %[1]svrra rra ON rra.ds_id = ds.id
+	JOIN %[1]srra rra ON rra.ds_id = ds.id
 	JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
 	JOIN %[1]srra_latest AS rl ON rl.rra_bundle_id = b.id AND rl.seg = rra.seg
     ORDER BY ds.id, rra.id`
@@ -611,7 +611,7 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 		// Use single-statement update  // TODO make me a function!
 		//
 		dest, args := singleStmtUpdateArgs(chunks, "dp", 4, []interface{}{bundle_id, seg, i})
-		stmt := fmt.Sprintf("UPDATE %[1]svts AS ts SET %s WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3", p.prefix, dest)
+		stmt := fmt.Sprintf("UPDATE %[1]sts AS ts SET %s WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3", p.prefix, dest)
 
 		res, err := p.dbConn.Exec(stmt, args...)
 		if err != nil {
@@ -777,9 +777,7 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 			return nil, err
 		}
 
-		// There is no need to create/update rra_latest here, it will
-		// default to NULL in the view.
-		latest := time.Time{}
+		latest := rraSpec.Latest
 
 		var rra *DbRoundRobinArchive
 		rra, err = rraFromRRARecordAndBundle(rraRec, bundle, latest)

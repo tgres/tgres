@@ -84,15 +84,19 @@ type RoundRobinArchiver interface {
 	End() int64
 	PointCount() int
 	DPs() map[int64]float64
+	SetDPs(map[int64]float64)
 	Copy() RoundRobinArchiver
 	Begins(now time.Time) time.Time
 
-	// A side benifit from these being unexported is that you can only
+	// A side benefit from these being unexported is that you can only
 	// satisfy this interface by including this implementation
 	clear()
 	includes(t time.Time) bool
 	update(periodBegin, periodEnd time.Time, value float64, duration time.Duration)
 }
+
+// Set the data points (TODO is this necessary?)
+func (rra *RoundRobinArchive) SetDPs(dps map[int64]float64) { rra.dps = dps }
 
 // Latest returns the time on which the last slot ends.
 func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
