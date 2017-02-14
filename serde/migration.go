@@ -353,7 +353,7 @@ func migrate_roundRobinArchiveFromRow(rows *sql.Rows, dsStep time.Duration) (*Db
 		return nil, fmt.Errorf("roundRoundRobinArchiveFromRow(): Invalid cf: %q (valid funcs: wmean, min, max, last)", cf)
 	}
 
-	rra, err := newDbRoundRobinArchive(id, width, 0, 0, spec) // ZZZ this is wrong anyway
+	rra, err := newDbRoundRobinArchive(id, width, 0, 0, spec)
 	if err != nil {
 		log.Printf("roundRoundRobinArchiveFromRow(): error creating rra: %v", err)
 		return nil, err
@@ -491,6 +491,7 @@ func (bc *verticalCache) flush(db VerticalFlusher) {
 			}
 		}
 
+		log.Printf("Migration: flushed key: %v", key)
 		segment.lastFlushRT = time.Now()
 
 	}
