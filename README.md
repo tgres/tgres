@@ -29,6 +29,12 @@ detailed description of how Tgres stores data see this
 
 ### Current Status
 
+Feb 2017 Note: A major change in the database structure has been made,
+Tgres now uses the "write optimized" / "vertical" storage. This change
+affected most of the internal code, and as far overall status, it set
+us back a bit, all tests are currently broken, but on the bright side,
+write performance is amazing now.
+
 Phase 1 or proof-of-concept for the project is the ability to (mostly)
 act as a drop-in replacement for Graphite (except for chart
 generation) and Statsd. Currently Tgres supports nearly all of
