@@ -106,7 +106,8 @@ var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, ac
 			sums = pacedMetricFlush(sums, gauges, acq, dpq)
 		case ps, ok := <-pacedMetricCh:
 			if !ok {
-				sums = pacedMetricFlush(sums, gauges, acq, dpq)
+				pacedMetricFlush(sums, gauges, acq, dpq)
+				close(flushCh)
 				return
 			} else {
 				key := ps.ident.String()

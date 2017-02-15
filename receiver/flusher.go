@@ -16,7 +16,6 @@
 package receiver
 
 import (
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -30,31 +29,98 @@ type dsFlusher struct {
 	flusherChs   flusherChannels
 	flushLimiter *rate.Limiter
 	db           serde.Flusher
+	vdb          serde.VerticalFlusher
+	vcache       *verticalCache
 	sr           statReporter
+	vdbCh        chan *vDpFlushRequest
 }
 
-func (f *dsFlusher) start(n int, flusherWg, startWg *sync.WaitGroup, mfs int) {
+type vDpFlushRequest struct {
+	bundleId, seg, i int64
+	dps              crossRRAPoints
+	latests          map[int64]time.Time
+}
+
+func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration) {
 	if mfs > 0 {
 		f.flushLimiter = rate.NewLimiter(rate.Limit(mfs), mfs)
 	}
-	f.flusherChs = make(flusherChannels, n)
-	for i := 0; i < n; i++ {
-		f.flusherChs[i] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
-		go flusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: fmt.Sprintf("flusher_%d", i)}, f, f.flusherChs[i])
+
+	// It's not clear what the size of this channel should be, but
+	// we know we do not want it to be infinite. When it blocks,
+	// it means the db most definitely cannot keep up, and it's
+	// okay for whatever upstream to be blocked by it.
+	f.vdbCh = make(chan *vDpFlushRequest, 1024)
+	f.vcache = &verticalCache{
+		Mutex:   &sync.Mutex{},
+		m:       make(map[bundleKey]*verticalCacheSegment),
+		minStep: minStep,
+		sr:      f.sr,
 	}
+
+	log.Printf(" -- 1 vertical db flusher...")
+	startWg.Add(1)
+	go vdbflusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: "vdbflusher2"}, f.vdb, f.vdbCh, f.sr)
+	go vcacheFlusher(f.vcache, f.vdbCh, f.vdb, minStep, f.sr)
+
+	log.Printf(" -- 1 ds flusher...")
+	startWg.Add(1)
+	f.flusherChs = make(flusherChannels, 1)
+	f.flusherChs[0] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
+	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherChs[0])
+}
+
+func (f *dsFlusher) stop() {
+	log.Printf("flusher.stop(): performing full vcache flush...")
+	f.vcache.flush(f.vdbCh, f.vdb, true)
+	log.Printf("flusher.stop(): performing full vcache flush done.")
+
+	if f.vdb != nil {
+		close(f.vdbCh)
+	}
+
+	for _, ch := range f.flusherChs {
+		close(ch)
+	}
+
+}
+
+func (f *dsFlusher) verticalFlush(ds serde.DbDataSourcer) {
+	for _, rra := range ds.RRAs() {
+		if _rra, ok := rra.(*serde.DbRoundRobinArchive); ok {
+			f.vcache.update(_rra)
+		} else {
+			log.Printf("verticalFlush: ERROR: rra not a *serde.DbRoundRobinArchive!")
+		}
+	}
+}
+
+func (f *dsFlusher) horizontalFlush(ds serde.DbDataSourcer, block bool) {
+	f.flusherChs.queueBlocking(ds, block)
 }
 
 func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
 	if f.db == nil {
 		return true
 	}
-	if f.flushLimiter != nil && !f.flushLimiter.Allow() {
-		f.sr.reportStatCount("serde.flushes_rate_limited", 1)
-		return false
+	if f.vdb != nil {
+		// These operations do not write to the db, but only move
+		// stuff to another cache.
+		f.verticalFlush(ds)
+		ds.ClearRRAs(false)
+		f.horizontalFlush(ds, block)
+		return true
+	} else {
+		// TODO: Does this ever happen even?
+		// horizontal
+		if !block && f.flushLimiter != nil && !f.flushLimiter.Allow() {
+			f.sr.reportStatCount("serde.flushes_rate_limited", 1)
+			return false
+		}
+		f.horizontalFlush(ds, block)
+		ds.ClearRRAs(false)
+		return true
 	}
-	f.flusherChs.queueBlocking(ds, block)
-	ds.ClearRRAs(false)
-	return true
 }
 
 func (f *dsFlusher) enabled() bool {
@@ -79,7 +145,8 @@ type dsFlusherBlocking interface {
 	statReporter() statReporter
 	flusher() serde.Flusher
 	channels() flusherChannels
-	start(n int, flusherWg, startWg *sync.WaitGroup, mfs int)
+	start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration)
+	stop()
 }
 
 type dsFlushRequest struct {
@@ -90,6 +157,7 @@ type dsFlushRequest struct {
 type flusherChannels []chan *dsFlushRequest
 
 func (f flusherChannels) queueBlocking(ds serde.DbDataSourcer, block bool) {
+	defer func() { recover() }() // if we're writing to a closed channel below
 	fr := &dsFlushRequest{ds: ds.Copy()}
 	if block {
 		fr.resp = make(chan bool, 1)
@@ -100,44 +168,106 @@ func (f flusherChannels) queueBlocking(ds serde.DbDataSourcer, block bool) {
 	}
 }
 
-func reportFlusherChannelFillPercent(flusherCh chan *dsFlushRequest, sr statReporter, ident string, nap time.Duration) {
-	fillStatName := fmt.Sprintf("receiver.flushers.%s.channel.fill_percent", ident)
-	lenStatName := fmt.Sprintf("receiver.flushers.%s.channel.len", ident)
-	cp := float64(cap(flusherCh))
-	for {
-		time.Sleep(nap)
-		ln := float64(len(flusherCh))
-		if cp > 0 {
-			fillPct := (ln / cp) * 100
-			sr.reportStatGauge(fillStatName, fillPct)
-		}
-		sr.reportStatGauge(lenStatName, ln)
-	}
-}
-
-var flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {
+var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequest) {
 	wc.onEnter()
 	defer wc.onExit()
 
-	go reportFlusherChannelFillPercent(flusherCh, dsf.statReporter(), wc.ident(), time.Second)
+	log.Printf("  - %s started.", wc.ident())
+	wc.onStarted()
+
+	toFlush := make(map[int64]*serde.DbDataSource)
+
+	limiter := rate.NewLimiter(rate.Limit(10), 10) // TODO: Why 10?
+
+	for {
+
+		var (
+			fr *dsFlushRequest
+			ok bool
+		)
+
+		select {
+		case fr, ok = <-ch:
+			if !ok {
+				log.Printf("%s: channel closed, exiting", wc.ident())
+				return
+			}
+		default:
+		}
+
+		if fr != nil {
+			ds := fr.ds.(*serde.DbDataSource)
+			if fr.resp != nil { // blocking flush requested
+				err := dsf.flusher().FlushDataSource(ds)
+				if err != nil {
+					log.Printf("%s: error flushing data source %v: %v", wc.ident(), ds, err)
+				}
+				delete(toFlush, ds.Id())
+				fr.resp <- (err == nil)
+			} else {
+				toFlush[ds.Id()] = ds
+			}
+
+		} else {
+			// At this point we're not obligated to do anything, but
+			// we can try to flush a few DSs at a very low rate, just
+			// in case.
+			if !limiter.Allow() {
+				continue
+			}
+			for id, ds := range toFlush { // flush a data source
+				err := dsf.flusher().FlushDataSource(ds)
+				if err != nil {
+					log.Printf("%s: error (background) flushing data source %v: %v", wc.ident(), ds, err)
+				}
+				delete(toFlush, id)
+				break
+			}
+		}
+	}
+}
+
+var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlushRequest, sr statReporter) {
+	wc.onEnter()
+	defer wc.onExit()
 
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
 
 	for {
-		fr, ok := <-flusherCh
+		dpr, ok := <-ch
 		if !ok {
-			log.Printf("%s: channel closed, exiting", wc.ident())
+			log.Printf("%s: exiting", wc.ident())
 			return
 		}
-		err := dsf.flusher().FlushDataSource(fr.ds)
-		if err != nil {
-			log.Printf("%s: error flushing data source %v: %v", wc.ident(), fr.ds, err)
+
+		if len(dpr.dps) > 0 {
+			start := time.Now()
+			if err := db.VerticalFlushDPs(dpr.bundleId, dpr.seg, dpr.i, dpr.dps); err != nil {
+				log.Printf("vdbflusher: ERROR in VerticalFlushDps: %v", err)
+			}
+			dur := time.Now().Sub(start).Seconds() * 1000
+			sr.reportStatGauge("serde.vertical.flush_duration_ms", dur)
+			sr.reportStatGauge("serde.vertical.flush_speed", float64(len(dpr.dps))/dur)
+			sr.reportStatCount("serde.vertical.flushes", 1)
 		}
-		if fr.resp != nil {
-			fr.resp <- (err == nil)
+
+		if len(dpr.latests) > 0 {
+			if err := db.VerticalFlushLatests(dpr.bundleId, dpr.seg, dpr.latests); err != nil {
+				log.Printf("verticalCache: ERROR in VerticalFlushLatests: %v", err)
+			}
+			sr.reportStatCount("serde.vertical.flush_latests", 1)
 		}
-		dsf.statReporter().reportStatCount("serde.datapoints_flushed", float64(fr.ds.PointCount()))
-		dsf.statReporter().reportStatCount("serde.flushes", 1)
+		sr.reportStatCount("serde.vertical.channel_gets", 1)
+
+	}
+}
+
+var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb serde.VerticalFlusher, nap time.Duration, sr statReporter) {
+	for {
+		time.Sleep(nap)
+		fc := vcache.flush(vdbCh, vdb, false) // This may block/slow
+		sr.reportStatCount("serde.vertical.channel_pushes", float64(fc))
+		sr.reportStatCount("serde.flushes", 1)
 	}
 }

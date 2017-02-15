@@ -108,10 +108,7 @@ var initCluster = func(bindAddr, advAddr string, joinIps []string) (c *cluster.C
 
 var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *receiver.Receiver {
 	r := receiver.New(db, receiver.MatchingDSSpecFinder(cfg))
-	r.NWorkers = cfg.Workers
-	r.MaxCacheDuration = cfg.MaxCache.Duration
-	r.MinCacheDuration = cfg.MinCache.Duration
-	r.MaxCachedPoints = cfg.MaxCachedPoints
+	r.MinStep = cfg.MinStep.Duration
 	r.StatFlushDuration = cfg.StatFlush.Duration
 	r.StatsNamePrefix = cfg.StatsNamePrefix
 	r.MaxFlushRatePerSecond = cfg.MaxFlushesPerSecond
@@ -239,6 +236,12 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	// *finally* start the receiver (because graceful restart, parent must save data first)
 	startReceiver(rcvr)
 	log.Printf("Receiver started, Tgres is ready.")
+
+	if os.Getenv("TGRES_TSBLAST") != "" {
+		time.Sleep(10 * time.Second)
+		log.Printf("tsblast: starting\n")
+		go tsblast(rcvr)
+	}
 
 	// Wait for HUP or TERM, etc.
 	waitForSignal(rcvr, serviceMgr, cfgPath, join)

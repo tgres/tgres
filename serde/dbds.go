@@ -16,9 +16,7 @@
 package serde
 
 import (
-	"bytes"
-	"fmt"
-	"sort"
+	"time"
 
 	"github.com/tgres/tgres/rrd"
 )
@@ -48,9 +46,11 @@ func NewDbDataSource(id int64, ident Ident, ds rrd.DataSourcer) *DbDataSource {
 
 func (ds *DbDataSource) Copy() rrd.DataSourcer {
 	result := &DbDataSource{
-		DataSourcer: ds.DataSourcer.Copy(),
-		id:          ds.id,
-		ident:       make(Ident, len(ds.ident)),
+		id:    ds.id,
+		ident: make(Ident, len(ds.ident)),
+	}
+	if ds.DataSourcer != nil {
+		result.DataSourcer = ds.DataSourcer.Copy()
 	}
 	for k, v := range ds.ident {
 		result.ident[k] = v
@@ -58,29 +58,12 @@ func (ds *DbDataSource) Copy() rrd.DataSourcer {
 	return result
 }
 
-type Ident map[string]string
-
-func (it Ident) String() string {
-
-	// It's tempting to cache the resulting string in the receiver,
-	// but given that most of what we do is look up newly arriving
-	// data points, this cache wouldn't really be used that much and
-	// only take up additional space.
-
-	keys := make([]string, 0, len(it))
-	for k, _ := range it {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	buf := &bytes.Buffer{}
-	buf.WriteByte('{')
-	for i, k := range keys {
-		fmt.Fprintf(buf, `%q: %q`, k, it[k])
-		if i < len(keys)-1 {
-			buf.WriteByte(',')
-		}
-	}
-	buf.WriteByte('}')
-	return buf.String()
+type dsRecord struct {
+	id         int64
+	identJson  []byte
+	stepMs     int64
+	hbMs       int64
+	lastupdate *time.Time
+	value      float64
+	durationMs int64
 }

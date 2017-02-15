@@ -40,7 +40,9 @@ type RoundRobinArchive struct {
 	step time.Duration
 	// Number of data points in the RRA.
 	size int64
-	// Time at which most recent data point and the RRA end.
+	// Time at which most recent data point and the RRA end. Latest
+	// does not include any partial PDP data, i.e. the real end of the
+	// RRA is at latest + Pdp.Duration.
 	latest time.Time
 	// X-Files Factor (XFF). When consolidating, how much of the
 	// higher-resolution RRA (as a value between 0 and 1) must be
@@ -82,15 +84,19 @@ type RoundRobinArchiver interface {
 	End() int64
 	PointCount() int
 	DPs() map[int64]float64
+	SetDPs(map[int64]float64)
 	Copy() RoundRobinArchiver
 	Begins(now time.Time) time.Time
 
-	// A side benifit from these being unexported is that you can only
+	// A side benefit from these being unexported is that you can only
 	// satisfy this interface by including this implementation
 	clear()
 	includes(t time.Time) bool
 	update(periodBegin, periodEnd time.Time, value float64, duration time.Duration)
 }
+
+// Set the data points (TODO is this necessary?)
+func (rra *RoundRobinArchive) SetDPs(dps map[int64]float64) { rra.dps = dps }
 
 // Latest returns the time on which the last slot ends.
 func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }
@@ -249,8 +255,9 @@ func (rra *RoundRobinArchive) clear() {
 	rra.start, rra.end = 0, 0
 }
 
-// Given a slot timestamp, RRA step and size, return the slot's index
-// in the data points array. Size of zero causes a division by zero panic.
+// Given a slot timestamp, RRA step and size, return the slot's
+// (0-based) index in the data points array. Size of zero causes a
+// division by zero panic.
 func SlotIndex(slotEnd time.Time, step time.Duration, size int64) int64 {
 	return ((slotEnd.UnixNano() / 1e6) / (step.Nanoseconds() / 1e6)) % size
 }
