@@ -271,18 +271,54 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 		rows.Close()
 	}
 	create_sql = `
-       CREATE VIEW %[1]stv AS
-       SELECT rra.ds_id AS ds_id, rra.id AS rra_id,
+-- normal view
+CREATE VIEW %[1]stv AS
+  SELECT rra.ds_id AS ds_id, rra.id AS rra_id,
          rra_latest.latest[rra.idx] - INTERVAL '1 MILLISECOND' * rra_bundle.step_ms *
            MOD(rra_bundle.size + MOD(EXTRACT(EPOCH FROM rra_latest.latest[rra.idx])::BIGINT*1000/rra_bundle.step_ms, rra_bundle.size) - i, rra_bundle.size) AS t,
          dp[rra.idx] AS r
-       FROM %[1]srra AS rra
-       JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
-       JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
-       JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
-
-       -- TODO: tvd view
-    `
+   FROM %[1]srra AS rra
+   JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
+   JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
+   JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg;
+-- debug view
+CREATE VIEW %[1]stvd AS
+  SELECT
+      ds_id
+    , rra_id
+    , tstzrange(lag(t, 1) OVER (PARTITION BY ds_id, rra_id ORDER BY t), t, '(]') AS tr
+    , r
+    , step
+    , i
+    , last_i
+    , last_t
+    , slot_distance
+    , seg
+    , idx
+    , pos
+    FROM (
+     SELECT
+        rra.ds_id AS ds_id
+       ,rra.id AS rra_id
+       ,rra_latest.latest[rra.idx] - '00:00:00.001'::interval * rra_bundle.step_ms::double precision *
+          mod(rra_bundle.size + mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
+          ts.i, rra_bundle.size::bigint)::double precision AS t
+       ,ts.dp[rra.idx] AS r
+       ,'00:00:00.001'::interval * rra_bundle.step_ms::double precision AS step
+       ,i AS i
+       ,mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) AS last_i
+       ,date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 AS last_t
+       ,mod(rra_bundle.size + mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
+                   ts.i, rra_bundle.size::bigint)::double precision AS slot_distance
+       ,rra.seg AS seg
+       ,rra.idx AS idx
+       ,rra.pos AS pos
+     FROM %[1]srra rra
+     JOIN %[1]srra_bundle rra_bundle ON rra_bundle.id = rra.rra_bundle_id
+     JOIN %[1]srra_latest rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
+     JOIN %[1]sts ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
+  ) foo;
+`
 	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			log.Printf("ERROR: initial CREATE VIEW failed: %v", err)

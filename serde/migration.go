@@ -98,7 +98,7 @@ func Migrate(connect_string, oldPrefix, newPrefix string) error {
 	}
 
 	if tx == nil {
-		fmt.Printf("Migration: NO NEED TO MIGRATE.")
+		log.Printf("Migration: NO NEED TO MIGRATE.")
 		return nil
 	}
 
