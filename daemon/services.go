@@ -25,6 +25,7 @@ import (
 	"time"
 
 	pickle "github.com/hydrogen18/stalecucumber"
+	"github.com/tgres/tgres/blaster"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/graceful"
 	"github.com/tgres/tgres/misc"
@@ -115,6 +116,7 @@ func (r *serviceManager) closeListeners() {
 type wwwServer struct {
 	rcvr       *receiver.Receiver
 	rcache     dsl.NamedDSFetcher
+	blstr      *blaster.Blaster
 	listener   *graceful.Listener
 	listenSpec string
 }

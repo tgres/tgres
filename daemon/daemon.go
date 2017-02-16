@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tgres/tgres/blaster"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/receiver"
@@ -189,6 +190,12 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 
 	// Create Receiver (with nil cluster, because if graceful, then we must wait for parent to shutdown)
 	rcvr := createReceiver(cfg, nil, db)
+
+	// Is there a blaster?
+	if os.Getenv("TGRES_BLASTER") != "" {
+		log.Printf("Creating a blaster instance.")
+		rcvr.Blaster = blaster.New(rcvr)
+	}
 
 	// Create and run the Service Manager
 	rcache := dsl.NewNamedDSFetcher(db.Fetcher())

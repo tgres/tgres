@@ -39,6 +39,10 @@ func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl
 	http.HandleFunc("/pixel/setgauge", h.PixelSetGaugeHandler(rcvr))
 	http.HandleFunc("/pixel/append", h.PixelAppendHandler(rcvr))
 
+	if rcvr.Blaster != nil {
+		http.HandleFunc("/blaster/set", h.BlasterSetHandler(rcvr.Blaster))
+	}
+
 	server := &http.Server{
 		Addr:           addr,
 		ReadTimeout:    10 * time.Second,

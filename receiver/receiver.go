@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/blaster"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/serde"
 )
@@ -72,6 +73,8 @@ type Receiver struct {
 
 	ReportStats       bool   // report internal stats?
 	ReportStatsPrefix string // prefix for internal stats
+
+	Blaster *blaster.Blaster
 
 	// unexported internal stuff
 
