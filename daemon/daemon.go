@@ -244,12 +244,6 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	startReceiver(rcvr)
 	log.Printf("Receiver started, Tgres is ready.")
 
-	if os.Getenv("TGRES_TSBLAST") != "" {
-		time.Sleep(10 * time.Second)
-		log.Printf("tsblast: starting\n")
-		go tsblast(rcvr)
-	}
-
 	// Wait for HUP or TERM, etc.
 	waitForSignal(rcvr, serviceMgr, cfgPath, join)
 
