@@ -68,6 +68,9 @@ var doStart = func(r *Receiver) {
 	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.cluster, r, r.dsc, r.flusher)
 	startWg.Wait()
 
+	log.Printf("Receiver: Starting runtime cpu/mem reporter.")
+	go reportRuntime(r)
+
 	log.Printf("Receiver: Ready.")
 }
 

@@ -48,7 +48,8 @@ func New(rcvr dataPointQueuer) *Blaster {
 		rcvr:    rcvr,
 		limiter: rate.NewLimiter(rate.Limit(0), 1), // Zero limit allows no events
 		span:    600 * time.Second,
-		prefix:  "tgres.blaster"}
+		prefix:  "tgres.blaster",
+	}
 	go blast(b)
 	return b
 }
@@ -118,15 +119,15 @@ func blast(b *Blaster) {
 		if sz := b.cycle(); sz > 0 {
 			cnt++
 			tsz += sz
-		}
-
-		if cnt%1000 == 0 {
-			if time.Now().Sub(lastStat) > statPeriod {
-				log.Printf("Blaster: %v Count: %d \tper/sec: %v \tBps: %v\n", time.Now(), cnt, float64(cnt)/time.Now().Sub(lastStat).Seconds(), int64(float64(tsz)/time.Now().Sub(lastStat).Seconds()))
-				cnt, tsz = 0, 0
-				lastStat = time.Now()
+			if cnt%1000 == 0 {
+				if time.Now().Sub(lastStat) > statPeriod {
+					log.Printf("Blaster: %v Count: %d \tper/sec: %v \tBps: %v\n", time.Now(), cnt, float64(cnt)/time.Now().Sub(lastStat).Seconds(), int64(float64(tsz)/time.Now().Sub(lastStat).Seconds()))
+					cnt, tsz = 0, 0
+					lastStat = time.Now()
+				}
 			}
 		}
+
 	}
 }
 

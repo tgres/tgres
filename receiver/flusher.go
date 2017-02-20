@@ -16,6 +16,7 @@
 package receiver
 
 import (
+	"context"
 	"log"
 	"sync"
 	"time"
@@ -68,6 +69,12 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 	f.flusherChs = make(flusherChannels, 1)
 	f.flusherChs[0] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
 	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherChs[0])
+
+	if tdb, ok := f.db.(tsTableSizer); ok {
+		log.Printf(" -- ts table size reporter")
+		go reportTsTableSize(tdb, f.sr)
+		_ = tdb
+	}
 }
 
 func (f *dsFlusher) stop() {
@@ -109,18 +116,8 @@ func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
 		f.verticalFlush(ds)
 		ds.ClearRRAs(false)
 		f.horizontalFlush(ds, block)
-		return true
-	} else {
-		// TODO: Does this ever happen even?
-		// horizontal
-		if !block && f.flushLimiter != nil && !f.flushLimiter.Allow() {
-			f.sr.reportStatCount("serde.flushes_rate_limited", 1)
-			return false
-		}
-		f.horizontalFlush(ds, block)
-		ds.ClearRRAs(false)
-		return true
 	}
+	return true // ZZZ
 }
 
 func (f *dsFlusher) enabled() bool {
@@ -177,6 +174,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 
 	toFlush := make(map[int64]*serde.DbDataSource)
 
+	ctx := context.TODO()
 	limiter := rate.NewLimiter(rate.Limit(10), 10) // TODO: Why 10?
 
 	for {
@@ -212,9 +210,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 			// At this point we're not obligated to do anything, but
 			// we can try to flush a few DSs at a very low rate, just
 			// in case.
-			if !limiter.Allow() {
-				continue
-			}
+			limiter.Wait(ctx)
 			for id, ds := range toFlush { // flush a data source
 				err := dsf.flusher().FlushDataSource(ds)
 				if err != nil {
@@ -259,7 +255,6 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 			sr.reportStatCount("serde.vertical.flush_latests", 1)
 		}
 		sr.reportStatCount("serde.vertical.channel_gets", 1)
-
 	}
 }
 
@@ -269,5 +264,20 @@ var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb
 		fc := vcache.flush(vdbCh, vdb, false) // This may block/slow
 		sr.reportStatCount("serde.vertical.channel_pushes", float64(fc))
 		sr.reportStatCount("serde.flushes", 1)
+	}
+}
+
+// Periodically report the size of the TS table - this can be used to
+// detect table bloat when autovacuum is not keeping up
+
+type tsTableSizer interface {
+	TsTableSize() (size int64, err error)
+}
+
+func reportTsTableSize(ts tsTableSizer, sr statReporter) {
+	for {
+		time.Sleep(15 * time.Second)
+		sz, _ := ts.TsTableSize()
+		sr.reportStatGauge("serde.ts_table_size", float64(sz))
 	}
 }

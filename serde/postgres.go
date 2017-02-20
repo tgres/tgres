@@ -862,6 +862,27 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 	return dps, nil
 }
 
+func (p *pgvSerDe) TsTableSize() (size int64, err error) {
+	const stmt = `
+  SELECT pg_total_relation_size(c.oid) AS total_bytes
+    FROM pg_class c
+    LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE relname = '%[1]sts';`
+	rows, err := p.dbConn.Query(fmt.Sprintf(stmt, p.prefix))
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		err = rows.Scan(&size)
+		if err != nil {
+			return 0, err
+		}
+		return size, nil
+	}
+	return 0, nil
+}
+
 func (p *pgvSerDe) rraBundleIncrPos(id int64) (int64, error) {
 	stmt := fmt.Sprintf("UPDATE %[1]srra_bundle SET last_pos = last_pos + 1 WHERE id = $1 RETURNING last_pos", p.prefix)
 	rows, err := p.dbConn.Query(stmt, id)
