@@ -52,17 +52,24 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 		),
 	)
 
+	// This is so that we can know whether it was an INSERT or an UPDATE
+	ds.created = dsr.created
 	return ds, nil
 }
 
-func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
+func dsRecordFromRow(rows *sql.Rows) (*dsRecord, error) {
 	var dsr dsRecord
-	err := rows.Scan(&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.lastupdate, &dsr.value, &dsr.durationMs)
+	err := rows.Scan(&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.lastupdate, &dsr.value, &dsr.durationMs, &dsr.created)
+	return &dsr, err
+}
+
+func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
+	dsr, err := dsRecordFromRow(rows)
 	if err != nil {
 		log.Printf("dataSourceFromRow(): error scanning row: %v", err)
 		return nil, err
 	}
-	return dataSourceFromDsRec(&dsr)
+	return dataSourceFromDsRec(dsr)
 }
 
 type pgSearchResult struct {

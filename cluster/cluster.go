@@ -483,7 +483,15 @@ func (c *Cluster) notifyAll() {
 
 type Node struct {
 	*memberlist.Node
-	rpc *rpc.Client
+	rpc           *rpc.Client
+	sanitizedAddr string
+}
+
+func (n *Node) SanitizedAddr() string {
+	if n.sanitizedAddr == "" {
+		n.sanitizedAddr = strings.Replace(n.Addr.String(), ".", "_", -1)
+	}
+	return n.sanitizedAddr
 }
 
 func (n *Node) extractMeta() (*nodeMeta, error) {

@@ -23,18 +23,21 @@ import (
 
 type DbDataSource struct {
 	rrd.DataSourcer
-	ident Ident
-	id    int64
+	ident   Ident
+	id      int64
+	created bool
 }
 
 type DbDataSourcer interface {
 	rrd.DataSourcer
 	Ident() Ident
 	Id() int64
+	Created() bool
 }
 
-func (ds *DbDataSource) Ident() Ident { return ds.ident }
-func (ds *DbDataSource) Id() int64    { return ds.id }
+func (ds *DbDataSource) Ident() Ident  { return ds.ident }
+func (ds *DbDataSource) Id() int64     { return ds.id }
+func (ds *DbDataSource) Created() bool { return ds.created }
 
 func NewDbDataSource(id int64, ident Ident, ds rrd.DataSourcer) *DbDataSource {
 	return &DbDataSource{
@@ -66,4 +69,5 @@ type dsRecord struct {
 	lastupdate *time.Time
 	value      float64
 	durationMs int64
+	created    bool
 }

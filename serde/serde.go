@@ -66,8 +66,8 @@ type Flusher interface {
 }
 
 type VerticalFlusher interface {
-	VerticalFlushDPs(bunlde_id, seg, i int64, dps map[int64]float64) error
-	VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) error
+	VerticalFlushDPs(bunlde_id, seg, i int64, dps map[int64]float64) (int, error)
+	VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) (int, error)
 }
 
 type SerDe interface {

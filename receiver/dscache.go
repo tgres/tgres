@@ -136,14 +136,15 @@ func (cds *cachedDs) appendIncoming(dp *incomingDP) {
 	cds.incoming = append(cds.incoming, dp)
 }
 
-func (cds *cachedDs) processIncoming() error {
+func (cds *cachedDs) processIncoming() (int, error) {
 	var err error
 	for _, dp := range cds.incoming {
 		// continue on errors
 		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
 	}
+	count := len(cds.incoming)
 	cds.incoming = nil
-	return err
+	return count, err
 }
 
 // distDs keeps a pointer to the dsCache so that it can delete itself

@@ -32,7 +32,7 @@ func runtimeMemory() uint64 {
 }
 
 func runtimeCpuPercent() float64 {
-	ps, _ := cpu.Percent(100*time.Millisecond, false)
+	ps, _ := cpu.Percent(0, false)
 	if len(ps) > 0 {
 		return ps[0]
 	}

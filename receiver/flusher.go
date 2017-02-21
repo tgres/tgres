@@ -68,12 +68,11 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 	startWg.Add(1)
 	f.flusherChs = make(flusherChannels, 1)
 	f.flusherChs[0] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
-	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherChs[0])
+	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherChs[0], f.sr)
 
 	if tdb, ok := f.db.(tsTableSizer); ok {
 		log.Printf(" -- ts table size reporter")
 		go reportTsTableSize(tdb, f.sr)
-		_ = tdb
 	}
 }
 
@@ -165,7 +164,7 @@ func (f flusherChannels) queueBlocking(ds serde.DbDataSourcer, block bool) {
 	}
 }
 
-var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequest) {
+var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequest, sr statReporter) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -196,12 +195,19 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 		if fr != nil {
 			ds := fr.ds.(*serde.DbDataSource)
 			if fr.resp != nil { // blocking flush requested
+				start := time.Now()
 				err := dsf.flusher().FlushDataSource(ds)
 				if err != nil {
 					log.Printf("%s: error flushing data source %v: %v", wc.ident(), ds, err)
 				}
+				dur := time.Now().Sub(start).Seconds()
 				delete(toFlush, ds.Id())
 				fr.resp <- (err == nil)
+				if err == nil {
+					sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
+					sr.reportStatCount("serde.flush_ds.count", 1)
+					sr.reportStatCount("serde.flush_ds.sql_ops", 1)
+				}
 			} else {
 				toFlush[ds.Id()] = ds
 			}
@@ -212,11 +218,18 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 			// in case.
 			limiter.Wait(ctx)
 			for id, ds := range toFlush { // flush a data source
+				start := time.Now()
 				err := dsf.flusher().FlushDataSource(ds)
 				if err != nil {
 					log.Printf("%s: error (background) flushing data source %v: %v", wc.ident(), ds, err)
 				}
+				dur := time.Now().Sub(start).Seconds()
 				delete(toFlush, id)
+				if err == nil {
+					sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
+					sr.reportStatCount("serde.flush_ds.count", 1)
+					sr.reportStatCount("serde.flush_ds.sql_ops", 1)
+				}
 				break
 			}
 		}
@@ -239,22 +252,30 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 
 		if len(dpr.dps) > 0 {
 			start := time.Now()
-			if err := db.VerticalFlushDPs(dpr.bundleId, dpr.seg, dpr.i, dpr.dps); err != nil {
+			sqlOps, err := db.VerticalFlushDPs(dpr.bundleId, dpr.seg, dpr.i, dpr.dps)
+			if err != nil {
 				log.Printf("vdbflusher: ERROR in VerticalFlushDps: %v", err)
 			}
-			dur := time.Now().Sub(start).Seconds() * 1000
-			sr.reportStatGauge("serde.vertical.flush_duration_ms", dur)
-			sr.reportStatGauge("serde.vertical.flush_speed", float64(len(dpr.dps))/dur)
-			sr.reportStatCount("serde.vertical.flushes", 1)
+			dur := time.Now().Sub(start).Seconds()
+			sr.reportStatGauge("serde.flush_dps.duration_ms", dur*1000)
+			sr.reportStatGauge("serde.flush_dps.speed", float64(len(dpr.dps))/dur)
+			sr.reportStatCount("serde.flush_dps.count", float64(len(dpr.dps)))
+			sr.reportStatCount("serde.flush_dps.sql_ops", float64(sqlOps))
 		}
 
 		if len(dpr.latests) > 0 {
-			if err := db.VerticalFlushLatests(dpr.bundleId, dpr.seg, dpr.latests); err != nil {
+			start := time.Now()
+			sqlOps, err := db.VerticalFlushLatests(dpr.bundleId, dpr.seg, dpr.latests)
+			if err != nil {
 				log.Printf("verticalCache: ERROR in VerticalFlushLatests: %v", err)
 			}
-			sr.reportStatCount("serde.vertical.flush_latests", 1)
+			dur := time.Now().Sub(start).Seconds()
+			sr.reportStatGauge("serde.flush_latests.duration_ms", dur*1000)
+			sr.reportStatGauge("serde.flush_latests.speed", float64(len(dpr.latests))/dur)
+			sr.reportStatCount("serde.flush_latests.count", float64(len(dpr.latests)))
+			sr.reportStatCount("serde.flush_latests.sql_ops", float64(sqlOps))
 		}
-		sr.reportStatCount("serde.vertical.channel_gets", 1)
+		sr.reportStatCount("serde.flush_channel.gets", 1)
 	}
 }
 
@@ -262,8 +283,7 @@ var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb
 	for {
 		time.Sleep(nap)
 		fc := vcache.flush(vdbCh, vdb, false) // This may block/slow
-		sr.reportStatCount("serde.vertical.channel_pushes", float64(fc))
-		sr.reportStatCount("serde.flushes", 1)
+		sr.reportStatCount("serde.flush_channel.pushes", float64(fc))
 	}
 }
 
@@ -278,6 +298,6 @@ func reportTsTableSize(ts tsTableSizer, sr statReporter) {
 	for {
 		time.Sleep(15 * time.Second)
 		sz, _ := ts.TsTableSize()
-		sr.reportStatGauge("serde.ts_table_size", float64(sz))
+		sr.reportStatGauge("serde.ts_table_bytes", float64(sz))
 	}
 }

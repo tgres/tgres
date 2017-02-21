@@ -125,7 +125,7 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, db serde.VerticalFlushe
 			continue
 		}
 
-		bc.sr.reportStatGauge("serde.vertical.segment_rows", float64(len(segment.dps)))
+		bc.sr.reportStatGauge("receiver.vcache.segment_rows", float64(len(segment.dps)))
 
 		// This is our version of latests, since if we're going to
 		// possibly skip the latest segment row, the latests in the
@@ -174,11 +174,11 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, db serde.VerticalFlushe
 	}
 	bc.Unlock()
 
-	bc.sr.reportStatCount("serde.vertical.datapoints_flushed", float64(count))
-	bc.sr.reportStatGauge("serde.vertical.cached_points", float64(qcount))
-	bc.sr.reportStatGauge("serde.vertical.cached_segments", float64(scount))
-	bc.sr.reportStatGauge("serde.vertical.cached_segment_rows", float64(rcount))
-	bc.sr.reportStatGauge("serde.vertical.cached_points_per_rows", float64(qcount)/float64(scount)/float64(rcount))
+	bc.sr.reportStatCount("receiver.vcache.points_flushed", float64(count))
+	bc.sr.reportStatGauge("receiver.vcache.points", float64(qcount))
+	bc.sr.reportStatGauge("receiver.vcache.segments", float64(scount))
+	bc.sr.reportStatGauge("receiver.vcache.segment_rows", float64(rcount))
+	bc.sr.reportStatGauge("receiver.vcache.points_per_rows", float64(qcount)/float64(scount)/float64(rcount))
 
 	return flushCount
 }

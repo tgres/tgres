@@ -155,14 +155,15 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sqlSelectDSByIdent, err = p.dbConn.Prepare(fmt.Sprintf(
-		"SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM  %[1]sds WHERE ident = $1",
+		"SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, false AS created FROM  %[1]sds WHERE ident = $1",
 		p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlInsertDS, err = p.dbConn.Prepare(fmt.Sprintf(
+		// Here created is a trick to determine whether this was an INSERT or an UPDATE
 		"INSERT INTO %[1]sds AS ds (ident, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
-			"ON CONFLICT (ident) DO UPDATE SET step_ms = ds.step_ms "+
-			"RETURNING id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms", p.prefix)); err != nil {
+			"ON CONFLICT (ident) DO UPDATE SET created = false "+
+			"RETURNING id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, created", p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlInsertRRA, err = p.dbConn.Prepare(fmt.Sprintf(
@@ -179,7 +180,7 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms FROM %[1]sds AS ds WHERE id = $1",
+	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, false AS created FROM %[1]sds AS ds WHERE id = $1",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -221,7 +222,8 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
        heartbeat_ms BIGINT NOT NULL,
        lastupdate TIMESTAMPTZ,
        value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
-       duration_ms BIGINT NOT NULL DEFAULT 0);
+       duration_ms BIGINT NOT NULL DEFAULT 0,
+       created BOOL NOT NULL DEFAULT true);
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_ident_uniq ON %[1]sds (ident);
        CREATE INDEX IF NOT EXISTS %[1]sidx_ds_ident ON %[1]sds USING gin(ident);
@@ -638,7 +640,7 @@ func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 	return nil
 }
 
-func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float64) error {
+func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float64) (sqlOps int, err error) {
 
 	chunks := arrayUpdateChunks(dps)
 
@@ -651,20 +653,21 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 
 		res, err := p.dbConn.Exec(stmt, args...)
 		if err != nil {
-			return err
+			return 0, err
 		}
+		sqlOps++
 
 		if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
 			if _, err = p.sqlInsertTs.Exec(bundle_id, seg, i); err != nil {
-				return err
+				return 0, err
 			}
 			if res, err := p.dbConn.Exec(stmt, args...); err != nil {
-				return err
+				return 0, err
 			} else if affected, _ := res.RowsAffected(); affected == 0 {
-				return fmt.Errorf("Unable to update row?")
+				return 0, fmt.Errorf("Unable to update row?")
 			}
 		}
-		return nil
+		return sqlOps, nil
 	} else {
 		//
 		// Use multi-statement update // TODO make me a funciton!
@@ -673,31 +676,33 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 
 			tx, err := p.dbConn.Begin()
 			if err != nil {
-				return err
+				return 0, err
 			}
 			defer tx.Commit() // TODO is this actually faster?
 
 			res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...)
 			if err != nil {
-				return err
+				return 0, err
 			}
+			sqlOps++
 
 			if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
 				if _, err = tx.Stmt(p.sqlInsertTs).Exec(bundle_id, seg, i); err != nil {
-					return err
+					return 0, err
 				}
 				if res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...); err != nil {
-					return err
+					return 0, err
 				} else if affected, _ := res.RowsAffected(); affected == 0 {
-					return fmt.Errorf("Unable to update row?")
+					return 0, fmt.Errorf("Unable to update row?")
 				}
+				sqlOps++
 			}
 		}
-		return nil
+		return sqlOps, nil
 	}
 }
 
-func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) error {
+func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) (sqlOps int, err error) {
 	ilatests := make(map[int64]interface{})
 	for k, v := range latests {
 		ilatests[k] = v
@@ -711,20 +716,21 @@ func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]
 
 	res, err := p.dbConn.Exec(stmt, args...)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	sqlOps++
 
 	if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
 		if _, err = p.sqlInsertRRALatest.Exec(bundle_id, seg); err != nil {
-			return err
+			return 0, err
 		}
 		if res, err := p.dbConn.Exec(stmt, args...); err != nil {
-			return err
+			return 0, err
 		} else if affected, _ := res.RowsAffected(); affected == 0 {
-			return fmt.Errorf("Unable to update row?")
+			return 0, fmt.Errorf("Unable to update row?")
 		}
 	}
-	return nil
+	return sqlOps, nil
 }
 
 // FetchOrCreateDataSource loads or returns an existing DS. This is
@@ -757,9 +763,10 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		}
 	}
 	defer rows.Close()
+
 	ds, err := dataSourceFromRow(rows)
 	if err != nil {
-		log.Printf("FetchOrCreateDataSource(): error: %v", err)
+		log.Printf("FetchOrCreateDataSource(): error 1: %v", err)
 		return nil, err
 	}
 

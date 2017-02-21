@@ -63,25 +63,28 @@ var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan 
 	return nil
 }
 
-var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) {
-	if err := cds.processIncoming(); err != nil {
+var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
+	cnt, err := cds.processIncoming()
+	if err != nil {
 		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
 	}
 	if cds.PointCount() > 0 {
 		dsf.flushDs(cds.DbDataSourcer, false)
 	}
+	return cnt
 }
 
-var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg) (forwarded int) {
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg) (accepted, forwarded int, dest string) {
 	if clstr == nil {
-		directorProcessDataPoint(cds, dsf)
-		return 0
+		accepted = directorProcessDataPoint(cds, dsf)
+		return accepted, 0, ""
 	}
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
-			directorProcessDataPoint(cds, dsf)
+			accepted = directorProcessDataPoint(cds, dsf)
 		} else {
+			dest = node.SanitizedAddr()
 			for _, dp := range cds.incoming {
 				if err := directorForwardDPToNode(dp, node, snd); err != nil {
 					log.Printf("director: Error forwarding a data point: %v", err)
@@ -115,7 +118,10 @@ var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCac
 
 	cds := dsc.getByIdentOrCreateEmpty(dp.Ident)
 	if cds == nil {
-		log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
+		sr.reportStatCount("receiver.datapoints.dropped", 1)
+		if debug {
+			log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
+		}
 		return
 	}
 
@@ -125,15 +131,20 @@ var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCac
 		// this DS needs to be loaded.
 		loaderCh <- cds
 	} else {
-		forwarded := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
-		sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
+		accepted, forwarded, dest := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
+		if forwarded > 0 {
+			sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(forwarded))
+			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
+		} else if accepted > 0 {
+			sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
+		}
 	}
 }
 
 func reportOverrunQueueSize(queue *fifoQueue, sr statReporter, nap time.Duration) {
 	for {
 		time.Sleep(nap) // TODO this should be a ticker really
-		sr.reportStatGauge("receiver.overrun_queue.len", float64(queue.size()))
+		sr.reportStatGauge("receiver.queue_len", float64(queue.size()))
 	}
 }
 
@@ -144,7 +155,7 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			sr.reportStatGauge("receiver.loader.queue_len", float64(queue.size()))
+			sr.reportStatGauge("receiver.load_queue_len", float64(queue.size()))
 		}
 	}()
 
@@ -166,6 +177,10 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 				log.Printf("loader: database error: %v", err)
 				continue
 			}
+		}
+
+		if cds.Created() {
+			sr.reportStatCount("receiver.created", 1)
 		}
 
 		dpCh <- cds
@@ -240,8 +255,13 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			directorProcessIncomingDP(dp, sr, dsc, loaderCh, dsf, clstr, snd)
 		} else if cds != nil {
 			// this came from the loader, we do not need to look it up
-			forwarded := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
-			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
+			accepted, forwarded, dest := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
+			if forwarded > 0 {
+				sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(forwarded))
+				sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
+			} else if accepted > 0 {
+				sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
+			}
 		} else {
 			// signal to exit
 			log.Printf("director: closing loader channel.")

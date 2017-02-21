@@ -20,7 +20,6 @@ package receiver
 
 import (
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -162,7 +161,7 @@ func (r *Receiver) SetCluster(c clusterer) {
 	ln := c.LocalNode()
 	if ln != nil {
 		// if this is a cluster, append the node address to the prefix
-		addr := strings.Replace(ln.Addr.String(), ".", "_", -1)
+		addr := ln.SanitizedAddr()
 		if r.ReportStatsPrefix != "" {
 			r.ReportStatsPrefix += ("." + addr)
 		} else {

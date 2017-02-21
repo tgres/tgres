@@ -70,21 +70,6 @@ var pacedMetricPeriodicFlushSignal = func(flushCh chan bool, frequency time.Dura
 	}
 }
 
-func reportPacedMetricChannelFillPercent(pacedMetricCh chan *pacedMetric, sr statReporter, nap time.Duration) {
-	fillStatName := "receiver.pacedmetric.channel.fill_percent"
-	lenStatName := "receiver.pacedmetric.channel.len"
-	cp := float64(cap(pacedMetricCh))
-	for {
-		time.Sleep(nap)
-		ln := float64(len(pacedMetricCh))
-		if cp > 0 {
-			fillPct := (ln / cp) * 100
-			sr.reportStatGauge(fillStatName, fillPct)
-		}
-		sr.reportStatGauge(lenStatName, ln)
-	}
-}
-
 var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, acq aggregatorCommandQueuer, dpq dataPointQueuer, frequency time.Duration, sr statReporter) {
 	wc.onEnter()
 	defer wc.onExit()
@@ -94,8 +79,6 @@ var pacedMetricWorker = func(wc wController, pacedMetricCh chan *pacedMetric, ac
 
 	var flushCh = make(chan bool, 1)
 	go pacedMetricPeriodicFlushSignal(flushCh, frequency, wc.ident())
-
-	go reportPacedMetricChannelFillPercent(pacedMetricCh, sr, time.Second)
 
 	log.Printf("%s: started.", wc.ident())
 	wc.onStarted()
