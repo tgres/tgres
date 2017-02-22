@@ -207,7 +207,7 @@ func (r *Receiver) QueueGauge(ident serde.Ident, v float64) {
 
 // Reporting internal to Tgres: count
 func (r *Receiver) reportStatCount(name string, f float64) {
-	if r != nil && r.ReportStats && f != 0 {
+	if r != nil && r.ReportStats {
 		r.QueueSum(serde.Ident{"name": r.ReportStatsPrefix + "." + name}, f)
 	}
 }

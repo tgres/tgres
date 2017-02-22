@@ -143,7 +143,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
 	}
 	count := len(cds.incoming)
-	cds.incoming = nil
+	cds.incoming = cds.incoming[:0] // leave the backing array in place to avoid extra memory allocations
 	return count, err
 }
 

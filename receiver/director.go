@@ -64,34 +64,37 @@ var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan 
 }
 
 var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
+
 	cnt, err := cds.processIncoming()
+
 	if err != nil {
 		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
 	}
+
 	if cds.PointCount() > 0 {
 		dsf.flushDs(cds.DbDataSourcer, false)
 	}
 	return cnt
 }
 
-var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg) (accepted, forwarded int, dest string) {
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg, stats *dpStats) {
 	if clstr == nil {
-		accepted = directorProcessDataPoint(cds, dsf)
-		return accepted, 0, ""
+		stats.accepted += directorProcessDataPoint(cds, dsf)
+		return
 	}
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
-			accepted = directorProcessDataPoint(cds, dsf)
+			stats.accepted += directorProcessDataPoint(cds, dsf)
 		} else {
-			dest = node.SanitizedAddr()
 			for _, dp := range cds.incoming {
 				if err := directorForwardDPToNode(dp, node, snd); err != nil {
 					log.Printf("director: Error forwarding a data point: %v", err)
 					// TODO For not ready error - sleep and return the dp to the channel?
 					continue
 				}
-				forwarded++
+				stats.forwarded++
+				stats.forwarded_to[node.SanitizedAddr()]++
 			}
 			cds.incoming = nil
 			// Always clear RRAs to prevent it from being saved
@@ -104,9 +107,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer
 	return
 }
 
-var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCache, loaderCh chan interface{}, dsf dsFlusherBlocking, clstr clusterer, snd chan *cluster.Msg) {
-
-	sr.reportStatCount("receiver.datapoints.total", 1)
+var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, dsf dsFlusherBlocking, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
 
 	if math.IsNaN(dp.Value) {
 		// NaN is meaningless, e.g. "the thermometer is
@@ -118,7 +119,7 @@ var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCac
 
 	cds := dsc.getByIdentOrCreateEmpty(dp.Ident)
 	if cds == nil {
-		sr.reportStatCount("receiver.datapoints.dropped", 1)
+		stats.dropped++
 		if debug {
 			log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
 		}
@@ -131,13 +132,7 @@ var directorProcessIncomingDP = func(dp *incomingDP, sr statReporter, dsc *dsCac
 		// this DS needs to be loaded.
 		loaderCh <- cds
 	} else {
-		accepted, forwarded, dest := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
-		if forwarded > 0 {
-			sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(forwarded))
-			sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
-		} else if accepted > 0 {
-			sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
-		}
+		directorProcessOrForward(dsc, cds, clstr, dsf, snd, stats)
 	}
 }
 
@@ -159,7 +154,7 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 		}
 	}()
 
-	loaderOutCh := make(chan interface{})
+	loaderOutCh := make(chan interface{}, 128)
 	go elasticCh(loaderCh, loaderOutCh, queue)
 
 	for {
@@ -185,6 +180,12 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 
 		dpCh <- cds
 	}
+}
+
+type dpStats struct {
+	total, accepted, forwarded, dropped int
+	forwarded_to                        map[string]int
+	last                                time.Time
 }
 
 var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking) {
@@ -214,6 +215,8 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 	go loader(loaderCh, dpCh, dsc, sr)
 
 	wc.onStarted()
+
+	stats := dpStats{forwarded_to: make(map[string]int), last: time.Now()}
 
 	for {
 		var (
@@ -252,20 +255,27 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			// if the dp ident is not found, it will be submitted to
 			// the loader, which will return it to us through the dpCh
 			// as a cachedDs.
-			directorProcessIncomingDP(dp, sr, dsc, loaderCh, dsf, clstr, snd)
+			directorProcessIncomingDP(dp, dsc, loaderCh, dsf, clstr, snd, &stats)
+			stats.total++
 		} else if cds != nil {
 			// this came from the loader, we do not need to look it up
-			accepted, forwarded, dest := directorProcessOrForward(dsc, cds, clstr, dsf, snd)
-			if forwarded > 0 {
-				sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(forwarded))
-				sr.reportStatCount("receiver.datapoints.forwarded", float64(forwarded))
-			} else if accepted > 0 {
-				sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
-			}
+			directorProcessOrForward(dsc, cds, clstr, dsf, snd, &stats)
 		} else {
 			// signal to exit
 			log.Printf("director: closing loader channel.")
 			close(loaderCh)
+		}
+
+		if stats.last.Before(time.Now().Add(-time.Second)) {
+			sr.reportStatCount("receiver.datapoints.total", float64(stats.total))
+			sr.reportStatCount("receiver.datapoints.dropped", float64(stats.dropped))
+			sr.reportStatCount("receiver.datapoints.forwarded", float64(stats.forwarded))
+			sr.reportStatCount("receiver.datapoints.accepted", float64(stats.accepted))
+			for dest, cnt := range stats.forwarded_to {
+				sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(cnt))
+			}
+			sr.reportStatCount("receiver.created", 0)
+			stats = dpStats{forwarded_to: make(map[string]int), last: time.Now()}
 		}
 	}
 }

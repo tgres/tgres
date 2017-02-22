@@ -93,7 +93,8 @@ func (it Ident) String() string {
 	// It's tempting to cache the resulting string in the receiver,
 	// but given that most of what we do is look up newly arriving
 	// data points, this cache wouldn't really be used that much and
-	// only take up additional space.
+	// only take up additional space. Also what happens if the ident
+	// changes map?
 
 	keys := make([]string, 0, len(it))
 	for k, _ := range it {
@@ -101,7 +102,7 @@ func (it Ident) String() string {
 	}
 	sort.Strings(keys)
 
-	buf := &bytes.Buffer{}
+	buf := bytes.NewBuffer(make([]byte, 0, 256))
 	buf.WriteByte('{')
 	for i, k := range keys {
 		fmt.Fprintf(buf, `%q: %q`, k, it[k])

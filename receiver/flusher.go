@@ -16,7 +16,6 @@
 package receiver
 
 import (
-	"context"
 	"log"
 	"sync"
 	"time"
@@ -27,7 +26,7 @@ import (
 )
 
 type dsFlusher struct {
-	flusherChs   flusherChannels
+	flusherCh    flusherChannel
 	flushLimiter *rate.Limiter
 	db           serde.Flusher
 	vdb          serde.VerticalFlusher
@@ -59,16 +58,15 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 		sr:      f.sr,
 	}
 
-	log.Printf(" -- 1 vertical db flusher...")
+	log.Printf(" -- vertical db flusher...")
 	startWg.Add(1)
 	go vdbflusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: "vdbflusher2"}, f.vdb, f.vdbCh, f.sr)
 	go vcacheFlusher(f.vcache, f.vdbCh, f.vdb, minStep, f.sr)
 
-	log.Printf(" -- 1 ds flusher...")
+	log.Printf(" -- ds flusher...")
 	startWg.Add(1)
-	f.flusherChs = make(flusherChannels, 1)
-	f.flusherChs[0] = make(chan *dsFlushRequest, 1024) // TODO why 1024?
-	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherChs[0], f.sr)
+	f.flusherCh = make(chan *dsFlushRequest, 1024) // TODO why 1024?
+	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherCh, f.sr)
 
 	if tdb, ok := f.db.(tsTableSizer); ok {
 		log.Printf(" -- ts table size reporter")
@@ -85,10 +83,7 @@ func (f *dsFlusher) stop() {
 		close(f.vdbCh)
 	}
 
-	for _, ch := range f.flusherChs {
-		close(ch)
-	}
-
+	close(f.flusherCh)
 }
 
 func (f *dsFlusher) verticalFlush(ds serde.DbDataSourcer) {
@@ -102,12 +97,12 @@ func (f *dsFlusher) verticalFlush(ds serde.DbDataSourcer) {
 }
 
 func (f *dsFlusher) horizontalFlush(ds serde.DbDataSourcer, block bool) {
-	f.flusherChs.queueBlocking(ds, block)
+	f.flusherCh.queueBlocking(ds, block)
 }
 
-func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
+func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) {
 	if f.db == nil {
-		return true
+		return
 	}
 	if f.vdb != nil {
 		// These operations do not write to the db, but only move
@@ -116,7 +111,7 @@ func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
 		ds.ClearRRAs(false)
 		f.horizontalFlush(ds, block)
 	}
-	return true // ZZZ
+	return
 }
 
 func (f *dsFlusher) enabled() bool {
@@ -131,16 +126,11 @@ func (f *dsFlusher) flusher() serde.Flusher {
 	return f.db
 }
 
-func (f *dsFlusher) channels() flusherChannels {
-	return f.flusherChs
-}
-
 type dsFlusherBlocking interface {
-	flushDs(serde.DbDataSourcer, bool) bool
+	flushDs(serde.DbDataSourcer, bool)
 	enabled() bool
 	statReporter() statReporter
 	flusher() serde.Flusher
-	channels() flusherChannels
 	start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration)
 	stop()
 }
@@ -150,15 +140,15 @@ type dsFlushRequest struct {
 	resp chan bool
 }
 
-type flusherChannels []chan *dsFlushRequest
+type flusherChannel chan *dsFlushRequest
 
-func (f flusherChannels) queueBlocking(ds serde.DbDataSourcer, block bool) {
+func (f flusherChannel) queueBlocking(ds serde.DbDataSourcer, block bool) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 	fr := &dsFlushRequest{ds: ds.Copy()}
 	if block {
 		fr.resp = make(chan bool, 1)
 	}
-	f[ds.Id()%int64(len(f))] <- fr
+	f <- fr
 	if block {
 		<-fr.resp
 	}
@@ -173,7 +163,6 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 
 	toFlush := make(map[int64]*serde.DbDataSource)
 
-	ctx := context.TODO()
 	limiter := rate.NewLimiter(rate.Limit(10), 10) // TODO: Why 10?
 
 	for {
@@ -183,13 +172,10 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 			ok bool
 		)
 
-		select {
-		case fr, ok = <-ch:
-			if !ok {
-				log.Printf("%s: channel closed, exiting", wc.ident())
-				return
-			}
-		default:
+		fr, ok = <-ch
+		if !ok {
+			log.Printf("%s: channel closed, exiting", wc.ident())
+			return
 		}
 
 		if fr != nil {
@@ -212,26 +198,28 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 				toFlush[ds.Id()] = ds
 			}
 
-		} else {
-			// At this point we're not obligated to do anything, but
-			// we can try to flush a few DSs at a very low rate, just
-			// in case.
-			limiter.Wait(ctx)
-			for id, ds := range toFlush { // flush a data source
-				start := time.Now()
-				err := dsf.flusher().FlushDataSource(ds)
-				if err != nil {
-					log.Printf("%s: error (background) flushing data source %v: %v", wc.ident(), ds, err)
-				}
-				dur := time.Now().Sub(start).Seconds()
-				delete(toFlush, id)
-				if err == nil {
-					sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
-					sr.reportStatCount("serde.flush_ds.count", 1)
-					sr.reportStatCount("serde.flush_ds.sql_ops", 1)
-				}
-				break
+		}
+
+		// At this point we're not obligated to do anything, but
+		// we can try to flush a few DSs at a very low rate, just
+		// in case.
+		if !limiter.Allow() {
+			continue
+		}
+		for id, ds := range toFlush { // flush a data source
+			start := time.Now()
+			err := dsf.flusher().FlushDataSource(ds)
+			if err != nil {
+				log.Printf("%s: error (background) flushing data source %v: %v", wc.ident(), ds, err)
 			}
+			dur := time.Now().Sub(start).Seconds()
+			delete(toFlush, id)
+			if err == nil {
+				sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
+				sr.reportStatCount("serde.flush_ds.count", 1)
+				sr.reportStatCount("serde.flush_ds.sql_ops", 1)
+			}
+			break
 		}
 	}
 }

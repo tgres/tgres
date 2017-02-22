@@ -42,7 +42,8 @@ func (q *fifoQueue) size() int {
 // behavior.  inLoop and outLoop are optimizations to read or send as
 // much as we can at a time for performance.
 func elasticCh(cin <-chan interface{}, cout chan<- interface{}, queue *fifoQueue) {
-	const maxReceive = 1024
+
+	const maxReceive = 256
 	var (
 		in     <-chan interface{}
 		out    chan<- interface{}

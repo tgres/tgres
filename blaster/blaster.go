@@ -29,6 +29,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const BATCH_SZ = 1000
+
 type Blaster struct {
 	nSeries int
 	rcvr    dataPointQueuer
@@ -46,7 +48,7 @@ type dataPointQueuer interface {
 func New(rcvr dataPointQueuer) *Blaster {
 	b := &Blaster{
 		rcvr:    rcvr,
-		limiter: rate.NewLimiter(rate.Limit(0), 1), // Zero limit allows no events
+		limiter: rate.NewLimiter(rate.Limit(0), BATCH_SZ), // Zero limit allows no events
 		span:    600 * time.Second,
 		prefix:  "tgres.blaster",
 	}
@@ -67,7 +69,7 @@ func (b *Blaster) SetNSeries(n int) {
 	log.Printf("Blaster: nSeries is now: %v, rate is: %v per second.", n, b.limiter.Limit())
 }
 
-func (b *Blaster) cycle() int {
+func (b *Blaster) cycle(times int) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -82,26 +84,32 @@ func (b *Blaster) cycle() int {
 		return 0
 	}
 
-	// Pick a random number
-	n := int64(rand.Int() % b.nSeries)
+	sz := 0
+	for i := 0; i < times; i++ {
 
-	// Current time
-	now := time.Now()
+		// Pick a random number
+		n := int64(rand.Int() % b.nSeries)
 
-	// The offset shifts the sinusoid to the right a bit based on
-	// its number for fancier overall appearance.
-	offset := time.Duration(n*10) * time.Second
+		// Current time
+		now := time.Now()
 
-	// Get the Y value
-	y := sinTime(now.Add(offset), b.span) * 100
+		// The offset shifts the sinusoid to the right a bit based on
+		// its number for fancier overall appearance.
+		offset := time.Duration(n*10) * time.Second
 
-	// Generate name (works with up to 10M)
-	name := fmt.Sprintf("%s.test.a%02d.b%02d.c%02d.d%02d", b.prefix, (n%10000000)/100000, (n%100000)/1000, (n%1000)/10, n%10)
+		// Get the Y value
+		y := sinTime(now.Add(offset), b.span) * 100
 
-	// Send the data point
-	b.rcvr.QueueDataPoint(serde.Ident{"name": name}, now, y)
+		// Generate name (works with up to 10M)
+		name := fmt.Sprintf("%s.test.a%02d.b%02d.c%02d.d%02d", b.prefix, (n%10000000)/100000, (n%100000)/1000, (n%1000)/10, n%10)
 
-	return len(name) + 8 // more or less accurate size in bytes
+		// Send the data point
+		b.rcvr.QueueDataPoint(serde.Ident{"name": name}, now, y)
+
+		sz += len(name) + 8 // more or less accurate size in bytes
+
+	}
+	return sz
 }
 
 func blast(b *Blaster) {
@@ -114,17 +122,16 @@ func blast(b *Blaster) {
 
 	for {
 
-		b.limiter.Wait(ctx)
+		b.limiter.WaitN(ctx, BATCH_SZ)
 
-		if sz := b.cycle(); sz > 0 {
-			cnt++
+		if sz := b.cycle(BATCH_SZ); sz > 0 {
+			cnt += BATCH_SZ
 			tsz += sz
-			if cnt%1000 == 0 {
-				if time.Now().Sub(lastStat) > statPeriod {
-					log.Printf("Blaster: %v Count: %d \tper/sec: %v \tBps: %v\n", time.Now(), cnt, float64(cnt)/time.Now().Sub(lastStat).Seconds(), int64(float64(tsz)/time.Now().Sub(lastStat).Seconds()))
-					cnt, tsz = 0, 0
-					lastStat = time.Now()
-				}
+			if cnt%1000 == 0 && cnt > 10000 && time.Now().Sub(lastStat) > statPeriod {
+				log.Printf("Blaster: %v cnt: %d \tper/sec: %v \tBps: %v\n",
+					time.Now(), cnt, float64(cnt)/time.Now().Sub(lastStat).Seconds(), int64(float64(tsz)/time.Now().Sub(lastStat).Seconds()))
+				cnt, tsz = 0, 0
+				lastStat = time.Now()
 			}
 		}
 
