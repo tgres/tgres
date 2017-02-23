@@ -55,7 +55,6 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 		Mutex:   &sync.Mutex{},
 		m:       make(map[bundleKey]*verticalCacheSegment),
 		minStep: minStep,
-		sr:      f.sr,
 	}
 
 	log.Printf(" -- vertical db flusher...")
@@ -76,7 +75,7 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 
 func (f *dsFlusher) stop() {
 	log.Printf("flusher.stop(): performing full vcache flush...")
-	f.vcache.flush(f.vdbCh, f.vdb, true)
+	f.vcache.flush(f.vdbCh, true)
 	log.Printf("flusher.stop(): performing full vcache flush done.")
 
 	if f.vdb != nil {
@@ -197,7 +196,6 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 			} else {
 				toFlush[ds.Id()] = ds
 			}
-
 		}
 
 		// At this point we're not obligated to do anything, but
@@ -270,8 +268,13 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb serde.VerticalFlusher, nap time.Duration, sr statReporter) {
 	for {
 		time.Sleep(nap)
-		fc := vcache.flush(vdbCh, vdb, false) // This may block/slow
-		sr.reportStatCount("serde.flush_channel.pushes", float64(fc))
+		st := vcache.flush(vdbCh, false)
+
+		sr.reportStatCount("receiver.vcache.points_flushed", float64(st.flushedPoints))
+		sr.reportStatGauge("receiver.vcache.points", float64(st.points))
+		sr.reportStatGauge("receiver.vcache.segments", float64(st.segments))
+		sr.reportStatGauge("receiver.vcache.segment_rows", float64(st.rows))
+		sr.reportStatCount("serde.flush_channel.pushes", float64(st.flushes))
 	}
 }
 
@@ -279,13 +282,17 @@ var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb
 // detect table bloat when autovacuum is not keeping up
 
 type tsTableSizer interface {
-	TsTableSize() (size int64, err error)
+	TsTableSize() (size, count int64, err error)
 }
 
 func reportTsTableSize(ts tsTableSizer, sr statReporter) {
 	for {
 		time.Sleep(15 * time.Second)
-		sz, _ := ts.TsTableSize()
-		sr.reportStatGauge("serde.ts_table_bytes", float64(sz))
+		sz, cnt, _ := ts.TsTableSize()
+		sr.reportStatGauge("serde.ts_table.bytes", float64(sz))
+		sr.reportStatGauge("serde.ts_table.rows", float64(cnt))
+		// 447 bytes overhead per row was determined by way of experimentation, it's probably wrong
+		bloat := float64(sz)/(float64(cnt)*float64(serde.PgSegmentWidth*8+447)) - 1.0
+		sr.reportStatGauge("serde.ts_table.bloat_factor", bloat)
 	}
 }

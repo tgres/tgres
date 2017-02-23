@@ -35,7 +35,7 @@ type verticalCacheSegment struct {
 	// data points keyed by index in the RRD, this key can be
 	// converted to a timestamp if we know latest and the RRA
 	// step/size.
-	dps map[int64]crossRRAPoints
+	rows map[int64]crossRRAPoints
 	// The latest timestamp for RRAs, keyed by RRA.pos.
 	latests     map[int64]time.Time // rra.latest
 	maxLatest   time.Time
@@ -56,7 +56,6 @@ type bundleKey struct {
 
 type verticalCache struct {
 	m       map[bundleKey]*verticalCacheSegment
-	sr      statReporter
 	minStep time.Duration
 	*sync.Mutex
 }
@@ -77,7 +76,7 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 
 	if bc.m[key] == nil {
 		bc.m[key] = &verticalCacheSegment{
-			dps:         make(map[int64]crossRRAPoints),
+			rows:        make(map[int64]crossRRAPoints),
 			latests:     make(map[int64]time.Time),
 			step:        rra.Step(),
 			size:        rra.Size(),
@@ -85,54 +84,65 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 		}
 	}
 
-	entry := bc.m[key]
+	segment := bc.m[key]
 	for i, v := range rra.DPs() {
-		if len(entry.dps[i]) == 0 {
-			entry.dps[i] = map[int64]float64{idx: v}
+		if len(segment.rows[i]) == 0 {
+			segment.rows[i] = map[int64]float64{idx: v}
 		}
-		entry.dps[i][idx] = v
+		segment.rows[i][idx] = v
 	}
 
 	latest := rra.Latest()
-	if entry.maxLatest.Before(latest) {
-		entry.maxLatest = latest
-		entry.latestIndex = rrd.SlotIndex(latest, rra.Step(), rra.Size())
+	if segment.maxLatest.Before(latest) {
+		segment.maxLatest = latest
+		segment.latestIndex = rrd.SlotIndex(latest, rra.Step(), rra.Size())
 	}
-	entry.latests[idx] = latest
+	segment.latests[idx] = latest
 }
 
-func (bc *verticalCache) flush(ch chan *vDpFlushRequest, db serde.VerticalFlusher, full bool) int {
-	rcount := 0
-	scount := 0
-	qcount := 0
-	count := 0
-	flushCount := 0
+type vcStats struct {
+	points         int
+	segments       int
+	rows           int // sum of all segments
+	flushes        int
+	flushedPoints  int
+	flushedLatests int
+}
+
+func (bc *verticalCache) stats() *vcStats {
+	var st vcStats
+
+	st.segments = len(bc.m)
+	for _, segment := range bc.m {
+		st.rows += len(segment.rows)
+		for _, row := range segment.rows {
+			st.points += len(row)
+		}
+	}
+
+	return &st
+}
+
+func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
+	count, lcount, flushCount := 0, 0, 0
 
 	bc.Lock()
 	for key, segment := range bc.m {
-		if len(segment.dps) == 0 {
+		if len(segment.rows) == 0 {
 			continue
 		}
-
-		for _, dps := range segment.dps {
-			qcount += len(dps)
-			rcount++
-		}
-		scount++
 
 		now := time.Now()
 		if !full && (now.Sub(segment.lastFlushRT) < bc.minStep) {
 			continue
 		}
 
-		bc.sr.reportStatGauge("receiver.vcache.segment_rows", float64(len(segment.dps)))
-
 		// This is our version of latests, since if we're going to
 		// possibly skip the latest segment row, the latests in the
 		// cache are not what should be written to the database.
 		flushLatests := make(map[int64]time.Time)
 
-		for i, dps := range segment.dps {
+		for i, dps := range segment.rows {
 
 			// Do not flush entries that are at least 2 minStep "old", to make sure we're flushing "saturated" segments.
 			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < bc.minStep*2 {
@@ -143,14 +153,15 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, db serde.VerticalFlushe
 				ch <- &vDpFlushRequest{key.bundleId, key.seg, i, dps, nil}
 			} else { // just skip over if channel full
 				select {
-				default: // we're blocked
+				default:
+					// we're blocked
 					continue
 				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, dps, nil}:
 				}
 			}
 
 			// delete the flushed segment row
-			delete(segment.dps, i)
+			delete(segment.rows, i)
 
 			// compute latests
 			for idx, _ := range dps {
@@ -166,19 +177,20 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, db serde.VerticalFlushe
 
 		if len(flushLatests) > 0 {
 			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, flushLatests}
+			lcount += len(flushLatests)
+			flushCount += 1
 		}
 
-		flushCount += 1
 		segment.lastFlushRT = time.Now()
 
 	}
+
+	st := bc.stats()
+	st.flushes = flushCount
+	st.flushedPoints = count
+	st.flushedLatests = lcount
+
 	bc.Unlock()
 
-	bc.sr.reportStatCount("receiver.vcache.points_flushed", float64(count))
-	bc.sr.reportStatGauge("receiver.vcache.points", float64(qcount))
-	bc.sr.reportStatGauge("receiver.vcache.segments", float64(scount))
-	bc.sr.reportStatGauge("receiver.vcache.segment_rows", float64(rcount))
-	bc.sr.reportStatGauge("receiver.vcache.points_per_rows", float64(qcount)/float64(scount)/float64(rcount))
-
-	return flushCount
+	return st
 }

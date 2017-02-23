@@ -29,15 +29,9 @@ db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 #db-connect-string = "host=/var/run/postgresql dbname=tgres sslmode=disable"
 
 [[ds]]
-regexp = "foo"
+regexp = ".*"
 step = "10s"
 heartbeat = "2h"
 # rra is "[wmean|min|max|last:]ts:ts[:xff]"
 # function is not case-sensitive, default is "wmean".
-rras = ["10s:6h", "1m:10d", "10m:93d", "1d:5y:1"]
-
-[[ds]]
-regexp = ".*"
-step = "60s"
-heartbeat = "2h"
-rras = ["WMEAN:60s:6h", "WMEAN:1m:10d", "WMEAN:10m:93d", "WMEAN:1d:5y:1"]
+rras = ["10s:6h", "1m:24h", "10m:93d", "1d:5y:1"]

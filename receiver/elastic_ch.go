@@ -27,7 +27,7 @@ func (q *fifoQueue) pop() (dp interface{}) {
 	}
 	dp, *q = (*q)[0], (*q)[1:]
 	if len(*q) == 0 {
-		*q = make([]interface{}, 0) // replace the queue to free memory
+		*q = make([]interface{}, 0, 256) // replace the queue to free memory
 	}
 	return dp
 }

@@ -27,11 +27,12 @@ import (
 // A collection of data sources kept by name (string).
 type dsCache struct {
 	sync.RWMutex
-	byIdent map[string]*cachedDs
-	db      serde.Fetcher
-	dsf     dsFlusherBlocking
-	finder  MatchingDSSpecFinder
-	clstr   clusterer
+	byIdent  map[string]*cachedDs
+	db       serde.Fetcher
+	dsf      dsFlusherBlocking
+	finder   MatchingDSSpecFinder
+	clstr    clusterer
+	rraCount int
 }
 
 // Returns a new dsCache object.
@@ -56,6 +57,11 @@ func (d *dsCache) getByIdent(ident serde.Ident) *cachedDs {
 func (d *dsCache) insert(cds *cachedDs) {
 	d.Lock()
 	defer d.Unlock()
+	if cds.spec != nil {
+		d.rraCount += len(cds.spec.RRAs)
+	} else if ds, ok := cds.DbDataSourcer.(rrd.DataSourcer); ok && ds != nil {
+		d.rraCount += len(ds.RRAs())
+	}
 	d.byIdent[cds.Ident().String()] = cds
 }
 
@@ -63,7 +69,11 @@ func (d *dsCache) insert(cds *cachedDs) {
 func (d *dsCache) delete(ident serde.Ident) {
 	d.Lock()
 	defer d.Unlock()
-	delete(d.byIdent, ident.String())
+	s := ident.String()
+	if cds := d.byIdent[s]; cds != nil {
+		d.rraCount -= len(cds.RRAs())
+		delete(d.byIdent, s)
+	}
 }
 
 func (d *dsCache) preLoad() error {
@@ -124,12 +134,19 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 	}
 }
 
+func (d *dsCache) stats() (int, int) {
+	d.RLock()
+	defer d.RUnlock()
+	return len(d.byIdent), d.rraCount
+}
+
 // cachedDs is a DS that keeps a queue of incoming data points, which
 // can all processed at once.
 type cachedDs struct {
 	serde.DbDataSourcer
-	incoming []*incomingDP
-	spec     *rrd.DSSpec // for when DS needs to be created
+	incoming     []*incomingDP
+	spec         *rrd.DSSpec // for when DS needs to be created
+	sentToLoader bool
 }
 
 func (cds *cachedDs) appendIncoming(dp *incomingDP) {
@@ -143,7 +160,8 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
 	}
 	count := len(cds.incoming)
-	cds.incoming = cds.incoming[:0] // leave the backing array in place to avoid extra memory allocations
+	cds.incoming = nil
+	//cds.incoming = cds.incoming[:0] // leave the backing array in place to avoid extra memory allocations
 	return count, err
 }
 

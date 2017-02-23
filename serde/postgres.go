@@ -213,6 +213,8 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 	return nil
 }
 
+const PgSegmentWidth = 200 // TODO Make me configurable
+
 func (p *pgvSerDe) createTablesIfNotExist() error {
 	create_sql := `
        CREATE TABLE IF NOT EXISTS %[1]sds (
@@ -233,7 +235,7 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
        step_ms INT NOT NULL,
        size INT NOT NULL,
        last_pos INT NOT NULL DEFAULT 0,
-       width INT NOT NULL DEFAULT 200);
+       width INT NOT NULL DEFAULT %[2]d);
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_bundle_spec ON %[1]srra_bundle (step_ms, size);
 
@@ -266,7 +268,7 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]sts (rra_bundle_id, seg, i);
     `
-	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
+	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix, PgSegmentWidth)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
 		return err
 	} else {
@@ -275,7 +277,7 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 	create_sql = `
 -- normal view
 CREATE VIEW %[1]stv AS
-  SELECT rra.ds_id AS ds_id, rra.id AS rra_id,
+  SELECT rra.ds_id AS ds_id, rra.id AS rra_id, rra_bundle.step_ms AS step_ms,
          rra_latest.latest[rra.idx] - INTERVAL '1 MILLISECOND' * rra_bundle.step_ms *
            MOD(rra_bundle.size + MOD(EXTRACT(EPOCH FROM rra_latest.latest[rra.idx])::BIGINT*1000/rra_bundle.step_ms, rra_bundle.size) - i, rra_bundle.size) AS t,
          dp[rra.idx] AS r
@@ -869,25 +871,27 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 	return dps, nil
 }
 
-func (p *pgvSerDe) TsTableSize() (size int64, err error) {
+func (p *pgvSerDe) TsTableSize() (size, count int64, err error) {
 	const stmt = `
   SELECT pg_total_relation_size(c.oid) AS total_bytes
+         , c.reltuples AS row_estimate
     FROM pg_class c
     LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE relname = '%[1]sts';`
 	rows, err := p.dbConn.Query(fmt.Sprintf(stmt, p.prefix))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer rows.Close()
 	if rows.Next() {
-		err = rows.Scan(&size)
+		var fcnt float64
+		err = rows.Scan(&size, &fcnt)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
-		return size, nil
+		return size, int64(fcnt), nil
 	}
-	return 0, nil
+	return 0, 0, nil
 }
 
 func (p *pgvSerDe) rraBundleIncrPos(id int64) (int64, error) {

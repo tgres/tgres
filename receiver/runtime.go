@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/load"
 )
 
 // Some rudimentary runtime stats collected here, perhaps this should
@@ -39,10 +40,19 @@ func runtimeCpuPercent() float64 {
 	return 0
 }
 
+func runtimeLoadAvg() *load.AvgStat {
+	avg, _ := load.Avg()
+	return avg
+}
+
 func reportRuntime(sr statReporter) {
 	for {
 		time.Sleep(5 * time.Second)
 		sr.reportStatGauge("runtime.cpu.percent", float64(runtimeCpuPercent()))
 		sr.reportStatGauge("runtime.mem.alloc", float64(runtimeMemory()))
+		avg := runtimeLoadAvg()
+		sr.reportStatGauge("runtime.load.one", avg.Load1)
+		sr.reportStatGauge("runtime.load.five", avg.Load5)
+		sr.reportStatGauge("runtime.load.fifteen", avg.Load15)
 	}
 }

@@ -128,9 +128,11 @@ var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan
 
 	cds.appendIncoming(dp)
 
-	if cds.Id() == 0 {
-		// this DS needs to be loaded.
-		loaderCh <- cds
+	if cds.Id() == 0 { // this DS needs to be loaded.
+		if !cds.sentToLoader {
+			cds.sentToLoader = true
+			loaderCh <- cds
+		}
 	} else {
 		directorProcessOrForward(dsc, cds, clstr, dsf, snd, stats)
 	}
@@ -276,6 +278,9 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			}
 			sr.reportStatCount("receiver.created", 0)
 			stats = dpStats{forwarded_to: make(map[string]int), last: time.Now()}
+			dsCount, rraCount := dsc.stats()
+			sr.reportStatGauge("receiver.cache.ds_count", float64(dsCount))
+			sr.reportStatGauge("receiver.cache.rra_count", float64(rraCount))
 		}
 	}
 }
