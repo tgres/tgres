@@ -73,6 +73,9 @@ type Receiver struct {
 	ReportStats       bool   // report internal stats?
 	ReportStatsPrefix string // prefix for internal stats
 
+	// Number of workers and flushers
+	NWorkers int
+
 	Blaster *blaster.Blaster
 
 	// unexported internal stuff
@@ -127,6 +130,7 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 		pacedMetricCh:         make(chan *pacedMetric, 256),
 		ReportStats:           false,
 		ReportStatsPrefix:     "tgres",
+		NWorkers:              1,
 	}
 
 	r.flusher = &dsFlusher{db: serde.Flusher(), vdb: serde.VerticalFlusher(), sr: r}

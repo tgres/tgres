@@ -16,6 +16,7 @@
 package receiver
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -41,7 +42,7 @@ type vDpFlushRequest struct {
 	latests          map[int64]time.Time
 }
 
-func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration) {
+func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration, n int) {
 	if mfs > 0 {
 		f.flushLimiter = rate.NewLimiter(rate.Limit(mfs), mfs)
 	}
@@ -50,7 +51,7 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 	// we know we do not want it to be infinite. When it blocks,
 	// it means the db most definitely cannot keep up, and it's
 	// okay for whatever upstream to be blocked by it.
-	f.vdbCh = make(chan *vDpFlushRequest, 1024)
+	f.vdbCh = make(chan *vDpFlushRequest, 10240)
 	f.vcache = &verticalCache{
 		Mutex:   &sync.Mutex{},
 		m:       make(map[bundleKey]*verticalCacheSegment),
@@ -58,8 +59,10 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep t
 	}
 
 	log.Printf(" -- vertical db flusher...")
-	startWg.Add(1)
-	go vdbflusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: "vdbflusher2"}, f.vdb, f.vdbCh, f.sr)
+	for i := 0; i < n; i++ {
+		startWg.Add(1)
+		go vdbflusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: fmt.Sprintf("vdbflusher_%d", i)}, f.vdb, f.vdbCh, f.sr)
+	}
 	go vcacheFlusher(f.vcache, f.vdbCh, f.vdb, minStep, f.sr)
 
 	log.Printf(" -- ds flusher...")
@@ -130,7 +133,7 @@ type dsFlusherBlocking interface {
 	enabled() bool
 	statReporter() statReporter
 	flusher() serde.Flusher
-	start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration)
+	start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration, n int)
 	stop()
 }
 
@@ -229,11 +232,27 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
 
+	type stats struct {
+		dpsDur, latDur         time.Duration
+		dpsCount, latCount     int
+		dpsFlushes, latFlushes int
+		dpsSqlOps, latSqlOps   int
+		chMaxLen, chGets       int
+		start                  time.Time
+	}
+
+	st := &stats{start: time.Now()}
+
 	for {
 		dpr, ok := <-ch
 		if !ok {
 			log.Printf("%s: exiting", wc.ident())
 			return
+		}
+
+		st.chGets += 1
+		if l := len(ch); st.chMaxLen < l {
+			st.chMaxLen = l
 		}
 
 		if len(dpr.dps) > 0 {
@@ -242,11 +261,10 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 			if err != nil {
 				log.Printf("vdbflusher: ERROR in VerticalFlushDps: %v", err)
 			}
-			dur := time.Now().Sub(start).Seconds()
-			sr.reportStatGauge("serde.flush_dps.duration_ms", dur*1000)
-			sr.reportStatGauge("serde.flush_dps.speed", float64(len(dpr.dps))/dur)
-			sr.reportStatCount("serde.flush_dps.count", float64(len(dpr.dps)))
-			sr.reportStatCount("serde.flush_dps.sql_ops", float64(sqlOps))
+			st.dpsDur += time.Now().Sub(start)
+			st.dpsCount += len(dpr.dps)
+			st.dpsSqlOps += sqlOps
+			st.dpsFlushes++
 		}
 
 		if len(dpr.latests) > 0 {
@@ -255,13 +273,33 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 			if err != nil {
 				log.Printf("verticalCache: ERROR in VerticalFlushLatests: %v", err)
 			}
-			dur := time.Now().Sub(start).Seconds()
-			sr.reportStatGauge("serde.flush_latests.duration_ms", dur*1000)
-			sr.reportStatGauge("serde.flush_latests.speed", float64(len(dpr.latests))/dur)
-			sr.reportStatCount("serde.flush_latests.count", float64(len(dpr.latests)))
-			sr.reportStatCount("serde.flush_latests.sql_ops", float64(sqlOps))
+			st.latDur += time.Now().Sub(start)
+			st.latCount += len(dpr.latests)
+			st.latSqlOps += sqlOps
+			st.latFlushes++
 		}
-		sr.reportStatCount("serde.flush_channel.gets", 1)
+
+		if st.start.Before(time.Now().Add(-time.Second)) {
+			dpsDur := st.dpsDur.Seconds()
+			if st.dpsFlushes > 0 {
+				sr.reportStatGauge("serde.flush_dps.duration_ms", dpsDur*1000/float64(st.dpsFlushes))
+			}
+			sr.reportStatGauge("serde.flush_dps.speed", float64(st.dpsCount)/dpsDur)
+			sr.reportStatCount("serde.flush_dps.count", float64(st.dpsCount))
+			sr.reportStatCount("serde.flush_dps.sql_ops", float64(st.dpsSqlOps))
+			latDur := st.latDur.Seconds()
+			if st.latFlushes > 0 {
+				sr.reportStatGauge("serde.flush_latests.duration_ms", latDur*1000/float64(st.latFlushes))
+			}
+			sr.reportStatGauge("serde.flush_latests.speed", float64(st.latCount)/latDur)
+			sr.reportStatCount("serde.flush_latests.count", float64(st.latCount))
+			sr.reportStatCount("serde.flush_latests.sql_ops", float64(st.latSqlOps))
+
+			sr.reportStatCount("serde.flush_channel.gets", float64(st.chGets))
+			sr.reportStatGauge("serde.flush_channel.len", float64(st.chMaxLen))
+
+			st = &stats{start: time.Now()}
+		}
 	}
 }
 
@@ -275,6 +313,7 @@ var vcacheFlusher = func(vcache *verticalCache, vdbCh chan *vDpFlushRequest, vdb
 		sr.reportStatGauge("receiver.vcache.segments", float64(st.segments))
 		sr.reportStatGauge("receiver.vcache.segment_rows", float64(st.rows))
 		sr.reportStatCount("serde.flush_channel.pushes", float64(st.flushes))
+		sr.reportStatCount("serde.flush_channel.blocked", float64(st.flushBlocked))
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/tgres/tgres/cluster"
@@ -77,15 +78,15 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 	return cnt
 }
 
-var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, dsf dsFlusherBlocking, snd chan *cluster.Msg, stats *dpStats) {
+var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
 	if clstr == nil {
-		stats.accepted += directorProcessDataPoint(cds, dsf)
+		workerCh <- cds
 		return
 	}
 
 	for _, node := range clstr.NodesForDistDatum(&distDs{DbDataSourcer: cds.DbDataSourcer, dsc: dsc}) {
 		if node.Name() == clstr.LocalNode().Name() {
-			stats.accepted += directorProcessDataPoint(cds, dsf)
+			workerCh <- cds
 		} else {
 			for _, dp := range cds.incoming {
 				if err := directorForwardDPToNode(dp, node, snd); err != nil {
@@ -107,7 +108,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer
 	return
 }
 
-var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, dsf dsFlusherBlocking, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
+var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
 
 	if math.IsNaN(dp.Value) {
 		// NaN is meaningless, e.g. "the thermometer is
@@ -134,7 +135,7 @@ var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan
 			loaderCh <- cds
 		}
 	} else {
-		directorProcessOrForward(dsc, cds, clstr, dsf, snd, stats)
+		directorProcessOrForward(dsc, cds, workerCh, clstr, snd, stats)
 	}
 }
 
@@ -164,6 +165,7 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 		if !ok {
 			log.Printf("loader: channel closed, closing director channel and exiting...")
 			close(dpCh)
+			log.Printf("loader: exiting.")
 			return
 		}
 
@@ -185,12 +187,12 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 }
 
 type dpStats struct {
-	total, accepted, forwarded, dropped int
-	forwarded_to                        map[string]int
-	last                                time.Time
+	total, forwarded, dropped int
+	forwarded_to              map[string]int
+	last                      time.Time
 }
 
-var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking) {
+var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -215,6 +217,14 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 
 	loaderCh := make(chan interface{}, 128)
 	go loader(loaderCh, dpCh, dsc, sr)
+
+	var workerWg sync.WaitGroup
+	workerCh := make(chan *cachedDs, 128)
+	log.Printf("director: starting %d workers.", nWorkers)
+	for i := 0; i < nWorkers; i++ {
+		workerWg.Add(1)
+		go worker(&workerWg, workerCh, dsf, sr, i)
+	}
 
 	wc.onStarted()
 
@@ -257,13 +267,18 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			// if the dp ident is not found, it will be submitted to
 			// the loader, which will return it to us through the dpCh
 			// as a cachedDs.
-			directorProcessIncomingDP(dp, dsc, loaderCh, dsf, clstr, snd, &stats)
+			directorProcessIncomingDP(dp, dsc, loaderCh, workerCh, clstr, snd, &stats)
 			stats.total++
 		} else if cds != nil {
 			// this came from the loader, we do not need to look it up
-			directorProcessOrForward(dsc, cds, clstr, dsf, snd, &stats)
+			directorProcessOrForward(dsc, cds, workerCh, clstr, snd, &stats)
 		} else {
 			// signal to exit
+			log.Printf("director: closing worker channels, waiting for workers to finish....")
+			close(workerCh)
+			workerWg.Wait()
+			log.Printf("director: closing worker channels Done.")
+
 			log.Printf("director: closing loader channel.")
 			close(loaderCh)
 		}
@@ -272,7 +287,6 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			sr.reportStatCount("receiver.datapoints.total", float64(stats.total))
 			sr.reportStatCount("receiver.datapoints.dropped", float64(stats.dropped))
 			sr.reportStatCount("receiver.datapoints.forwarded", float64(stats.forwarded))
-			sr.reportStatCount("receiver.datapoints.accepted", float64(stats.accepted))
 			for dest, cnt := range stats.forwarded_to {
 				sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(cnt))
 			}
@@ -281,6 +295,27 @@ var director = func(wc wController, dpCh chan interface{}, clstr clusterer, sr s
 			dsCount, rraCount := dsc.stats()
 			sr.reportStatGauge("receiver.cache.ds_count", float64(dsCount))
 			sr.reportStatGauge("receiver.cache.rra_count", float64(rraCount))
+		}
+	}
+}
+
+var worker = func(wg *sync.WaitGroup, workerCh chan *cachedDs, dsf dsFlusherBlocking, sr statReporter, n int) {
+	log.Printf("worker %d: starting.", n)
+	defer wg.Done()
+	lastStat := time.Now()
+	accepted := 0
+	for {
+		cds, ok := <-workerCh
+		if !ok {
+			log.Printf("worker %d: exiting.", n)
+			return
+		}
+		accepted += directorProcessDataPoint(cds, dsf)
+
+		if lastStat.Before(time.Now().Add(-time.Second)) {
+			sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
+			lastStat = time.Now()
+			accepted = 0
 		}
 	}
 }

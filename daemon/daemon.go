@@ -114,6 +114,7 @@ var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *rece
 	r.StatsNamePrefix = cfg.StatsNamePrefix
 	r.MaxFlushRatePerSecond = cfg.MaxFlushesPerSecond
 	r.ReportStats = true
+	r.NWorkers = cfg.Workers
 	r.SetCluster(c)
 	return r
 }

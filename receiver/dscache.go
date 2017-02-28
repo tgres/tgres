@@ -87,7 +87,7 @@ func (d *dsCache) preLoad() error {
 		if !ok {
 			return fmt.Errorf("preLoad: ds must be a serde.DbDataSourcer")
 		}
-		d.insert(&cachedDs{DbDataSourcer: dbds})
+		d.insert(&cachedDs{DbDataSourcer: dbds, mu: &sync.Mutex{}})
 		d.register(dbds)
 	}
 
@@ -101,7 +101,7 @@ func (d *dsCache) getByIdentOrCreateEmpty(ident serde.Ident) *cachedDs {
 		if spec := d.finder.FindMatchingDSSpec(ident); spec != nil {
 			// return a cachedDs with nil DataSourcer
 			dbds := serde.NewDbDataSource(0, ident, nil)
-			result = &cachedDs{DbDataSourcer: dbds, spec: spec}
+			result = &cachedDs{DbDataSourcer: dbds, spec: spec, mu: &sync.Mutex{}}
 			d.insert(result)
 		}
 	}
@@ -147,13 +147,18 @@ type cachedDs struct {
 	incoming     []*incomingDP
 	spec         *rrd.DSSpec // for when DS needs to be created
 	sentToLoader bool
+	mu           *sync.Mutex
 }
 
 func (cds *cachedDs) appendIncoming(dp *incomingDP) {
+	cds.mu.Lock()
+	defer cds.mu.Unlock()
 	cds.incoming = append(cds.incoming, dp)
 }
 
 func (cds *cachedDs) processIncoming() (int, error) {
+	cds.mu.Lock()
+	defer cds.mu.Unlock()
 	var err error
 	for _, dp := range cds.incoming {
 		// continue on errors

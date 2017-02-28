@@ -32,6 +32,7 @@ type crossRRAPoints map[int64]float64
 
 // map[time_index]map[series_index]value
 type verticalCacheSegment struct {
+	*sync.Mutex
 	// data points keyed by index in the RRD, this key can be
 	// converted to a timestamp if we know latest and the RRA
 	// step/size.
@@ -68,23 +69,27 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 		return
 	}
 
-	bc.Lock()
-	defer bc.Unlock()
-
 	seg, idx := rra.Seg(), rra.Idx()
 	key := bundleKey{rra.BundleId(), seg}
 
-	if bc.m[key] == nil {
-		bc.m[key] = &verticalCacheSegment{
+	bc.Lock()
+
+	segment := bc.m[key]
+	if segment == nil {
+		segment = &verticalCacheSegment{
+			Mutex:       &sync.Mutex{},
 			rows:        make(map[int64]crossRRAPoints),
 			latests:     make(map[int64]time.Time),
 			step:        rra.Step(),
 			size:        rra.Size(),
 			lastFlushRT: time.Now(), // Or else it will get sent to the flusher right away!
 		}
+		bc.m[key] = segment
 	}
 
-	segment := bc.m[key]
+	segment.Lock()
+	bc.Unlock()
+
 	for i, v := range rra.DPs() {
 		if len(segment.rows[i]) == 0 {
 			segment.rows[i] = map[int64]float64{idx: v}
@@ -98,6 +103,8 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 		segment.latestIndex = rrd.SlotIndex(latest, rra.Step(), rra.Size())
 	}
 	segment.latests[idx] = latest
+
+	segment.Unlock()
 }
 
 type vcStats struct {
@@ -107,9 +114,13 @@ type vcStats struct {
 	flushes        int
 	flushedPoints  int
 	flushedLatests int
+	flushBlocked   int
 }
 
 func (bc *verticalCache) stats() *vcStats {
+	bc.Lock()
+	defer bc.Unlock()
+
 	var st vcStats
 
 	st.segments = len(bc.m)
@@ -124,7 +135,9 @@ func (bc *verticalCache) stats() *vcStats {
 }
 
 func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
-	count, lcount, flushCount := 0, 0, 0
+	count, lcount, flushCount, blocked := 0, 0, 0, 0
+
+	toFlush := make(map[bundleKey]*verticalCacheSegment, len(bc.m))
 
 	bc.Lock()
 	for key, segment := range bc.m {
@@ -137,10 +150,21 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 			continue
 		}
 
+		toFlush[key] = segment
+	}
+	bc.Unlock()
+
+	// Now we have our own separate copy
+	for key, segment := range toFlush {
+
+		now := time.Now()
+
 		// This is our version of latests, since if we're going to
 		// possibly skip the latest segment row, the latests in the
 		// cache are not what should be written to the database.
 		flushLatests := make(map[int64]time.Time)
+
+		segment.Lock()
 
 		for i, dps := range segment.rows {
 
@@ -155,6 +179,7 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				select {
 				default:
 					// we're blocked
+					blocked++
 					continue
 				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, dps, nil}:
 				}
@@ -183,14 +208,14 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 
 		segment.lastFlushRT = time.Now()
 
+		segment.Unlock()
 	}
 
 	st := bc.stats()
 	st.flushes = flushCount
 	st.flushedPoints = count
 	st.flushedLatests = lcount
-
-	bc.Unlock()
+	st.flushBlocked = blocked
 
 	return st
 }
