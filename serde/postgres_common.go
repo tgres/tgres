@@ -76,7 +76,7 @@ type pgSearchResult struct {
 	rows  *sql.Rows
 	err   error
 	id    int64
-	ident map[string]string
+	ident Ident
 }
 
 func (sr *pgSearchResult) Next() bool {

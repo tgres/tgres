@@ -125,10 +125,12 @@ func (bc *verticalCache) stats() *vcStats {
 
 	st.segments = len(bc.m)
 	for _, segment := range bc.m {
+		segment.Lock()
 		st.rows += len(segment.rows)
 		for _, row := range segment.rows {
 			st.points += len(row)
 		}
+		segment.Unlock()
 	}
 
 	return &st

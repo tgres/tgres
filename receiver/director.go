@@ -72,8 +72,9 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
 	}
 
-	if cds.PointCount() > 0 {
+	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushDs(cds.DbDataSourcer, false)
+		cds.lastFlush = time.Now()
 	}
 	return cnt
 }
@@ -118,11 +119,11 @@ var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan
 		return
 	}
 
-	cds := dsc.getByIdentOrCreateEmpty(dp.Ident)
+	cds := dsc.getByIdentOrCreateEmpty(dp.cachedIdent)
 	if cds == nil {
 		stats.dropped++
 		if debug {
-			log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.Ident)
+			log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.cachedIdent.String())
 		}
 		return
 	}
@@ -273,6 +274,18 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 			// this came from the loader, we do not need to look it up
 			directorProcessOrForward(dsc, cds, workerCh, clstr, snd, &stats)
 		} else {
+			// wait for worker and loader channels to empty
+			log.Printf("director: channel closed, waiting for loader and workers to empty...")
+			for {
+				w, l := len(workerCh), len(loaderCh)
+				if w == 0 && l == 0 {
+					break
+					log.Printf("  -  worker: %d loader: %d", w, l)
+					time.Sleep(1 * time.Millisecond)
+					w, l = len(workerCh), len(loaderCh)
+				}
+			}
+
 			// signal to exit
 			log.Printf("director: closing worker channels, waiting for workers to finish....")
 			close(workerCh)

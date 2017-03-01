@@ -61,7 +61,7 @@ type SimpleDSFinder struct {
 }
 
 func (s *SimpleDSFinder) FindMatchingDSSpec(ident serde.Ident) *rrd.DSSpec {
-	if name := ident["name"]; name == "" {
+	if ident["name"] == "" {
 		return nil
 	}
 	return s.DSSpec

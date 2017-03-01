@@ -18,6 +18,7 @@ package receiver
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -111,7 +112,12 @@ func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) {
 		// stuff to another cache.
 		f.verticalFlush(ds)
 		ds.ClearRRAs(false)
-		f.horizontalFlush(ds, block)
+		if block {
+			f.horizontalFlush(ds, block)
+		} else if rand.Intn(3) == 0 {
+			// flush a third of DSs, just in case
+			f.horizontalFlush(ds, false)
+		}
 	}
 	return
 }

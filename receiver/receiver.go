@@ -105,10 +105,10 @@ type Receiver struct {
 // data point representation has no notion of duration and therefore
 // must rely on some kind of a separately stored "last update" time.
 type incomingDP struct {
-	Ident     serde.Ident
-	TimeStamp time.Time
-	Value     float64
-	Hops      int
+	cachedIdent *cachedIdent
+	TimeStamp   time.Time
+	Value       float64
+	Hops        int
 }
 
 // Create a Receiver. The first argument is a SerDe, the second is a
@@ -181,7 +181,7 @@ func (r *Receiver) SetCluster(c clusterer) {
 // paced metrics (QueueSum/QueueGauge) for non-rate data.
 func (r *Receiver) QueueDataPoint(ident serde.Ident, ts time.Time, v float64) {
 	if !r.stopped {
-		r.dpCh <- &incomingDP{Ident: ident, TimeStamp: ts, Value: v}
+		r.dpCh <- &incomingDP{cachedIdent: newCachedIdent(ident), TimeStamp: ts, Value: v}
 	}
 }
 

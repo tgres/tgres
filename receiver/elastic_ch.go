@@ -43,7 +43,7 @@ func (q *fifoQueue) size() int {
 // much as we can at a time for performance.
 func elasticCh(cin <-chan interface{}, cout chan<- interface{}, queue *fifoQueue) {
 
-	const maxReceive = 256
+	const maxReceive = 1024
 	var (
 		in     <-chan interface{}
 		out    chan<- interface{}

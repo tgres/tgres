@@ -18,6 +18,7 @@ package receiver
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
@@ -47,7 +48,7 @@ func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBloc
 }
 
 // getByName rlocks and gets a DS pointer.
-func (d *dsCache) getByIdent(ident serde.Ident) *cachedDs {
+func (d *dsCache) getByIdent(ident *cachedIdent) *cachedDs {
 	d.RLock()
 	defer d.RUnlock()
 	return d.byIdent[ident.String()]
@@ -95,12 +96,12 @@ func (d *dsCache) preLoad() error {
 }
 
 // get or create and empty cached ds
-func (d *dsCache) getByIdentOrCreateEmpty(ident serde.Ident) *cachedDs {
+func (d *dsCache) getByIdentOrCreateEmpty(ident *cachedIdent) *cachedDs {
 	result := d.getByIdent(ident)
 	if result == nil {
-		if spec := d.finder.FindMatchingDSSpec(ident); spec != nil {
+		if spec := d.finder.FindMatchingDSSpec(ident.Ident); spec != nil {
 			// return a cachedDs with nil DataSourcer
-			dbds := serde.NewDbDataSource(0, ident, nil)
+			dbds := serde.NewDbDataSource(0, ident.Ident, nil)
 			result = &cachedDs{DbDataSourcer: dbds, spec: spec, mu: &sync.Mutex{}}
 			d.insert(result)
 		}
@@ -147,6 +148,7 @@ type cachedDs struct {
 	incoming     []*incomingDP
 	spec         *rrd.DSSpec // for when DS needs to be created
 	sentToLoader bool
+	lastFlush    time.Time
 	mu           *sync.Mutex
 }
 
@@ -165,9 +167,29 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
 	}
 	count := len(cds.incoming)
-	cds.incoming = nil
-	//cds.incoming = cds.incoming[:0] // leave the backing array in place to avoid extra memory allocations
+	if count < 32 {
+		// leave the backing array in place to avoid extra memory allocations
+		cds.incoming = cds.incoming[:0]
+	} else {
+		cds.incoming = nil
+	}
 	return count, err
+}
+
+type cachedIdent struct {
+	serde.Ident
+	s string
+}
+
+func (ci *cachedIdent) String() string {
+	if ci.s == "" {
+		ci.s = ci.Ident.String()
+	}
+	return ci.s
+}
+
+func newCachedIdent(ident serde.Ident) *cachedIdent {
+	return &cachedIdent{Ident: ident, s: ident.String()}
 }
 
 // distDs keeps a pointer to the dsCache so that it can delete itself
