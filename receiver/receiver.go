@@ -19,6 +19,8 @@
 package receiver
 
 import (
+	"bytes"
+	"encoding/gob"
 	"os"
 	"sync"
 	"time"
@@ -98,19 +100,6 @@ type Receiver struct {
 	stopped bool
 }
 
-// incomingDP is incoming data (aka observation, measurement or
-// sample). This is not the internal representation of a data point,
-// it's the format in which points are expected to arrive and is easy
-// to create from most any data point representation out there. This
-// data point representation has no notion of duration and therefore
-// must rely on some kind of a separately stored "last update" time.
-type incomingDP struct {
-	cachedIdent *cachedIdent
-	TimeStamp   time.Time
-	Value       float64
-	Hops        int
-}
-
 // Create a Receiver. The first argument is a SerDe, the second is a
 // MatchingDSSpecFinder used to match previously unknown DS names to a
 // DSSpec with which the DS is to be created. If you pass nil, then
@@ -181,7 +170,7 @@ func (r *Receiver) SetCluster(c clusterer) {
 // paced metrics (QueueSum/QueueGauge) for non-rate data.
 func (r *Receiver) QueueDataPoint(ident serde.Ident, ts time.Time, v float64) {
 	if !r.stopped {
-		r.dpCh <- &incomingDP{cachedIdent: newCachedIdent(ident), TimeStamp: ts, Value: v}
+		r.dpCh <- &incomingDP{cachedIdent: newCachedIdent(ident), timeStamp: ts, value: v}
 	}
 }
 
@@ -248,4 +237,53 @@ type clusterer interface {
 	Leave(timeout time.Duration) error
 	Shutdown() error
 	//NewMsg(*cluster.Node, interface{}) (*cluster.Msg, error)
+}
+
+// incomingDP is incoming data (aka observation, measurement or
+// sample). This is not the internal representation of a data point,
+// it's the format in which points are expected to arrive and is easy
+// to create from most any data point representation out there. This
+// data point representation has no notion of duration and therefore
+// must rely on some kind of a separately stored "last update" time.
+type incomingDP struct {
+	cachedIdent *cachedIdent
+	timeStamp   time.Time
+	value       float64
+	Hops        int
+}
+
+func (dp *incomingDP) GobEncode() ([]byte, error) {
+	buf := bytes.Buffer{}
+	enc := gob.NewEncoder(&buf)
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	check(enc.Encode(dp.cachedIdent.Ident))
+	check(enc.Encode(dp.timeStamp))
+	check(enc.Encode(dp.value))
+	check(enc.Encode(dp.Hops))
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (dp *incomingDP) GobDecode(b []byte) error {
+	dec := gob.NewDecoder(bytes.NewBuffer(b))
+	var err error
+	check := func(er error) {
+		if er != nil && err == nil {
+			err = er
+		}
+	}
+	var ident serde.Ident
+	check(dec.Decode(&ident))
+	dp.cachedIdent = newCachedIdent(ident)
+	check(dec.Decode(&dp.timeStamp))
+	check(dec.Decode(&dp.value))
+	check(dec.Decode(&dp.Hops))
+	return err
 }

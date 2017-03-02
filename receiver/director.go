@@ -111,7 +111,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, workerCh chan *
 
 var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
 
-	if math.IsNaN(dp.Value) {
+	if math.IsNaN(dp.value) {
 		// NaN is meaningless, e.g. "the thermometer is
 		// registering a NaN". Or it means that "for certain it is
 		// offline", but that is not part of our scope. You can

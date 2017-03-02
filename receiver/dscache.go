@@ -164,7 +164,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	var err error
 	for _, dp := range cds.incoming {
 		// continue on errors
-		err = cds.ProcessDataPoint(dp.Value, dp.TimeStamp)
+		err = cds.ProcessDataPoint(dp.value, dp.timeStamp)
 	}
 	count := len(cds.incoming)
 	if count < 32 {
@@ -176,6 +176,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	return count, err
 }
 
+// This is exported so as to be Gob-Encodable
 type cachedIdent struct {
 	serde.Ident
 	s string
