@@ -28,13 +28,12 @@ import (
 )
 
 type dsFlusher struct {
-	flusherCh    flusherChannel
-	flushLimiter *rate.Limiter
-	db           serde.Flusher
-	vdb          serde.VerticalFlusher
-	vcache       *verticalCache
-	sr           statReporter
-	vdbCh        chan *vDpFlushRequest
+	flusherCh flusherChannel
+	db        serde.Flusher
+	vdb       serde.VerticalFlusher
+	vcache    *verticalCache
+	sr        statReporter
+	vdbCh     chan *vDpFlushRequest
 }
 
 type vDpFlushRequest struct {
@@ -43,10 +42,7 @@ type vDpFlushRequest struct {
 	latests          map[int64]time.Time
 }
 
-func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration, n int) {
-	if mfs > 0 {
-		f.flushLimiter = rate.NewLimiter(rate.Limit(mfs), mfs)
-	}
+func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, minStep time.Duration, n int) {
 
 	// It's not clear what the size of this channel should be, but
 	// we know we do not want it to be infinite. When it blocks,
@@ -139,7 +135,7 @@ type dsFlusherBlocking interface {
 	enabled() bool
 	statReporter() statReporter
 	flusher() serde.Flusher
-	start(flusherWg, startWg *sync.WaitGroup, mfs int, minStep time.Duration, n int)
+	start(flusherWg, startWg *sync.WaitGroup, minStep time.Duration, n int)
 	stop()
 }
 

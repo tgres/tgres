@@ -65,9 +65,10 @@ type Receiver struct {
 	// Smallest step
 	MinStep time.Duration
 
-	// MaxFlushRatePerSecond controls how frequently we write to the
-	// database across all DSs. This trumps all other caching parameters.
-	MaxFlushRatePerSecond int
+	// MaxReceiverQueueSize is the limit on the receiver queue. Points
+	// are sent to /dev/null when this size is exceeded. Zero or a
+	// negative value means unlimited.
+	MaxReceiverQueueSize int
 
 	StatFlushDuration time.Duration // Period after which stats are flushed
 	StatsNamePrefix   string        // Stat names are prefixed with this
@@ -109,17 +110,16 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 		finder = &SimpleDSFinder{DftDSSPec}
 	}
 	r := &Receiver{
-		serde:                 serde,
-		MinStep:               10 * time.Second,
-		MaxFlushRatePerSecond: 100,
-		StatFlushDuration:     10 * time.Second,
-		StatsNamePrefix:       "stats",
-		dpCh:                  make(chan interface{}, 256),
-		aggCh:                 make(chan *aggregator.Command, 256),
-		pacedMetricCh:         make(chan *pacedMetric, 256),
-		ReportStats:           false,
-		ReportStatsPrefix:     "tgres",
-		NWorkers:              1,
+		serde:             serde,
+		MinStep:           10 * time.Second,
+		StatFlushDuration: 10 * time.Second,
+		StatsNamePrefix:   "stats",
+		dpCh:              make(chan interface{}, 256),
+		aggCh:             make(chan *aggregator.Command, 256),
+		pacedMetricCh:     make(chan *pacedMetric, 256),
+		ReportStats:       false,
+		ReportStatsPrefix: "tgres",
+		NWorkers:          1,
 	}
 
 	r.flusher = &dsFlusher{db: serde.Flusher(), vdb: serde.VerticalFlusher(), sr: r}

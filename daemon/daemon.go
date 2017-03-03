@@ -112,7 +112,7 @@ var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *rece
 	r.MinStep = cfg.MinStep.Duration
 	r.StatFlushDuration = cfg.StatFlush.Duration
 	r.StatsNamePrefix = cfg.StatsNamePrefix
-	r.MaxFlushRatePerSecond = cfg.MaxFlushesPerSecond
+	r.MaxReceiverQueueSize = cfg.MaxReceiverQueueSize
 	r.ReportStats = true
 	r.NWorkers = cfg.Workers
 	r.SetCluster(c)

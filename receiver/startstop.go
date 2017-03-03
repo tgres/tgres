@@ -65,7 +65,7 @@ var doStart = func(r *Receiver) {
 	log.Printf("Receiver: All workers running, starting director.")
 
 	startWg.Add(1)
-	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.NWorkers, r.cluster, r, r.dsc, r.flusher)
+	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.NWorkers, r.cluster, r, r.dsc, r.flusher, r.MaxReceiverQueueSize)
 	startWg.Wait()
 
 	log.Printf("Receiver: Starting runtime cpu/mem reporter.")
@@ -133,7 +133,7 @@ var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 	}
 
 	log.Printf("Starting flusher(s)...")
-	r.flusher.start(&r.flusherWg, startWg, r.MaxFlushRatePerSecond, r.MinStep, r.NWorkers)
+	r.flusher.start(&r.flusherWg, startWg, r.MinStep, r.NWorkers)
 }
 
 var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {

@@ -38,7 +38,7 @@ type Config struct { // Needs to be exported for TOML to work
 	LogCycle                 duration `toml:"log-cycle-interval"`
 	DbConnectString          string   `toml:"db-connect-string"`
 	MinStep                  duration `toml:"min-step"`
-	MaxFlushesPerSecond      int      `toml:"max-flushes-per-second"`
+	MaxReceiverQueueSize     int      `toml:"max-receiver-queue-size"`
 	GraphiteTextListenSpec   string   `toml:"graphite-text-listen-spec"`
 	GraphiteUdpListenSpec    string   `toml:"graphite-udp-listen-spec"`
 	GraphitePickleListenSpec string   `toml:"graphite-pickle-listen-spec"`
@@ -210,11 +210,14 @@ func (c *Config) processMinStep() error {
 	return nil
 }
 
-func (c *Config) processMaxFlushesPerSecond() error {
-	if c.MaxFlushesPerSecond == 0 {
-		return fmt.Errorf("max-flushes-per-second missing, must be integer")
+func (c *Config) processMaxReceiverQueueSize() error {
+	if c.MaxReceiverQueueSize == 0 {
+		return fmt.Errorf("max-receiver-queue-size unspecified, defaults to 0 (unlimited)")
+	} else if c.MaxReceiverQueueSize <= 0 {
+		log.Printf("Receiver Queue Size is unlimited (%d) (max-receiver-queue-size).", c.MaxReceiverQueueSize)
+	} else {
+		log.Printf("Receiver Queue Size is limited to %d (max-receiver-queue-size).", c.MaxReceiverQueueSize)
 	}
-	log.Printf("Data Source flushes will be rate limited to %d per second (max-flushes-per-second).", c.MaxFlushesPerSecond)
 	return nil
 }
 
@@ -298,7 +301,7 @@ type configer interface {
 	processConfigLogCycleInterval() error
 	processDbConnectString() error
 	processMinStep() error
-	processMaxFlushesPerSecond() error
+	processMaxReceiverQueueSize() error
 	processStatFlushInterval() error
 	processStatsNamePrefix() error
 	processWorkers() error
@@ -322,7 +325,7 @@ var processConfig = func(c configer, wd string) error {
 	if err := c.processMinStep(); err != nil {
 		return err
 	}
-	if err := c.processMaxFlushesPerSecond(); err != nil {
+	if err := c.processMaxReceiverQueueSize(); err != nil {
 		return err
 	}
 	if err := c.processStatFlushInterval(); err != nil {

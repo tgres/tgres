@@ -3,9 +3,10 @@
 
 min-step                = "10s"
 
-# global across all DSs and trumps all the above
-max-flushes-per-second  = 100
+# 0 - unlilimited (default). points in excess are discarded
+#max-receiver-queue-size  = 1000000
 
+# number of flushers == number of workers
 workers                 = 4
 
 pid-file =                 "tgres.pid"

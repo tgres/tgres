@@ -121,7 +121,7 @@ var directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan
 
 	cds := dsc.getByIdentOrCreateEmpty(dp.cachedIdent)
 	if cds == nil {
-		stats.dropped++
+		stats.unknown++
 		if debug {
 			log.Printf("director: No spec matched ident: %#v, ignoring data point", dp.cachedIdent.String())
 		}
@@ -149,20 +149,24 @@ func reportOverrunQueueSize(queue *fifoQueue, sr statReporter, nap time.Duration
 
 var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter) {
 
-	var queue = &fifoQueue{}
-
+	// NOTE: Loader does not use an elastic channel to provide "back
+	// pressure" when there are too many db operations. When this
+	// happens, channels fill up and ultimately the receiver queue
+	// should start growing. If there is a MaxReceiverQueueSize, then
+	// we should start dropping data points, otherwise we'll just keep
+	// on eating memory. Either strategy is better than an elastic
+	// loader channel because unlike incoming data points / receiver
+	// queue, load requests cannot be discarded.
+	
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			sr.reportStatGauge("receiver.load_queue_len", float64(queue.size()))
+			sr.reportStatGauge("receiver.load_queue_len", float64(len(loaderCh)))
 		}
 	}()
 
-	loaderOutCh := make(chan interface{}, 128)
-	go elasticCh(loaderCh, loaderOutCh, queue)
-
 	for {
-		x, ok := <-loaderOutCh
+		x, ok := <-loaderCh
 		if !ok {
 			log.Printf("loader: channel closed, closing director channel and exiting...")
 			close(dpCh)
@@ -188,12 +192,12 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 }
 
 type dpStats struct {
-	total, forwarded, dropped int
-	forwarded_to              map[string]int
-	last                      time.Time
+	total, forwarded, unknown, dropped int
+	forwarded_to                       map[string]int
+	last                               time.Time
 }
 
-var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking) {
+var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, maxQLen int) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -216,7 +220,10 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 	dpOutCh := make(chan interface{}, 128)
 	go elasticCh(dpCh, dpOutCh, queue)
 
-	loaderCh := make(chan interface{}, 128)
+	// Experimentation shows that the length of loader channel doesn't
+	// matter much - making it 64K doesn't provide better performance
+	// than 4K.
+	loaderCh := make(chan interface{}, 4096)
 	go loader(loaderCh, dpCh, dsc, sr)
 
 	var workerWg sync.WaitGroup
@@ -265,6 +272,11 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 		}
 
 		if dp != nil {
+			if maxQLen > 0 && queue.size() > maxQLen {
+				stats.dropped++
+				continue // /dev/null
+			}
+
 			// if the dp ident is not found, it will be submitted to
 			// the loader, which will return it to us through the dpCh
 			// as a cachedDs.
@@ -298,7 +310,8 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 
 		if stats.last.Before(time.Now().Add(-time.Second)) {
 			sr.reportStatCount("receiver.datapoints.total", float64(stats.total))
-			sr.reportStatCount("receiver.datapoints.dropped", float64(stats.dropped))
+			sr.reportStatCount("receiver.datapoints.dropped", float64(stats.dropped)) // this too might be dropped...
+			sr.reportStatCount("receiver.datapoints.unknown", float64(stats.unknown))
 			sr.reportStatCount("receiver.datapoints.forwarded", float64(stats.forwarded))
 			for dest, cnt := range stats.forwarded_to {
 				sr.reportStatCount(fmt.Sprintf("receiver.forwarded_to.%s", dest), float64(cnt))
