@@ -73,8 +73,19 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 	}
 
 	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
-		dsf.flushDs(cds.DbDataSourcer, false)
+		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
+
+		// Once a minute request a flush of the DS and its RRAs. This
+		// is a cautionary measure, we only really need to flush these
+		// on exit. The key information is the value/duration for
+		// partially updated PDPs. Note that if the flusher is busy
+		// (i.e. channel is full), it will ignore this request.
+		if cds.lastDSFlush.Before(time.Now().Add(-time.Minute)) {
+			dsf.flushDS(cds, false)
+			cds.lastDSFlush = time.Now()
+		}
+
 	}
 	return cnt
 }
@@ -103,7 +114,7 @@ var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, workerCh chan *
 			if pc := cds.PointCount(); pc > 0 {
 				log.Printf("director: WARNING: Clearing DS with PointCount > 0: %v", pc)
 			}
-			cds.ClearRRAs(true)
+			cds.ClearRRAs()
 		}
 	}
 	return
@@ -157,7 +168,7 @@ var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter
 	// on eating memory. Either strategy is better than an elastic
 	// loader channel because unlike incoming data points / receiver
 	// queue, load requests cannot be discarded.
-	
+
 	go func() {
 		for {
 			time.Sleep(time.Second)
@@ -248,6 +259,7 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 		select {
 		case _, ok = <-clusterChgCh:
 			if ok {
+				// See distDs.Relinquish() for some documentation
 				if err := clstr.Transition(45 * time.Second); err != nil {
 					log.Printf("director: Transition error: %v", err)
 				}

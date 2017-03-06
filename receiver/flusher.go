@@ -18,7 +18,6 @@ package receiver
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -95,11 +94,11 @@ func (f *dsFlusher) verticalFlush(ds serde.DbDataSourcer) {
 	}
 }
 
-func (f *dsFlusher) horizontalFlush(ds serde.DbDataSourcer, block bool) {
+func (f *dsFlusher) flushDS(ds serde.DbDataSourcer, block bool) {
 	f.flusherCh.queueBlocking(ds, block)
 }
 
-func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) {
+func (f *dsFlusher) flushToVCache(ds serde.DbDataSourcer) {
 	if f.db == nil {
 		return
 	}
@@ -107,13 +106,7 @@ func (f *dsFlusher) flushDs(ds serde.DbDataSourcer, block bool) {
 		// These operations do not write to the db, but only move
 		// stuff to another cache.
 		f.verticalFlush(ds)
-		ds.ClearRRAs(false)
-		if block {
-			f.horizontalFlush(ds, block)
-		} else if rand.Intn(3) == 0 {
-			// flush a third of DSs, just in case
-			f.horizontalFlush(ds, false)
-		}
+		ds.ClearRRAs()
 	}
 	return
 }
@@ -131,7 +124,8 @@ func (f *dsFlusher) flusher() serde.Flusher {
 }
 
 type dsFlusherBlocking interface {
-	flushDs(serde.DbDataSourcer, bool)
+	flushToVCache(serde.DbDataSourcer)
+	flushDS(serde.DbDataSourcer, bool)
 	enabled() bool
 	statReporter() statReporter
 	flusher() serde.Flusher
@@ -196,7 +190,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 				if err == nil {
 					sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
 					sr.reportStatCount("serde.flush_ds.count", 1)
-					sr.reportStatCount("serde.flush_ds.sql_ops", 1)
+					sr.reportStatCount("serde.flush_ds.sql_ops", float64(1+len(ds.RRAs())))
 				}
 			} else {
 				toFlush[ds.Id()] = ds
@@ -220,7 +214,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 			if err == nil {
 				sr.reportStatGauge("serde.flush_ds.duration_ms", dur*1000)
 				sr.reportStatCount("serde.flush_ds.count", 1)
-				sr.reportStatCount("serde.flush_ds.sql_ops", 1)
+				sr.reportStatCount("serde.flush_ds.sql_ops", float64(1+len(ds.RRAs())))
 			}
 			break
 		}

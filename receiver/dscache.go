@@ -149,6 +149,7 @@ type cachedDs struct {
 	spec         *rrd.DSSpec // for when DS needs to be created
 	sentToLoader bool
 	lastFlush    time.Time
+	lastDSFlush  time.Time
 	mu           *sync.Mutex
 }
 
@@ -203,10 +204,22 @@ type distDs struct {
 // cluster.DistDatum interface
 
 func (ds *distDs) Relinquish() error {
+
+	// NB: Data points that are in vcache are complete, immutable and
+	// there is no situation where they are ever updated. This means
+	// that the transition should only concern itself with incomplete
+	// state in DS and its RRAs, as long as it is passed correctly
+	// between nodes, the data is correct. Requirement #2 is that the
+	// vcache is flushed, but this does not need synchronization.
+	//
+	// vcache is fully flushed in flusher.stop()
+
 	if !ds.LastUpdate().IsZero() {
-		ds.dsc.dsf.flushDs(ds.DbDataSourcer, true)
-		ds.dsc.delete(ds.Ident())
+		ds.dsc.dsf.flushToVCache(ds.DbDataSourcer)
+		ds.dsc.dsf.flushDS(ds.DbDataSourcer, true)
 	}
+	ds.dsc.delete(ds.Ident())
+
 	return nil
 }
 

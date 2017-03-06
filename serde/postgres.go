@@ -37,11 +37,13 @@ type pgvSerDe struct {
 	dbConn *sql.DB
 	prefix string
 
-	sql2, sql3, sql6, sql7, sql8 *sql.Stmt
+	sql3, sql6, sql8             *sql.Stmt
 	sqlSelectDSByIdent           *sql.Stmt
 	sqlInsertDS                  *sql.Stmt
+	sqlUpdateDS                  *sql.Stmt
 	sqlSelectRRAsByDsId          *sql.Stmt
 	sqlInsertRRA                 *sql.Stmt
+	sqlUpdateRRA                 *sql.Stmt
 	sqlInsertRRABundle           *sql.Stmt
 	sqlSelectRRABundleByStepSize *sql.Stmt
 	sqlSelectRRABundle           *sql.Stmt
@@ -145,7 +147,7 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 
-	if p.sql2, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
+	if p.sqlUpdateRRA, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql3, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
@@ -177,7 +179,7 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sql7, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
+	if p.sqlUpdateDS, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
 	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, false AS created FROM %[1]sds AS ds WHERE id = $1",
@@ -630,13 +632,24 @@ func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 	if debug {
 		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", dbds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
 	}
-	durationMs := ds.Duration().Nanoseconds() / 1000000
-	if rows, err := p.sql7.Query(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
+	durationMs := ds.Duration().Nanoseconds() / 1e6
+	if rows, err := p.sqlUpdateDS.Query(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
 		// TODO Check number of rows updated - what if this DS does not exist in the DB?
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
 	} else {
 		rows.Close()
+	}
+
+	for _, rra := range ds.RRAs() {
+		drra, ok := rra.(DbRoundRobinArchiver)
+		if !ok { // If this is not a DbRoundRobinArchive, we cannot flush
+			return fmt.Errorf("rra must be a DbRoundRobinArchiver to flush.")
+		}
+
+		if _, err := p.sqlUpdateRRA.Exec(rra.Value(), rra.Duration().Nanoseconds()/1e6, drra.Id()); err != nil {
+			return err
+		}
 	}
 
 	return nil

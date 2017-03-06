@@ -42,7 +42,7 @@ type DataSourcer interface {
 	Copy() DataSourcer
 	BestRRA(start, end time.Time, points int64) RoundRobinArchiver
 	PointCount() int
-	ClearRRAs(clearLU bool)
+	ClearRRAs()
 	ProcessDataPoint(value float64, ts time.Time) error
 }
 
@@ -82,7 +82,10 @@ func (ds *DataSource) LastUpdate() time.Time { return ds.lastUpdate }
 func (ds *DataSource) RRAs() []RoundRobinArchiver { return ds.rras }
 
 // SetRRAs provides a way to set the RRAs (which may contain data)
-func (ds *DataSource) SetRRAs(rras []RoundRobinArchiver) { ds.rras = rras }
+func (ds *DataSource) SetRRAs(rras []RoundRobinArchiver) {
+	ds.rras = rras
+	ds.checkLastUpdate()
+}
 
 // Returns a complete copy of this Data Source
 func (ds *DataSource) Copy() DataSourcer {
@@ -295,19 +298,22 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
 }
 
 // ClearRRAs clears the data in all RRAs. It is meant to be called
-// immedately after flushing the DS to permanent storage. If clearLU
-// flag is true, then lastUpdate will get zeroed-out. (Normally you do
-// not want to reset lastUpdate so that PDP is updated correctly). A
-// DS with a zero lastUpdate is never saved, this is a prevention
-// measure for nodes that are only forwarding events, preventing them
-// from at some point saving their stale state and overwriting good
-// data..
-func (ds *DataSource) ClearRRAs(clearLU bool) {
+// immedately after flushing the DS to permanent storage.
+func (ds *DataSource) ClearRRAs() {
 	for _, rra := range ds.rras {
 		rra.clear()
 	}
-	if clearLU {
-		ds.lastUpdate = time.Time{}
+}
+
+// Make sure that lastUpdated is not before the latest in RRAs. This
+// should never happen, but it is possible if we're loading a DS from
+// a database that somehow didn't get saved correctly.
+func (ds *DataSource) checkLastUpdate() {
+	for _, rra := range ds.rras {
+		rraLatest := rra.Latest()
+		if ds.lastUpdate.Before(rraLatest) {
+			ds.lastUpdate = rraLatest
+		}
 	}
 }
 
