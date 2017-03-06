@@ -17,6 +17,7 @@ package receiver
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -141,11 +142,18 @@ func (d *dsCache) stats() (int, int) {
 	return len(d.byIdent), d.rraCount
 }
 
+// Sortable array of incomingDP
+type sortableIncomingDPs []*incomingDP
+
+func (a sortableIncomingDPs) Len() int           { return len(a) }
+func (a sortableIncomingDPs) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a sortableIncomingDPs) Less(i, j int) bool { return a[i].timeStamp.Before(a[j].timeStamp) }
+
 // cachedDs is a DS that keeps a queue of incoming data points, which
 // can all processed at once.
 type cachedDs struct {
 	serde.DbDataSourcer
-	incoming     []*incomingDP
+	incoming     sortableIncomingDPs
 	spec         *rrd.DSSpec // for when DS needs to be created
 	sentToLoader bool
 	lastFlush    time.Time
@@ -163,11 +171,19 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	cds.mu.Lock()
 	defer cds.mu.Unlock()
 	var err error
+
+	count := len(cds.incoming)
+	if count == 0 {
+		return 0, nil
+	}
+
+	sort.Sort(cds.incoming)
+
 	for _, dp := range cds.incoming {
 		// continue on errors
 		err = cds.ProcessDataPoint(dp.value, dp.timeStamp)
 	}
-	count := len(cds.incoming)
+
 	if count < 32 {
 		// leave the backing array in place to avoid extra memory allocations
 		cds.incoming = cds.incoming[:0]
