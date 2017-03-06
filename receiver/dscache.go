@@ -156,6 +156,7 @@ type cachedDs struct {
 	incoming     sortableIncomingDPs
 	spec         *rrd.DSSpec // for when DS needs to be created
 	sentToLoader bool
+	lastProcess  time.Time
 	lastFlush    time.Time
 	lastDSFlush  time.Time
 	mu           *sync.Mutex
@@ -177,6 +178,11 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		return 0, nil
 	}
 
+	// delay processing by 1/10 of a step
+	if !cds.lastProcess.Before(time.Now().Add(-cds.Step() / 10)) {
+		return 0, nil
+	}
+
 	sort.Sort(cds.incoming)
 
 	for _, dp := range cds.incoming {
@@ -184,12 +190,15 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		err = cds.ProcessDataPoint(dp.value, dp.timeStamp)
 	}
 
+	cds.lastProcess = time.Now()
+
 	if count < 32 {
 		// leave the backing array in place to avoid extra memory allocations
 		cds.incoming = cds.incoming[:0]
 	} else {
 		cds.incoming = nil
 	}
+
 	return count, err
 }
 
