@@ -169,6 +169,9 @@ func (cds *cachedDs) appendIncoming(dp *incomingDP) {
 }
 
 func (cds *cachedDs) processIncoming() (int, error) {
+
+	const BIG = 32 // this number was chosen rather arbitrarily
+
 	cds.mu.Lock()
 	defer cds.mu.Unlock()
 	var err error
@@ -178,8 +181,11 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		return 0, nil
 	}
 
-	// delay processing by 1/10 of a step
-	if !cds.lastProcess.Before(time.Now().Add(-cds.Step() / 10)) {
+	// delay processing by 1/10 of a step, in a clustered situation it
+	// is possible for forwarded data points to arrive slightly late,
+	// this (along with the Sort() just below) addresses it.  Unless
+	// there are already a bunch of points queued up
+	if !(cds.lastProcess.Before(time.Now().Add(-cds.Step()/10)) || count > BIG) {
 		return 0, nil
 	}
 
@@ -192,7 +198,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 
 	cds.lastProcess = time.Now()
 
-	if count < 32 {
+	if count < BIG {
 		// leave the backing array in place to avoid extra memory allocations
 		cds.incoming = cds.incoming[:0]
 	} else {
