@@ -29,7 +29,9 @@ import (
 func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher) {
 
 	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcache))
+	http.HandleFunc("/metrics/find/", h.GraphiteMetricsFindHandler(rcache))
 	http.HandleFunc("/render", h.GraphiteRenderHandler(rcache))
+	http.HandleFunc("/render/", h.GraphiteRenderHandler(rcache))
 
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
 
