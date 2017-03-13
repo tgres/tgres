@@ -67,11 +67,11 @@ var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan 
 var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 
 	cnt, err := cds.processIncoming()
-
 	if err != nil {
 		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
 	}
 
+	cds.mu.Lock()
 	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
@@ -85,8 +85,8 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 			dsf.flushDS(cds, false)
 			cds.lastDSFlush = time.Now()
 		}
-
 	}
+	cds.mu.Unlock()
 	return cnt
 }
 

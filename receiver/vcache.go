@@ -87,8 +87,9 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 		bc.m[key] = segment
 	}
 
-	segment.Lock()
 	bc.Unlock()
+
+	segment.Lock()
 
 	for i, v := range rra.DPs() {
 		if len(segment.rows[i]) == 0 {
