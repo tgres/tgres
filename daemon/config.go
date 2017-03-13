@@ -212,7 +212,7 @@ func (c *Config) processMinStep() error {
 
 func (c *Config) processMaxReceiverQueueSize() error {
 	if c.MaxReceiverQueueSize == 0 {
-		return fmt.Errorf("max-receiver-queue-size unspecified, defaults to 0 (unlimited)")
+		log.Printf("max-receiver-queue-size unspecified, defaults to 0 (unlimited)")
 	} else if c.MaxReceiverQueueSize <= 0 {
 		log.Printf("Receiver Queue Size is unlimited (%d) (max-receiver-queue-size).", c.MaxReceiverQueueSize)
 	} else {
