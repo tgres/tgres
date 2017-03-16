@@ -16,7 +16,6 @@
 package serde
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -27,13 +26,15 @@ import (
 type memSerDe struct {
 	*sync.RWMutex
 	byIdent map[string]*DbDataSource
-	byId    map[int64]*DbDataSource
 	lastId  int64
 }
 
 // Returns a SerDe which keeps everything in memory.
 func NewMemSerDe() *memSerDe {
-	return &memSerDe{RWMutex: &sync.RWMutex{}, byIdent: make(map[string]*DbDataSource), byId: make(map[int64]*DbDataSource)}
+	return &memSerDe{
+		RWMutex: &sync.RWMutex{},
+		byIdent: make(map[string]*DbDataSource),
+	}
 }
 
 func (m *memSerDe) Fetcher() Fetcher                         { return m }
@@ -54,7 +55,7 @@ func (sr *memSearchResult) Next() bool {
 	sr.pos++
 	return sr.pos < len(sr.result)
 }
-func (sr *memSearchResult) Id() int64    { return sr.result[sr.pos].id }
+
 func (sr *memSearchResult) Ident() Ident { return sr.result[sr.pos].ident }
 func (sr *memSearchResult) Close() error { return nil }
 
@@ -69,12 +70,6 @@ func (m *memSerDe) Search(_ SearchQuery) (SearchResult, error) {
 	return sr, nil
 }
 
-func (m *memSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
-	m.RLock()
-	defer m.RUnlock()
-	return m.byId[id], nil
-}
-
 func (*memSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return series.NewRRASeries(ds.RRAs()[0]), nil
 }
@@ -83,7 +78,7 @@ func (m *memSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	m.RLock()
 	defer m.RUnlock()
 	result := []rrd.DataSourcer{}
-	for _, ds := range m.byId {
+	for _, ds := range m.byIdent {
 		result = append(result, ds)
 	}
 	return result, nil
@@ -92,15 +87,12 @@ func (m *memSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 func (m *memSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	m.Lock()
 	defer m.Unlock()
-	if ident["name"] == "" {
-		return nil, fmt.Errorf("ident without name tag")
-	}
+
 	if ds, ok := m.byIdent[ident.String()]; ok {
 		return ds, nil
 	}
 	m.lastId++
 	ds := NewDbDataSource(m.lastId, ident, rrd.NewDataSource(*dsSpec))
 	m.byIdent[ident.String()] = ds
-	m.byId[m.lastId] = ds
 	return ds, nil
 }

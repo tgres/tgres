@@ -26,19 +26,20 @@ import (
 	"github.com/tgres/tgres/serde"
 )
 
-// DataSourceNames provides a way of searching dot-separated names
-// using same rules as filepath.Match, as well as comma-separated
-// values in curly braces such as "foo.{bar,baz}".
-type dataSourceNames struct {
+// fsFindCache provides a way of searching dot-separated ident
+// elements using same rules as filepath.Match, as well as
+// comma-separated values in curly braces such as "foo.{bar,baz}".
+type fsFindCache struct {
 	sync.RWMutex
-	names    map[string]int64
+	key      string // name of the ident key, required
+	names    map[string]serde.Ident
 	prefixes map[string]bool
 }
 
 type FsFindNode struct {
-	Name string
-	Leaf bool
-	dsId int64
+	Name  string
+	Leaf  bool
+	ident serde.Ident
 }
 
 type fsNodes []*FsFindNode
@@ -57,7 +58,7 @@ func (fns fsNodes) Swap(i, j int) {
 // Add prefixes given a name:
 // "abcd" => []
 // "abcd.efg.hij" => ["abcd.efg", "abcd"]
-func (dsns *dataSourceNames) addPrefixes(name string) {
+func (dsns *fsFindCache) addPrefixes(name string) {
 	prefix := name
 	for ext := filepath.Ext(prefix); ext != ""; {
 		prefix = name[0 : len(prefix)-len(ext)]
@@ -66,8 +67,8 @@ func (dsns *dataSourceNames) addPrefixes(name string) {
 	}
 }
 
-func (dsns *dataSourceNames) reload(db serde.DataSourceSearcher) error {
-	sr, err := db.Search(map[string]string{"name": ".*"})
+func (dsns *fsFindCache) reload(db serde.DataSourceSearcher) error {
+	sr, err := db.Search(map[string]string{dsns.key: ".*"})
 	defer sr.Close()
 	if err != nil {
 		return err
@@ -76,22 +77,22 @@ func (dsns *dataSourceNames) reload(db serde.DataSourceSearcher) error {
 	dsns.Lock()
 	defer dsns.Unlock()
 
-	dsns.names = make(map[string]int64)
+	dsns.names = make(map[string]serde.Ident)
 	dsns.prefixes = make(map[string]bool)
 
 	for sr.Next() {
-		name := sr.Ident()["name"]
+		name := sr.Ident()[dsns.key]
 		if name == "" {
-			return fmt.Errorf("reload(): 'name' tag missing for DS id: %d", sr.Id())
+			return fmt.Errorf("reload(): '%s' tag missing for DS ident: %s", dsns.key, sr.Ident().String())
 		}
-		dsns.names[name] = sr.Id()
+		dsns.names[name] = sr.Ident()
 		dsns.addPrefixes(name)
 	}
 
 	return nil
 }
 
-func (dsns *dataSourceNames) fsFind(pattern string) []*FsFindNode {
+func (dsns *fsFindCache) fsFind(pattern string) []*FsFindNode {
 
 	if strings.Count(pattern, ",") > 0 {
 		subres := make(fsNodes, 0)
@@ -114,9 +115,9 @@ func (dsns *dataSourceNames) fsFind(pattern string) []*FsFindNode {
 	dots := strings.Count(pattern, ".")
 
 	set := make(map[string]*FsFindNode)
-	for k, dsId := range dsns.names {
+	for k, ident := range dsns.names {
 		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: true, dsId: dsId}
+			set[k] = &FsFindNode{Name: k, Leaf: true, ident: ident}
 		}
 	}
 
@@ -138,11 +139,11 @@ func (dsns *dataSourceNames) fsFind(pattern string) []*FsFindNode {
 	return result
 }
 
-func (dsns *dataSourceNames) dsIdsFromIdent(ident string) map[string]int64 {
-	result := make(map[string]int64)
-	for _, node := range dsns.fsFind(ident) {
+func (dsns *fsFindCache) identsFromPattern(pattern string) map[string]serde.Ident {
+	result := make(map[string]serde.Ident)
+	for _, node := range dsns.fsFind(pattern) {
 		if node.Leaf { // only leaf nodes are series names
-			result[node.Name] = node.dsId
+			result[node.Name] = node.ident
 		}
 	}
 	return result

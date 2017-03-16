@@ -1,5 +1,5 @@
 //
-// Copyright 2016 Gregory Trubetskoy. All Rights Reserved.
+// Copyright 2017 Gregory Trubetskoy. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,28 +26,27 @@ import (
 // Creates a NamedDsFetcher from a map of DataSourcers. This is useful
 // to bootstrap a DSL Context without any database.
 func NewNamedDSFetcherMap(dss map[string]rrd.DataSourcer) *namedDsFetcher {
-	return NewNamedDSFetcher(newMapCache(dss))
+	result := make(mapCache)
+	for name, ds := range dss {
+		ident := serde.Ident{"name": name}
+		result[ident.String()] = &mapCacheEntry{
+			ident: ident,
+			ds:    ds,
+		}
+	}
+	return NewNamedDSFetcher(result)
+}
+
+type mapCacheEntry struct {
+	ident serde.Ident
+	ds    rrd.DataSourcer
 }
 
 // A dsFinder backed by a simple map of DSs
-func newMapCache(dss map[string]rrd.DataSourcer) *mapCache {
-	mc := &mapCache{make(map[string]int64), make(map[int64]rrd.DataSourcer)}
-	var n int64
-	for name, ds := range dss {
-		mc.byName[name] = n
-		mc.byId[n] = ds
-		n++
-	}
-	return mc
-}
-
-type srRow struct {
-	ident serde.Ident
-	id    int64
-}
+type mapCache map[string]*mapCacheEntry
 
 type memSearchResult struct {
-	result []*srRow
+	result []serde.Ident
 	pos    int
 }
 
@@ -55,39 +54,22 @@ func (sr *memSearchResult) Next() bool {
 	sr.pos++
 	return sr.pos < len(sr.result)
 }
-func (sr *memSearchResult) Id() int64          { return sr.result[sr.pos].id }
-func (sr *memSearchResult) Ident() serde.Ident { return sr.result[sr.pos].ident }
+
+func (sr *memSearchResult) Ident() serde.Ident { return sr.result[sr.pos] }
 func (sr *memSearchResult) Close() error       { return nil }
 
-type mapCache struct {
-	byName map[string]int64
-	byId   map[int64]rrd.DataSourcer
-}
-
-func (m *mapCache) Search(query serde.SearchQuery) (serde.SearchResult, error) {
+func (m mapCache) Search(_ serde.SearchQuery) (serde.SearchResult, error) {
 	sr := &memSearchResult{pos: -1}
-	for k, v := range m.byName {
-		sr.result = append(sr.result, &srRow{map[string]string{"name": k}, v})
+	for _, me := range m {
+		sr.result = append(sr.result, me.ident)
 	}
 	return sr, nil
 }
 
-func (m *mapCache) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
-	return m.byId[id], nil
-}
-
-func (*mapCache) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
+func (mapCache) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return series.NewRRASeries(ds.RRAs()[0]), nil
 }
 
-func (m *mapCache) FetchDataSources() ([]rrd.DataSourcer, error) {
-	result := []rrd.DataSourcer{}
-	for _, ds := range m.byId {
-		result = append(result, ds)
-	}
-	return result, nil
-}
-
-func (*mapCache) FetchOrCreateDataSource(name string, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
+func (mapCache) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	return nil, nil
 }

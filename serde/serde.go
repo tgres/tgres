@@ -39,7 +39,6 @@ type SearchResult interface {
 	Next() bool
 	Close() error
 	Ident() Ident
-	Id() int64
 }
 
 type SearchQuery map[string]string
@@ -55,9 +54,15 @@ type DataSourceSearcher interface {
 
 type Fetcher interface {
 	DataSourceSearcher
-	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
+	// Fetch all the data sources (used to populate the cache on start)
 	FetchDataSources() ([]rrd.DataSourcer, error)
+	// Fetch or create a single DS. Passing a nil dsSpec disables creation.
 	FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
+	// FetchSeries is responsible for presenting a DS as a
+	// series.Series. This may include selecting the most suitable RRA
+	// of the DS to satisfy span and resolution requested, as well as
+	// setting up a database cursor which will be used to iterate over
+	// the series.
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 

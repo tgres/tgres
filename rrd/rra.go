@@ -84,7 +84,6 @@ type RoundRobinArchiver interface {
 	End() int64
 	PointCount() int
 	DPs() map[int64]float64
-	SetDPs(map[int64]float64)
 	Copy() RoundRobinArchiver
 	Begins(now time.Time) time.Time
 
@@ -94,9 +93,6 @@ type RoundRobinArchiver interface {
 	includes(t time.Time) bool
 	update(periodBegin, periodEnd time.Time, value float64, duration time.Duration)
 }
-
-// Set the data points (TODO is this necessary?)
-func (rra *RoundRobinArchive) SetDPs(dps map[int64]float64) { rra.dps = dps }
 
 // Latest returns the time on which the last slot ends.
 func (rra *RoundRobinArchive) Latest() time.Time { return rra.latest }

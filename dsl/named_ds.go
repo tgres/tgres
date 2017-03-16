@@ -31,35 +31,42 @@ type NamedDSFetcher interface {
 	fsFinder
 }
 
+type fsFinder interface {
+	identsFromPattern(ident string) map[string]serde.Ident
+	FsFind(pattern string) []*FsFindNode
+}
+
 // This is a subset of serde.Fetcher
 type dsFetcher interface {
 	serde.DataSourceSearcher
-	FetchDataSourceById(id int64) (rrd.DataSourcer, error)
+	FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
-type fsFinder interface {
-	dsIdsFromIdent(ident string) map[string]int64
-	FsFind(pattern string) []*FsFindNode
+// Methods necessary for a DSL context
+type ctxDSFetcher interface {
+	FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
+	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
+	identsFromPattern(pattern string) map[string]serde.Ident
 }
 
 type namedDsFetcher struct {
 	dsFetcher
-	dsns *dataSourceNames
+	dsns *fsFindCache
 }
 
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
 func NewNamedDSFetcher(db dsFetcher) *namedDsFetcher {
-	return &namedDsFetcher{dsFetcher: db, dsns: &dataSourceNames{}}
+	return &namedDsFetcher{dsFetcher: db, dsns: &fsFindCache{key: "name"}}
 }
 
-func (r *namedDsFetcher) dsIdsFromIdent(ident string) map[string]int64 {
-	result := r.dsns.dsIdsFromIdent(ident)
+func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident {
+	result := r.dsns.identsFromPattern(ident)
 	if len(result) == 0 {
 		r.dsns.reload(r)
-		result = r.dsns.dsIdsFromIdent(ident)
+		result = r.dsns.identsFromPattern(ident)
 	}
 	return result
 }

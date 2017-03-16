@@ -61,22 +61,22 @@ type dslCtx struct {
 	src                 string
 	escSrc              string
 	from, to, maxPoints int64
-	NamedDSFetcher
+	ctxDSFetcher
 }
 
 // Parse a DSL expression given by src and other params.
-func ParseDsl(db NamedDSFetcher, src string, from, to, maxPoints int64) (SeriesMap, error) {
+func ParseDsl(db ctxDSFetcher, src string, from, to, maxPoints int64) (SeriesMap, error) {
 	return newDslCtx(db, src, from, to, maxPoints).parse()
 }
 
-func newDslCtx(db NamedDSFetcher, src string, from, to, maxPoints int64) *dslCtx {
+func newDslCtx(db ctxDSFetcher, src string, from, to, maxPoints int64) *dslCtx {
 	return &dslCtx{
-		src:            src,
-		escSrc:         fixQuotes(escapeBadChars(src)),
-		from:           from,
-		to:             to,
-		maxPoints:      maxPoints,
-		NamedDSFetcher: db}
+		src:          src,
+		escSrc:       fixQuotes(escapeBadChars(src)),
+		from:         from,
+		to:           to,
+		maxPoints:    maxPoints,
+		ctxDSFetcher: db}
 }
 
 // Parse a DSL context. Returns a SeriesMap or error.
@@ -106,23 +106,23 @@ func (dc *dslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 		return obj, nil
 	case string:
 		fromT, toT := time.Unix(dc.from, 0), time.Unix(dc.to, 0)
-		series, err := dc.seriesFromIdent(obj, fromT, toT)
+		series, err := dc.seriesFromPattern(obj, fromT, toT)
 		return series, err
 	}
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T of %v", what, what)
 }
 
-func (dc *dslCtx) seriesFromIdent(ident string, from, to time.Time) (SeriesMap, error) {
-	ids := dc.dsIdsFromIdent(ident)
+func (dc *dslCtx) seriesFromPattern(pattern string, from, to time.Time) (SeriesMap, error) {
+	idents := dc.identsFromPattern(pattern)
 	result := make(SeriesMap)
-	for name, id := range ids {
-		ds, err := dc.FetchDataSourceById(id)
+	for name, ident := range idents {
+		ds, err := dc.FetchOrCreateDataSource(ident, nil)
 		if err != nil {
-			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
+			return nil, fmt.Errorf("seriesFromPattern(): Error %v", err)
 		}
 		dps, err := dc.FetchSeries(ds, from, to, dc.maxPoints)
 		if err != nil {
-			return nil, fmt.Errorf("seriesFromIdent(): Error %v", err)
+			return nil, fmt.Errorf("seriesFromPattern(): Error %v", err)
 		}
 		result[name] = &aliasSeries{Series: dps}
 	}

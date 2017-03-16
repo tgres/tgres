@@ -75,7 +75,6 @@ func dataSourceFromRow(rows *sql.Rows) (*DbDataSource, error) {
 type pgSearchResult struct {
 	rows  *sql.Rows
 	err   error
-	id    int64
 	ident Ident
 }
 
@@ -85,20 +84,21 @@ func (sr *pgSearchResult) Next() bool {
 	}
 
 	var b []byte
-	sr.err = sr.rows.Scan(&sr.id, &b)
+	sr.err = sr.rows.Scan(&b)
 	if sr.err != nil {
 		log.Printf("pgSearchResult.Next(): error scanning row: %v", sr.err)
 		return false
 	}
-	sr.err = json.Unmarshal(b, &sr.ident)
+	var ident Ident // we want a new map created, not reuse the same one
+	sr.err = json.Unmarshal(b, &ident)
 	if sr.err != nil {
 		log.Printf("Search(): error unmarshalling ident %q: %v", string(b), sr.err)
 		return false
 	}
+	sr.ident = ident
 	return true
 }
 
-func (sr *pgSearchResult) Id() int64    { return sr.id }
 func (sr *pgSearchResult) Ident() Ident { return sr.ident }
 func (sr *pgSearchResult) Close() error { return sr.rows.Close() }
 

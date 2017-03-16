@@ -37,7 +37,7 @@ type pgvSerDe struct {
 	dbConn *sql.DB
 	prefix string
 
-	sql3, sql6, sql8             *sql.Stmt
+	sql3, sql6                   *sql.Stmt
 	sqlSelectDSByIdent           *sql.Stmt
 	sqlInsertDS                  *sql.Stmt
 	sqlUpdateDS                  *sql.Stmt
@@ -180,10 +180,6 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sqlUpdateDS, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
-		return err
-	}
-	if p.sql8, err = p.dbConn.Prepare(fmt.Sprintf("SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, false AS created FROM %[1]sds AS ds WHERE id = $1",
-		p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlSelectRRABundleByStepSize, err = p.dbConn.Prepare(fmt.Sprintf(
@@ -397,7 +393,7 @@ func rraFromRRARecordAndBundle(rraRec *rraRecord, bundle *rraBundleRecord, lates
 func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 
 	var (
-		sql   = `SELECT id, ident FROM %[1]sds ds`
+		sql   = `SELECT ident FROM %[1]sds ds`
 		where string
 		args  []interface{}
 	)
@@ -413,34 +409,6 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 	}
 
 	return &pgSearchResult{rows: rows}, nil
-}
-
-func (p *pgvSerDe) FetchDataSourceById(id int64) (rrd.DataSourcer, error) {
-
-	rows, err := p.sql8.Query(id)
-	if err != nil {
-		log.Printf("FetchDataSourceById(): error querying database: %v", err)
-		return nil, err
-	}
-	defer rows.Close()
-
-	if rows.Next() {
-		ds, err := dataSourceFromRow(rows)
-		if err != nil {
-			log.Printf("FetchDataSourceById(): error scanning DS: %v", err)
-			return nil, err
-		}
-		rras, err := p.fetchRoundRobinArchives(ds)
-		if err != nil {
-			log.Printf("FetchDataSourceById(): error fetching RRAs: %v", err)
-			return nil, err
-		} else {
-			ds.SetRRAs(rras)
-		}
-		return ds, nil
-	}
-
-	return nil, nil
 }
 
 func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
@@ -748,11 +716,38 @@ func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]
 	return sqlOps, nil
 }
 
+func (p *pgvSerDe) fetchDataSource(ident Ident) (*DbDataSource, error) {
+
+	rows, err := p.sqlSelectDSByIdent.Query(ident.String())
+	if err != nil {
+		log.Printf("fetchDataSource(): error querying database: %v", err)
+		return nil, err
+	}
+
+	if rows.Next() {
+		ds, err := dataSourceFromRow(rows)
+		if err != nil {
+			log.Printf("fetchDataSource(): error scanning DS: %v", err)
+			return nil, err
+		}
+		rras, err := p.fetchRoundRobinArchives(ds)
+		if err != nil {
+			log.Printf("fetchDataSource(): error fetching RRAs: %v", err)
+			return nil, err
+		} else {
+			ds.SetRRAs(rras)
+		}
+		return ds, nil
+	}
+
+	return nil, nil
+}
+
 // FetchOrCreateDataSource loads or returns an existing DS. This is
 // done by using upserts first on the ds table, then for each
 // RRA. This method also attempt to create the TS empty rows with ON
 // CONFLICT DO NOTHING. The returned DS contains no data, to get data
-// use FetchSeries().
+// use FetchSeries(). A nil dsSpec means fetch only, do not create.
 func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error) {
 	var (
 		err  error
@@ -760,18 +755,21 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 	)
 
 	// Try SELECT first
-	rows, err = p.sqlSelectDSByIdent.Query(ident.String())
+	ds, err := p.fetchDataSource(ident)
+	if err != nil {
+		return nil, err
+	}
+	if ds != nil || dsSpec == nil {
+		return ds, err
+	}
+
+	// Now try INSERT
+	rows, err = p.sqlInsertDS.Query(ident.String(), dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
 	if err != nil {
 		log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
 		return nil, err
 	}
 	if !rows.Next() {
-		// Now try INSERT
-		rows, err = p.sqlInsertDS.Query(ident.String(), dsSpec.Step.Nanoseconds()/1000000, dsSpec.Heartbeat.Nanoseconds()/1000000)
-		if err != nil {
-			log.Printf("FetchOrCreateDataSource(): error querying database: %v", err)
-			return nil, err
-		}
 		if !rows.Next() {
 			log.Printf("FetchOrCreateDataSource(): unable to lookup/create")
 			return nil, fmt.Errorf("unable to lookup/create")
@@ -779,7 +777,7 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 	}
 	defer rows.Close()
 
-	ds, err := dataSourceFromRow(rows)
+	ds, err = dataSourceFromRow(rows)
 	if err != nil {
 		log.Printf("FetchOrCreateDataSource(): error 1: %v", err)
 		return nil, err
@@ -810,7 +808,10 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 			return nil, err
 		}
 
-		// Get the next position for this bundle WWW
+		// Get the next position for this bundle TODO: If the DS was
+		// not created (upsert), there is a possibity that we're
+		// incrementing this in vain, the position will be wasted if
+		// the rra already exists.
 		pos, err := p.rraBundleIncrPos(bundle.id)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error incrementing last_pos in RRA bundle: %v", err)
