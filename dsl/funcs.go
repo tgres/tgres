@@ -55,7 +55,8 @@ type dslCtxFuncType func(*dslCtx, []interface{}) (SeriesMap, error)
 type dslCtxFuncMap map[string]dslCtxFuncType
 
 var dslCtxFuncs = dslCtxFuncMap{ // functions that require the dslCtx to do their stuff
-	"sumSeriesWithWildcards": dslSumSeriesWithWildcards,
+	"sumSeriesWithWildcards":     dslSumSeriesWithWildcards,
+	"averageSeriesWithWildcards": dslAverageSeriesWithWildcards,
 }
 
 var preprocessArgFuncs = funcMap{
@@ -213,9 +214,9 @@ var preprocessArgFuncs = funcMap{
 		argDef{"delta", argNumber, 3.0}}},
 
 	// COMBINE
-	// ** averageSeries
-	// ** avg
-	// ** averageSeriesWithWildcards
+	// ++ averageSeries
+	// ++ avg
+	// ++ averageSeriesWithWildcards
 	// ** group
 	// ** isNonNull
 	// -- mapSeries // returns a list of lists (non-standard)
@@ -282,7 +283,7 @@ var preprocessArgFuncs = funcMap{
 	// ?? cactiStyle // TODO should be easy to do?
 	// ** changed
 	// ?? consolidateBy // doesn't apply to us, it's always avg?
-	// ?? constantLine  // it must take a series as arg, or it makes no sense?
+	// ** constantLine
 	// ** countSeries
 	// -- cumulative // == consolidateBy
 	// ?? groupByNode // similar to alias by metric
@@ -595,6 +596,45 @@ func dslDiffSeries(args map[string]interface{}) (SeriesMap, error) {
 	}
 	name := args["_legend_"].(string)
 	return SeriesMap{name: &seriesDiffSeries{sl}}, nil
+}
+
+// averageSeriesWithWildcards()
+func dslAverageSeriesWithWildcards(dc *dslCtx, args []interface{}) (SeriesMap, error) {
+
+	if len(args) < 2 {
+		return nil, fmt.Errorf("Expecting at least 2 arguments, got %d", len(args))
+	}
+
+	name, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("%v is not a string", args[0])
+	}
+
+	var newName string = name
+	for _, arg := range args[1:] {
+		switch p := arg.(type) {
+		case float64: // our numbers are all float64
+			pos := int(p)
+			parts := strings.Split(newName, ".")
+			if len(parts) > pos {
+				parts[pos] = "*"
+				newName = strings.Join(parts, ".")
+			}
+		}
+	}
+
+	result := &aliasSeriesSlice{}
+	series, err := dc.seriesFromSeriesOrIdent(newName)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range series {
+		result.SeriesSlice = append(result.SeriesSlice, s)
+	}
+	result.Align()
+
+	name = fmt.Sprintf("averageSeriesWithWildcards(%s)", argsAsString(args))
+	return SeriesMap{name: &seriesAverageSeries{result}}, nil
 }
 
 // sumSeriesWithWildcards()
