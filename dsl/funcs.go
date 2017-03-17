@@ -217,8 +217,8 @@ var preprocessArgFuncs = funcMap{
 	// ++ averageSeries
 	// ++ avg
 	// ++ averageSeriesWithWildcards
-	// ** group
-	// ** isNonNull
+	// ++ group
+	// ++ isNonNull
 	// -- mapSeries // returns a list of lists (non-standard)
 	// ** maxSeries
 	// ** minSeries

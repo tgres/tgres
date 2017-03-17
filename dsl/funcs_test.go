@@ -101,8 +101,56 @@ func Test_funcs_dsl(t *testing.T) {
 			if v != 20 {
 				t.Errorf("s.CurrentValue != 20: %v", v)
 			}
-			n++
 		}
 	}
 
+	// group
+	sm, err = ParseDsl(nil, "avg(group(constantLine(10), constantLine(20), constantLine(30)))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	n = 0
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 20 {
+				t.Errorf("s.CurrentValue != 20: %v", v)
+			}
+			n++
+		}
+		if n != 2 {
+			t.Errorf("n != 2")
+		}
+	}
+
+	// isNonNull
+	sm, err = ParseDsl(nil, "isNonNull(group(constantLine(10), constantLine(20), constantLine(30)))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 3 {
+				t.Errorf("s.CurrentValue != 3: %v", v)
+			}
+		}
+	}
+
+	// maxSeries
+	sm, err = ParseDsl(nil, "maxSeries(constantLine(10), constantLine(20), constantLine(30))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 30 {
+				t.Errorf("s.CurrentValue != 30: %v", v)
+			}
+		}
+	}
 }
