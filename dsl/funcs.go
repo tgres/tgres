@@ -62,6 +62,7 @@ var preprocessArgFuncs = funcMap{
 	"scale": dslFuncType{dslScale, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"factor", argNumber, nil}}},
+	"generate": dslFuncType{dslGenerate, false, []argDef{}}, // ZZZ
 	"absolute": dslFuncType{dslAbsolute, false, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
 	"averageSeries": dslFuncType{dslAverageSeries, true, []argDef{
@@ -191,6 +192,8 @@ var preprocessArgFuncs = funcMap{
 		argDef{"replace", argString, nil}}},
 	"changed": dslFuncType{dslChanged, false, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
+	"constantLine": dslFuncType{dslConstantLine, false, []argDef{
+		argDef{"value", argNumber, nil}}},
 	"countSeries": dslFuncType{dslCountSeries, true, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
@@ -324,7 +327,7 @@ func processArgs(dc *dslCtx, fn *dslFuncType, args []interface{}) (map[string]in
 			if fnarg.dft != nil {
 				args = append(args, fnarg.dft)
 			} else {
-				return nil, nil, fmt.Errorf("Expecting %dth argument, but there are only %d", n, len(args))
+				return nil, nil, fmt.Errorf("Expecting %dth argument, but there are only %d", n+1, len(args))
 			}
 		}
 
@@ -882,6 +885,36 @@ func dslScale(args map[string]interface{}) (SeriesMap, error) {
 		series[name] = &seriesScale{s, factor}
 	}
 	return series, nil
+}
+
+// generate()
+
+type seriesGenerate struct {
+	AliasSeries
+}
+
+func dslGenerate(args map[string]interface{}) (SeriesMap, error) {
+
+	from := time.Unix(args["_from_"].(int64), 0)
+	to := time.Unix(args["_to_"].(int64), 0)
+	maxPoints := args["_maxPoints_"].(int64)
+
+	span := to.Sub(from)
+	step := span / time.Duration(maxPoints)
+
+	from = from.Add(step) // because _from_ is end of slot, not beginning
+
+	var dps []float64
+	seconds := span.Nanoseconds() / 1e9
+	for i := 0; i < int(maxPoints); i++ {
+		t := from.Add(step * time.Duration(i))
+		dps = append(dps, math.Sin(2*math.Pi/float64(seconds)*float64(t.Unix()%seconds)))
+	}
+
+	ss := series.NewSliceSeries(dps, from, step)
+	ss.Alias("generate()")
+
+	return SeriesMap{"generate()": ss}, nil
 }
 
 // derivative()
@@ -1808,6 +1841,29 @@ func dslChanged(args map[string]interface{}) (SeriesMap, error) {
 		series[name] = &seriesChanged{s, math.NaN()}
 	}
 	return series, nil
+}
+
+// constantLine()
+
+type constantLine struct {
+	AliasSeries
+}
+
+func dslConstantLine(args map[string]interface{}) (SeriesMap, error) {
+
+	value := args["value"].(float64)
+	from := time.Unix(args["_from_"].(int64), 0)
+	to := time.Unix(args["_to_"].(int64), 0)
+	step := to.Sub(from)
+
+	// internally we mark ends of slots, not beginnings
+	from = from.Add(step)
+
+	ss := series.NewSliceSeries([]float64{value, value}, from, step)
+
+	legend := fmt.Sprintf("constantLine(%v)", value)
+	ss.Alias(legend)
+	return SeriesMap{legend: ss}, nil
 }
 
 // countSeries()
