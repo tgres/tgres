@@ -220,8 +220,8 @@ var preprocessArgFuncs = funcMap{
 	// ++ group
 	// ++ isNonNull
 	// -- mapSeries // returns a list of lists (non-standard)
-	// ** maxSeries
-	// ** minSeries
+	// ++ maxSeries
+	// ++ minSeries
 	// ** percentileOfSeries
 	// ** rangeOfSeries
 	// -- reduceSeries // relies on mapSeries

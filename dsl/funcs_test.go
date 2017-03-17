@@ -153,4 +153,19 @@ func Test_funcs_dsl(t *testing.T) {
 			}
 		}
 	}
+
+	// minSeries
+	sm, err = ParseDsl(nil, "minSeries(constantLine(10), constantLine(20), constantLine(30))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 10 {
+				t.Errorf("s.CurrentValue != 10: %v", v)
+			}
+		}
+	}
 }
