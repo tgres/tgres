@@ -116,7 +116,7 @@ func (rra *RoundRobinArchive) DPs() map[int64]float64 { return rra.dps }
 
 // Returns a new RRA in accordance with the provided RRASpec.
 func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
-	return &RoundRobinArchive{
+	result := &RoundRobinArchive{
 		step:   spec.Step,
 		size:   spec.Span.Nanoseconds() / spec.Step.Nanoseconds(),
 		xff:    spec.Xff,
@@ -127,6 +127,11 @@ func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
 		},
 		dps: make(map[int64]float64),
 	}
+	if len(spec.DPs) > 0 {
+		result.dps = spec.DPs
+		result.start, result.end = computeStartEnd(result.dps, result.latest, result.step, result.size)
+	}
+	return result
 }
 
 // Returns a complete copy of the RRA.
@@ -273,6 +278,21 @@ func SlotTime(n int64, latest time.Time, step time.Duration, size int64) time.Ti
 	return latest.Add(time.Duration(distance*-1) * step)
 }
 
+// Given a bunch of DPs and RRA params, compute the correct start, end
+func computeStartEnd(DPs map[int64]float64, latest time.Time, step time.Duration, size int64) (int64, int64) {
+	end := SlotIndex(latest, step, size)
+	start := end
+	for i, _ := range DPs {
+		if (start == end && i != start) || (i > end && (i < start || start < end)) || (i < start && start < end) {
+			start = i
+			if start == (end+1)%size {
+				break // nothing more to do here
+			}
+		}
+	}
+	return start, end
+}
+
 // RRASpec is the RRA definition for NewRoundRobinArchive.
 type RRASpec struct {
 	Function Consolidation
@@ -284,4 +304,5 @@ type RRASpec struct {
 	Latest   time.Time
 	Value    float64
 	Duration time.Duration
+	DPs      map[int64]float64
 }

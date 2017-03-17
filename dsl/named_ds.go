@@ -75,6 +75,11 @@ func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident 
 // rules as filepath.Match, as well as comma-separated values in curly
 // braces such as "foo.{bar,baz}".
 func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
+	// TODO: With a large number of series, reload() can be a
+	// problem. Granted, FsFind is only called when we are looking for
+	// a series name (e.g. when generating the Grafana pull-down),
+	// still, rate-limiting this to once per 10-seconds might be
+	// better?
 	r.dsns.reload(r)
 	return r.dsns.fsFind(pattern)
 }
