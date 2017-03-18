@@ -304,5 +304,5 @@ type RRASpec struct {
 	Latest   time.Time
 	Value    float64
 	Duration time.Duration
-	DPs      map[int64]float64
+	DPs      map[int64]float64 // Careful, these are round-robin
 }

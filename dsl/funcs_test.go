@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -8,11 +9,25 @@ import (
 	"github.com/tgres/tgres/serde"
 )
 
+func checkEveryValueIs(sm SeriesMap, expected float64) (bool, float64) {
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != expected {
+				return false, v
+			}
+		}
+	}
+	return true, 0
+}
+
 func Test_funcs_dsl(t *testing.T) {
+
+	// TODO: These are happy path tests, need more edge-case testing
+
 	var (
 		sm  SeriesMap
 		err error
-		n   = 0
 	)
 
 	DBTime := "2006-01-02 15:04:05"
@@ -23,19 +38,8 @@ func Test_funcs_dsl(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
-	n = 0
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 20 {
-				t.Errorf("s.CurrentValue != 20: %v", v)
-			}
-			n++
-		}
-		if n != 2 {
-			t.Errorf("n != 2")
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
 	// avg (alias for averageSeries)
@@ -43,22 +47,12 @@ func Test_funcs_dsl(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
-	n = 0
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 20 {
-				t.Errorf("s.CurrentValue != 20: %v", v)
-			}
-			n++
-		}
-		if n != 2 {
-			t.Errorf("n != 2")
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
-	// averageSeriesWithWildcards(host.cpu-[0-7].cpu-{user,system}.value, 1)
+	// averageSeriesWithWildcards
+	// sumSeriesWithWildcards
 	ms := serde.NewMemSerDe()
 	rcache := NewNamedDSFetcher(ms.Fetcher())
 
@@ -75,18 +69,19 @@ func Test_funcs_dsl(t *testing.T) {
 		RRAs: []rrd.RRASpec{rspec},
 	}
 
-	rspec.DPs = make(map[int64]float64)
+	spec.RRAs[0].DPs = make(map[int64]float64)
 	for i := int64(0); i < size; i++ {
-		rspec.DPs[i] = 10
+		spec.RRAs[0].DPs[i] = 10
 	}
+
 	_, err = ms.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar1.baz"}, spec)
 	if err != nil {
 		t.Error(err)
 	}
 
-	rspec.DPs = make(map[int64]float64)
+	spec.RRAs[0].DPs = make(map[int64]float64)
 	for i := int64(0); i < size; i++ {
-		rspec.DPs[i] = 30
+		spec.RRAs[0].DPs[i] = 30
 	}
 	_, err = ms.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar2.baz"}, spec)
 
@@ -95,13 +90,17 @@ func Test_funcs_dsl(t *testing.T) {
 		t.Error(err)
 	}
 
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 20 {
-				t.Errorf("s.CurrentValue != 20: %v", v)
-			}
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	_, err = ParseDsl(rcache, `sumSeriesWithWildcards("foo.bleh.baz", 1)`, when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 40); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
 	// group
@@ -110,18 +109,8 @@ func Test_funcs_dsl(t *testing.T) {
 		t.Error(err)
 	}
 
-	n = 0
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 20 {
-				t.Errorf("s.CurrentValue != 20: %v", v)
-			}
-			n++
-		}
-		if n != 2 {
-			t.Errorf("n != 2")
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
 	// isNonNull
@@ -130,13 +119,8 @@ func Test_funcs_dsl(t *testing.T) {
 		t.Error(err)
 	}
 
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 3 {
-				t.Errorf("s.CurrentValue != 3: %v", v)
-			}
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 3); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
 	// maxSeries
@@ -145,13 +129,8 @@ func Test_funcs_dsl(t *testing.T) {
 		t.Error(err)
 	}
 
-	for _, s := range sm {
-		for s.Next() {
-			v := s.CurrentValue()
-			if v != 30 {
-				t.Errorf("s.CurrentValue != 30: %v", v)
-			}
-		}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
 	// minSeries
@@ -160,12 +139,70 @@ func Test_funcs_dsl(t *testing.T) {
 		t.Error(err)
 	}
 
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	// percentileOfSeries
+	sm, err = ParseDsl(nil, "percentileOfSeries(group(constantLine(10), constantLine(20), constantLine(30)), 50)", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	// rangeOfSeries
+	sm, err = ParseDsl(nil, "rangeOfSeries(group(constantLine(10), constantLine(20), constantLine(30)))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	// sumSeries
+	sm, err = ParseDsl(nil, "sumSeries(group(constantLine(10), constantLine(20), constantLine(30)))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 60); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	// absolute
+	sm, err = ParseDsl(nil, "absolute(constantLine(-10))", when.Unix(), when.Add(-time.Hour).Unix(), 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	// derivative
+
+	sm, err = ParseDsl(rcache, `derivative(generate())`, when.Unix(), when.Add(-time.Hour).Unix(), 10)
+	if err != nil {
+		t.Error(err)
+	}
+
 	for _, s := range sm {
+		i, last := 0, float64(0)
 		for s.Next() {
-			v := s.CurrentValue()
-			if v != 10 {
-				t.Errorf("s.CurrentValue != 10: %v", v)
+			gen := math.Sin(2 * math.Pi / float64(10) * float64(i))
+			if i > 0 {
+				v := s.CurrentValue()
+				if v != gen-last {
+					t.Errorf("Incorrect derivative: %v (expected: %v)", v, gen-last)
+				}
 			}
+			last = gen
+			i++
 		}
 	}
+
 }

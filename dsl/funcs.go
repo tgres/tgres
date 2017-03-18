@@ -222,15 +222,15 @@ var preprocessArgFuncs = funcMap{
 	// -- mapSeries // returns a list of lists (non-standard)
 	// ++ maxSeries
 	// ++ minSeries
-	// ** percentileOfSeries
-	// ** rangeOfSeries
+	// ++ percentileOfSeries
+	// ++ rangeOfSeries
 	// -- reduceSeries // relies on mapSeries
-	// ** sumSeries
-	// ** sumSeriesWithWildcards
+	// ++ sumSeries
+	// ++ sumSeriesWithWildcards
 
 	// TRANSFORM
-	// ** absolute()
-	// ** derivative()
+	// ++ absolute()
+	// ++ derivative()
 	// -- hitcount() // don't understand this one
 	// ** integral()
 	// ** log()
@@ -945,10 +945,8 @@ func dslGenerate(args map[string]interface{}) (SeriesMap, error) {
 	from = from.Add(step) // because _from_ is end of slot, not beginning
 
 	var dps []float64
-	seconds := span.Nanoseconds() / 1e9
 	for i := 0; i < int(maxPoints); i++ {
-		t := from.Add(step * time.Duration(i))
-		dps = append(dps, math.Sin(2*math.Pi/float64(seconds)*float64(t.Unix()%seconds)))
+		dps = append(dps, math.Sin(2*math.Pi/float64(maxPoints)*float64(i)))
 	}
 
 	ss := series.NewSliceSeries(dps, from, step)
