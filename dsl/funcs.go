@@ -125,6 +125,8 @@ var preprocessArgFuncs = funcMap{
 		argDef{"default", argNumber, 0.0}}},
 	"diffSeries": dslFuncType{dslDiffSeries, true, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
+	"divideSeries": dslFuncType{dslDivideSeries, true, []argDef{
+		argDef{"seriesList", argSeries, nil}}},
 	"nPercentile": dslFuncType{dslNPercentile, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"n", argNumber, nil}}},
@@ -248,23 +250,31 @@ var preprocessArgFuncs = funcMap{
 
 	// CALCULATE
 	// ++ asPercent
-	// ** diffSeries
+	// ++ diffSeries
+	// ++ divideSeries
 	// ** holtWintersAberration
 	// ** holtWintersConfidenceBands
 	// ** holtWintersForecast
-	// ** nPercentile
+	// ++ nPercentile
+	// ?? stddevSeries
 
 	// FILTER
-	// ** highestCurrent
-	// ** highestMax
-	// ** limit
-	// ** lowestAverage
-	// ** lowestCurrent
-	// ** maximumAbove
-	// ** maximumBelow
-	// ** minimumAbove
-	// ** minimumBelow
-	// ** mostDeviant
+	// ?? averageAbove
+	// ?? averageBelow
+	// ?? currentAbove
+	// ?? currentBelow
+	// ?? exclude
+	// ?? grep
+	// ++ highestCurrent
+	// ++ highestMax
+	// ++ limit
+	// ++ lowestAverage
+	// ++ lowestCurrent
+	// ++ maximumAbove
+	// ++ maximumBelow
+	// ++ minimumAbove
+	// ++ minimumBelow
+	// ++ mostDeviant
 	// ** movingAverage
 	// ** movingMedian
 	// ** removeAbovePercentile
@@ -596,6 +606,41 @@ func dslDiffSeries(args map[string]interface{}) (SeriesMap, error) {
 	}
 	name := args["_legend_"].(string)
 	return SeriesMap{name: &seriesDiffSeries{sl}}, nil
+}
+
+// divideSeries()
+
+type seriesDivideSeries struct {
+	*aliasSeriesSlice
+}
+
+func (sl *seriesDivideSeries) CurrentValue() float64 {
+	return sl.SeriesSlice[0].CurrentValue() / sl.SeriesSlice[1].CurrentValue()
+}
+
+func dslDivideSeries(args map[string]interface{}) (SeriesMap, error) {
+	// We must use _args_ to preserve the order
+	argsAsSlice := args["_args_"].([]interface{})
+	sl := &aliasSeriesSlice{}
+	n := 0
+	for _, arg := range argsAsSlice {
+		if ss, ok := arg.(SeriesMap); ok {
+			for _, s := range ss.toAliasSeriesSlice().SeriesSlice {
+				sl.SeriesSlice = append(sl.SeriesSlice, s)
+				n++
+			}
+		} else {
+			return nil, fmt.Errorf("invlalid series: %v", arg)
+		}
+		if n > 2 {
+			return nil, fmt.Errorf("divideSeries requires exactly two series, got %d", n)
+		}
+	}
+	if n < 2 {
+		return nil, fmt.Errorf("divideSeries requires two series, got only %d", n)
+	}
+	name := args["_legend_"].(string)
+	return SeriesMap{name: &seriesDivideSeries{sl}}, nil
 }
 
 // averageSeriesWithWildcards()

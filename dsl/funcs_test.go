@@ -457,3 +457,169 @@ func Test_dsl_asPercent(t *testing.T) {
 		n++
 	}
 }
+
+// diffSeries
+func Test_dsl_diffSeries(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "diffSeries(group(constantLine(10), constantLine(20), constantLine(30)))", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, -40); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// nPercentile
+func Test_dsl_nPercentile(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "nPercentile(group(constantLine(10), sinusoid()), 50)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 10 && v != 6.123233995736757e-17 {
+				t.Errorf("Unexpected value: %v (expected: 10 or 6.123233995736757e-17)", v)
+			}
+		}
+	}
+}
+
+// divideSeries
+func Test_dsl_divideSeries(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "divideSeries(group(constantLine(10), constantLine(20)))", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 0.5); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// highestCurrent
+func Test_dsl_highestCurrent(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "highestCurrent(group(constantLine(10), constantLine(20), constantLine(30)), 1)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// highestMax
+func Test_dsl_highestMax(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "highestMax(group(constantLine(10), constantLine(20), constantLine(30)), 1)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// limit
+func Test_dsl_limit(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "limit(group(constantLine(10), constantLine(20), constantLine(30)), 1)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// lowestAverage
+func Test_dsl_lowestAverage(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "lowestAverage(group(constantLine(10), constantLine(20), constantLine(30)), 1)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// lowestCurrent
+func Test_dsl_lowestCurrent(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "lowestCurrent(group(constantLine(10), constantLine(20), constantLine(30)), 1)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// maximumAbove
+func Test_dsl_maximumAbove(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "maximumAbove(group(constantLine(10), constantLine(20), constantLine(30)), 20)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// maximumBelow
+func Test_dsl_maximumBelow(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "maximumBelow(group(constantLine(10), constantLine(20), constantLine(30)), 20)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// minimumAbove
+func Test_dsl_minimumAbove(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "minimumAbove(group(constantLine(10), constantLine(20), constantLine(30)), 20)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// minimumBelow
+func Test_dsl_minimumBelow(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "minimumBelow(group(constantLine(10), constantLine(20), constantLine(30)), 20)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// mostDeviant
+func Test_dsl_mostDeviant(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "mostDeviant(group(constantLine(10), constantLine(20), sinusoid()), 1)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v == 10 || v == 20 {
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
