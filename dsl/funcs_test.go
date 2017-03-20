@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -184,7 +185,6 @@ func Test_funcs_dsl(t *testing.T) {
 	}
 
 	// derivative
-
 	sm, err = ParseDsl(rcache, `derivative(generate())`, when.Unix(), when.Add(-time.Hour).Unix(), 10)
 	if err != nil {
 		t.Error(err)
@@ -205,4 +205,63 @@ func Test_funcs_dsl(t *testing.T) {
 		}
 	}
 
+	// integral
+	sm, err = ParseDsl(nil, "integral(generate())", when.Unix(), when.Add(-time.Hour).Unix(), 10)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		i, sum := 0, float64(0)
+		for s.Next() {
+			gen := math.Sin(2 * math.Pi / float64(10) * float64(i))
+			if i > 0 {
+				v := s.CurrentValue()
+				if v != sum {
+					t.Errorf("Incorrect sum: %v (expected: %v)", v, sum)
+				}
+			}
+			sum += gen
+			i++
+		}
+	}
+
+	// logarithm
+	for _, fn := range []string{"log", "logarithm"} {
+		expr := fmt.Sprintf("%s(constantLine(10))", fn)
+		sm, err = ParseDsl(nil, expr, when.Unix(), when.Add(-time.Hour).Unix(), 10)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if ok, unexpected := checkEveryValueIs(sm, 1); !ok {
+			t.Errorf("Unexpected value: %v", unexpected)
+		}
+	}
+
+	// nonNegativeDerivative
+	sm, err = ParseDsl(rcache, `nonNegativeDerivative(generate())`, when.Unix(), when.Add(-time.Hour).Unix(), 10)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		i, last := 0, float64(0)
+		for s.Next() {
+			gen := math.Sin(2 * math.Pi / float64(10) * float64(i))
+			if i > 0 {
+				v := s.CurrentValue()
+				expect := gen - last
+				if expect < 0 {
+					if !math.IsNaN(v) {
+						t.Errorf("Incorrect derivative: %v (expected: NaN)", v)
+					}
+				} else if v != expect {
+					t.Errorf("Incorrect derivative: %v (expected: %v)", v, gen-last)
+				}
+			}
+			last = gen
+			i++
+		}
+	}
 }

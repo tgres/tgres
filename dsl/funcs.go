@@ -232,9 +232,9 @@ var preprocessArgFuncs = funcMap{
 	// ++ absolute()
 	// ++ derivative()
 	// -- hitcount() // don't understand this one
-	// ** integral()
-	// ** log()
-	// ** nonNegativeDerivative
+	// ++ integral()
+	// ++ log()
+	// ++ nonNegativeDerivative
 	// ** offset
 	// ** offsetToZero // would require whole series min()
 	// -- perSecond // everything here is perSedond() already
@@ -1030,7 +1030,6 @@ func dslLogarithm(args map[string]interface{}) (SeriesMap, error) {
 }
 
 // nonNegativeDerivative()
-
 type seriesNonNegativeDerivative struct {
 	AliasSeries
 	last     float64
@@ -1039,30 +1038,17 @@ type seriesNonNegativeDerivative struct {
 
 func (f *seriesNonNegativeDerivative) CurrentValue() float64 {
 	current := f.AliasSeries.CurrentValue()
-	result := current - f.last
-	if result >= 0 {
-		return result
+	diff := current - f.last
+	if diff > 0 {
+		return diff
 	} else if !math.IsNaN(f.maxValue) && f.maxValue > current {
 		return (f.maxValue - f.last) + current + 1
-	} else {
-		return math.NaN()
 	}
-	return result
+	return math.NaN()
 }
 
 func (f *seriesNonNegativeDerivative) Next() bool {
-	if !f.AliasSeries.Next() {
-		return false
-	}
-	value := f.AliasSeries.CurrentValue()
-	for math.IsNaN(f.last) || value < f.last {
-		f.last = value
-		if !f.AliasSeries.Next() {
-			return false
-		}
-		value = f.AliasSeries.CurrentValue()
-	}
-	f.last = value
+	f.last = f.AliasSeries.CurrentValue()
 	return f.AliasSeries.Next()
 }
 
