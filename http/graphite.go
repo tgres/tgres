@@ -174,5 +174,5 @@ func processTarget(rcache dsl.NamedDSFetcher, target string, from, to, maxPoints
 	target = quoteIdentifiers(target)
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
-	return dsl.ParseDsl(rcache, query, from, to, maxPoints)
+	return dsl.ParseDsl(rcache, query, time.Unix(from, 0), time.Unix(to, 0), maxPoints)
 }

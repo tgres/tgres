@@ -63,7 +63,7 @@ var preprocessArgFuncs = funcMap{
 	"scale": dslFuncType{dslScale, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"factor", argNumber, nil}}},
-	"generate": dslFuncType{dslGenerate, false, []argDef{}}, // ZZZ
+	"sinusoid": dslFuncType{dslSinusoid, false, []argDef{}},
 	"absolute": dslFuncType{dslAbsolute, false, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
 	"averageSeries": dslFuncType{dslAverageSeries, true, []argDef{
@@ -235,14 +235,14 @@ var preprocessArgFuncs = funcMap{
 	// ++ integral()
 	// ++ log()
 	// ++ nonNegativeDerivative
-	// ** offset
-	// ** offsetToZero // would require whole series min()
+	// ++ offset
+	// ++ offsetToZero // would require whole series min()
 	// -- perSecond // everything here is perSedond() already
-	// ** scale()
+	// ++ scale()
 	// -- scaleToSeconds()
 	// -- smartSummarize
 	// -- summarize // seems complicated
-	// ** timeShift
+	// ++ timeShift
 	// ?? timeStack // TODO?
 	// ** transformNull
 
@@ -927,16 +927,16 @@ func dslScale(args map[string]interface{}) (SeriesMap, error) {
 	return series, nil
 }
 
-// generate()
+// sinusoid()
 
-type seriesGenerate struct {
+type seriesSinusoid struct {
 	AliasSeries
 }
 
-func dslGenerate(args map[string]interface{}) (SeriesMap, error) {
+func dslSinusoid(args map[string]interface{}) (SeriesMap, error) {
 
-	from := time.Unix(args["_from_"].(int64), 0)
-	to := time.Unix(args["_to_"].(int64), 0)
+	from := args["_from_"].(time.Time)
+	to := args["_to_"].(time.Time)
 	maxPoints := args["_maxPoints_"].(int64)
 
 	span := to.Sub(from)
@@ -950,9 +950,9 @@ func dslGenerate(args map[string]interface{}) (SeriesMap, error) {
 	}
 
 	ss := series.NewSliceSeries(dps, from, step)
-	ss.Alias("generate()")
+	ss.Alias("sinusoid()")
 
-	return SeriesMap{"generate()": ss}, nil
+	return SeriesMap{"sinusoid()": ss}, nil
 }
 
 // derivative()
@@ -1876,8 +1876,8 @@ type constantLine struct {
 func dslConstantLine(args map[string]interface{}) (SeriesMap, error) {
 
 	value := args["value"].(float64)
-	from := time.Unix(args["_from_"].(int64), 0)
-	to := time.Unix(args["_to_"].(int64), 0)
+	from := args["_from_"].(time.Time)
+	to := args["_to_"].(time.Time)
 	step := to.Sub(from)
 
 	// internally we mark ends of slots, not beginnings
@@ -1986,8 +1986,8 @@ func dslHoltWintersForecast(args map[string]interface{}) (SeriesMap, error) {
 
 		// The specified timerange. NB: trDbSeres.TimeRange() is clipped
 		// to what is available in the db, which is why we need these
-		from := time.Unix(args["_from_"].(int64), 0)
-		to := time.Unix(args["_to_"].(int64), 0)
+		from := args["_from_"].(time.Time)
+		to := args["_to_"].(time.Time)
 		maxPoints := args["_maxPoints_"].(int64)
 
 		// Push back beginning of our data seasonLimit from no later than LastUpdate

@@ -58,18 +58,19 @@ import (
 )
 
 type dslCtx struct {
-	src                 string
-	escSrc              string
-	from, to, maxPoints int64
+	src       string
+	escSrc    string
+	from, to  time.Time
+	maxPoints int64
 	ctxDSFetcher
 }
 
 // Parse a DSL expression given by src and other params.
-func ParseDsl(db ctxDSFetcher, src string, from, to, maxPoints int64) (SeriesMap, error) {
+func ParseDsl(db ctxDSFetcher, src string, from, to time.Time, maxPoints int64) (SeriesMap, error) {
 	return newDslCtx(db, src, from, to, maxPoints).parse()
 }
 
-func newDslCtx(db ctxDSFetcher, src string, from, to, maxPoints int64) *dslCtx {
+func newDslCtx(db ctxDSFetcher, src string, from, to time.Time, maxPoints int64) *dslCtx {
 	return &dslCtx{
 		src:          src,
 		escSrc:       fixQuotes(escapeBadChars(src)),
@@ -105,8 +106,7 @@ func (dc *dslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	case SeriesMap:
 		return obj, nil
 	case string:
-		fromT, toT := time.Unix(dc.from, 0), time.Unix(dc.to, 0)
-		series, err := dc.seriesFromPattern(obj, fromT, toT)
+		series, err := dc.seriesFromPattern(obj, dc.from, dc.to)
 		return series, err
 	}
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T of %v", what, what)
