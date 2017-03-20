@@ -186,6 +186,8 @@ var preprocessArgFuncs = funcMap{
 		argDef{"seriesListAvg", argSeries, nil},
 		argDef{"seriesListWeight", argSeries, nil},
 		argDef{"node", argNumber, nil}}},
+	"aliasByMetric": dslFuncType{dslAliasByMetric, true, []argDef{
+		argDef{"seriesList", argSeries, nil}}},
 	"aliasByNode": dslFuncType{dslAliasByNode, true, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"nodes", argNumber, nil}}},
@@ -286,15 +288,15 @@ var preprocessArgFuncs = funcMap{
 	// ++ weightedAverage
 
 	// SPECIAL
-	// ** alias
-	// ** aliasByMetric
-	// ** aliasByNode
-	// ** aliasSub
+	// ++ alias
+	// ++ aliasByMetric
+	// ++ aliasByNode
+	// ++ aliasSub
 	// ?? cactiStyle // TODO should be easy to do?
-	// ** changed
+	// ++ changed
 	// ?? consolidateBy // doesn't apply to us, it's always avg?
-	// ** constantLine
-	// ** countSeries
+	// ++ constantLine
+	// ++ countSeries
 	// -- cumulative // == consolidateBy
 	// ?? groupByNode // similar to alias by metric
 	// ?? keepLastValue // don't really understand this one

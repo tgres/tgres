@@ -788,3 +788,83 @@ func Test_dsl_weightedAverage(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
+
+// alias
+func Test_dsl_alias(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "alias(sinusoid(), 'foobar')", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, sm := range sm {
+		if sm.Alias() != "foobar" {
+			t.Errorf("incorrect alias")
+		}
+	}
+}
+
+// aliasByMetric
+func Test_dsl_aliasByMetric(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "aliasByMetric(sinusoid())", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, sm := range sm {
+		if sm.Alias() != "sinusoid()" {
+			t.Errorf("incorrect alias: %v", sm.Alias())
+		}
+	}
+}
+
+// aliasByNode
+func Test_dsl_aliasByNode(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "aliasByNode(sinusoid(), 0)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, sm := range sm {
+		if sm.Alias() != "sinusoid()" {
+			t.Errorf("incorrect alias: %v", sm.Alias())
+		}
+	}
+}
+
+// aliasSub
+func Test_dsl_aliasSub(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "aliasSub(sinusoid(), '.*', 'foo')", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, sm := range sm {
+		if sm.Alias() != "foo" {
+			t.Errorf("incorrect alias: %v", sm.Alias())
+		}
+	}
+}
+
+// changed
+func Test_dsl_changed(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "changed(sinusoid())", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 1); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// countSeries
+func Test_dsl_countSeries(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "countSeries(group(constantLine(10), constantLine(20), constantLine(30)))", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 3); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
