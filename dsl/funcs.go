@@ -244,10 +244,10 @@ var preprocessArgFuncs = funcMap{
 	// -- summarize // seems complicated
 	// ++ timeShift
 	// ?? timeStack // TODO?
-	// ** transformNull
+	// ++ transformNull
 
 	// CALCULATE
-	// ** asPercent
+	// ++ asPercent
 	// ** diffSeries
 	// ** holtWintersAberration
 	// ** holtWintersConfidenceBands
@@ -811,11 +811,11 @@ func (sl *seriesAsPercent) Next() bool {
 
 func (sl *seriesAsPercent) CurrentValue() float64 {
 	if sl.totalSeries != nil {
-		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.totalSeries.Sum()
+		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.totalSeries.Sum() * 100
 	} else if math.IsNaN(sl.total) {
-		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.Sum()
+		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.Sum() * 100
 	} else {
-		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.total
+		return sl.SeriesSlice[sl.my_idx].CurrentValue() / sl.total * 100
 	}
 }
 

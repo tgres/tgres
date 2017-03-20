@@ -42,8 +42,10 @@ func (s *SliceSeries) Next() bool {
 	if s.pos < len(s.data) {
 		s.pos++ // Allow pos to roll 1 past len so that CurrentValue knows to return a NaN
 		return s.pos < len(s.data)
+	} else {
+		s.pos = 0 // restart
+		return true
 	}
-	return false
 }
 
 func (s *SliceSeries) CurrentValue() float64 {

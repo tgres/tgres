@@ -32,12 +32,17 @@ func (sl SeriesSlice) Next() bool {
 	if len(sl) == 0 {
 		return false
 	}
+	// If one series Next() returns false, we still need to call Next
+	// for all others to provide a proper restart.
+	result := true
 	for _, series := range sl {
 		if !series.Next() {
-			return false
+			if result {
+				result = false
+			}
 		}
 	}
-	return true
+	return result
 }
 
 // Returns CurrentTime of the first series in the slice or zero time

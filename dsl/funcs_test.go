@@ -380,3 +380,80 @@ func Test_dsl_timeshift(t *testing.T) {
 		}
 	}
 }
+
+// transformNull
+func Test_dsl_transformNull(t *testing.T) {
+	td := setupTestData()
+
+	rspec := rrd.RRASpec{
+		Function: rrd.WMEAN,
+		Step:     time.Minute,
+		Span:     10 * time.Minute,
+		Latest:   td.when,
+	}
+	size := rspec.Span.Nanoseconds() / rspec.Step.Nanoseconds()
+
+	spec := &rrd.DSSpec{
+		Step: time.Second,
+		RRAs: []rrd.RRASpec{rspec},
+	}
+
+	spec.RRAs[0].DPs = make(map[int64]float64)
+	for i := int64(0); i < size; i++ {
+		if i < 5 {
+			spec.RRAs[0].DPs[i] = 10
+		} else {
+			spec.RRAs[0].DPs[i] = math.NaN()
+		}
+	}
+
+	var err error
+	_, err = td.db.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar.transformNull"}, spec)
+	if err != nil {
+		t.Error(err)
+	}
+
+	sm, err := ParseDsl(td.rcache, `transformNull("foo.bar.transformNull", 123)`, td.from, td.to, 60)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v != 10 && v != 123 {
+				t.Errorf("Unexpected value: %v (expected: 10 or 123)", v)
+			}
+		}
+	}
+}
+
+// asPercent
+// (this also tests proper slice series restart)
+func Test_dsl_asPercent(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "asPercent(group(constantLine(10), constantLine(20), constantLine(30)))", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	n := 0
+	for _, s := range sm {
+		var expect float64
+		switch n {
+		case 0:
+			expect = 10.0 / (10 + 20 + 30) * 100
+		case 1:
+			expect = 20.0 / (10 + 20 + 30) * 100
+		case 2:
+			expect = 30.0 / (10 + 20 + 30) * 100
+		}
+		expect = math.Floor(expect * 1e6) // to avoid float64 precision problems
+		for s.Next() {
+			v := math.Floor(s.CurrentValue() * 1e6)
+			if v != expect {
+				t.Errorf("Unexpected value: %v (expected: %v)", v, expect)
+			}
+		}
+		n++
+	}
+}
