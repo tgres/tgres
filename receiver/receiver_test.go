@@ -16,12 +16,9 @@
 package receiver
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
 	"net"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -38,13 +35,13 @@ func Test_Receiver_init(t *testing.T) {
 	}
 }
 
-func Test_Receiver_New(t *testing.T) {
-	db := &fakeSerde{}
-	r := New(db, nil)
-	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres" {
-		t.Errorf(`New: r.NWorkers != 4 (%d) || r.ReportStatsPrefix != "tgres" (%s)`, r.NWorkers, r.ReportStatsPrefix)
-	}
-}
+// func Test_Receiver_New(t *testing.T) {
+// 	db := &fakeSerde{}
+// 	r := New(db, nil)
+// 	if r.NWorkers != 4 || r.ReportStatsPrefix != "tgres" {
+// 		t.Errorf(`New: r.NWorkers != 4 (%d) || r.ReportStatsPrefix != "tgres" (%s)`, r.NWorkers, r.ReportStatsPrefix)
+// 	}
+// }
 
 func Test_Receiver_Start(t *testing.T) {
 	save := doStart
@@ -95,18 +92,18 @@ func Test_Receiver_SetCluster(t *testing.T) {
 	}
 }
 
-func Test_Receiver_QueueDataPoint(t *testing.T) {
-	r := &Receiver{dpCh: make(chan *IncomingDP)}
-	called := 0
-	go func() {
-		<-r.dpCh
-		called++
-	}()
-	r.QueueDataPoint("", time.Time{}, 0)
-	if called != 1 {
-		t.Errorf("QueueDataPoint didn't sent to dpCh?")
-	}
-}
+// func Test_Receiver_QueueDataPoint(t *testing.T) {
+// 	r := &Receiver{dpCh: make(chan *IncomingDP)}
+// 	called := 0
+// 	go func() {
+// 		<-r.dpCh
+// 		called++
+// 	}()
+// 	r.QueueDataPoint("", time.Time{}, 0)
+// 	if called != 1 {
+// 		t.Errorf("QueueDataPoint didn't sent to dpCh?")
+// 	}
+// }
 
 func Test_Receiver_QueueAggregatorCommand(t *testing.T) {
 	r := &Receiver{aggCh: make(chan *aggregator.Command)}
@@ -121,28 +118,28 @@ func Test_Receiver_QueueAggregatorCommand(t *testing.T) {
 	}
 }
 
-func Test_Receiver_reportStatCount(t *testing.T) {
-	// Also tests QueueSum and QueueGauge
-	r := &Receiver{ReportStats: true, ReportStatsPrefix: "foo", pacedMetricCh: make(chan *pacedMetric)}
-	called := 0
-	go func() {
-		for {
-			<-r.pacedMetricCh
-			called++
-		}
-	}()
-	(*Receiver)(nil).reportStatCount("", 0) // noop
-	r.reportStatCount("", 0)                // noop (f == 0)
-	r.reportStatCount("", 1)                // called++
-	r.reportStatGauge("", 1)                // called++
-	r.ReportStats = false
-	r.reportStatCount("", 1) // noop (ReportStats false)
-	r.QueueSum("", 0)        // called++
-	r.QueueGauge("", 0)      // called++
-	if called != 3 {
-		t.Errorf("reportStatCount call count not 3 but %d", called)
-	}
-}
+// func Test_Receiver_reportStatCount(t *testing.T) {
+// 	// Also tests QueueSum and QueueGauge
+// 	r := &Receiver{ReportStats: true, ReportStatsPrefix: "foo", pacedMetricCh: make(chan *pacedMetric)}
+// 	called := 0
+// 	go func() {
+// 		for {
+// 			<-r.pacedMetricCh
+// 			called++
+// 		}
+// 	}()
+// 	(*Receiver)(nil).reportStatCount("", 0) // noop
+// 	r.reportStatCount("", 0)                // noop (f == 0)
+// 	r.reportStatCount("", 1)                // called++
+// 	r.reportStatGauge("", 1)                // called++
+// 	r.ReportStats = false
+// 	r.reportStatCount("", 1) // noop (ReportStats false)
+// 	r.QueueSum("", 0)        // called++
+// 	r.QueueGauge("", 0)      // called++
+// 	if called != 3 {
+// 		t.Errorf("reportStatCount call count not 3 but %d", called)
+// 	}
+// }
 
 // fake cluster
 type fakeCluster struct {
@@ -188,29 +185,29 @@ func (c *fakeCluster) Shutdown() error {
 	return nil
 }
 
-// IncomingDP must be gob encodable
-func TestIncomingDP_gobEncodable(t *testing.T) {
-	now := time.Now()
-	dp1 := &IncomingDP{
-		Name:      "foo.bar",
-		TimeStamp: now,
-		Value:     1.2345,
-		Hops:      7,
-	}
+// // IncomingDP must be gob encodable
+// func TestIncomingDP_gobEncodable(t *testing.T) {
+// 	now := time.Now()
+// 	dp1 := &IncomingDP{
+// 		Name:      "foo.bar",
+// 		TimeStamp: now,
+// 		Value:     1.2345,
+// 		Hops:      7,
+// 	}
 
-	var bb bytes.Buffer
-	enc := gob.NewEncoder(&bb)
-	dec := gob.NewDecoder(&bb)
+// 	var bb bytes.Buffer
+// 	enc := gob.NewEncoder(&bb)
+// 	dec := gob.NewDecoder(&bb)
 
-	err := enc.Encode(dp1)
-	if err != nil {
-		t.Errorf("gob encode error:", err)
-	}
+// 	err := enc.Encode(dp1)
+// 	if err != nil {
+// 		t.Errorf("gob encode error:", err)
+// 	}
 
-	var dp2 *IncomingDP
-	dec.Decode(&dp2)
+// 	var dp2 *IncomingDP
+// 	dec.Decode(&dp2)
 
-	if !reflect.DeepEqual(dp1, dp2) {
-		t.Errorf("dp1 != dp2 after gob encode/decode")
-	}
-}
+// 	if !reflect.DeepEqual(dp1, dp2) {
+// 		t.Errorf("dp1 != dp2 after gob encode/decode")
+// 	}
+// }

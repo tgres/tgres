@@ -25,7 +25,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 )
 
-var directorincomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) {
+var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -221,7 +221,7 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 	if clstr != nil {
 		clusterChgCh = clstr.NotifyClusterChanges() // Monitor Cluster changes
 		snd, rcv = clstr.RegisterMsgType()          // Channel for event forwards to other nodes and us
-		go directorincomingDPMessages(rcv, dpCh)
+		go directorIncomingDPMessages(rcv, dpCh)
 		log.Printf("director: marking cluster node as Ready.")
 		clstr.Ready(true)
 	}

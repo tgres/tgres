@@ -31,47 +31,47 @@ func Test_dscache_newDsCache(t *testing.T) {
 	}
 }
 
-func Test_dscache_getByName(t *testing.T) {
-	d := newDsCache(nil, nil, nil)
-	foo := serde.Ident{"name": "foo"}
-	bar := serde.Ident{"name": "bar"}
-	d.byIdent[foo.String()] = &cachedDs{}
-	if rds := d.getByIdent(foo); rds == nil {
-		t.Errorf("getByIdent did not return correct value")
-	}
-	if rds := d.getByIdent(bar); rds != nil {
-		t.Errorf("getByIdent did not return nil")
-	}
-}
+// func Test_dscache_getByName(t *testing.T) {
+// 	d := newDsCache(nil, nil, nil)
+// 	foo := serde.Ident{"name": "foo"}
+// 	bar := serde.Ident{"name": "bar"}
+// 	d.byIdent[foo.String()] = &cachedDs{}
+// 	if rds := d.getByIdent(foo); rds == nil {
+// 		t.Errorf("getByIdent did not return correct value")
+// 	}
+// 	if rds := d.getByIdent(bar); rds != nil {
+// 		t.Errorf("getByIdent did not return nil")
+// 	}
+// }
 
-func Test_dscache_insert(t *testing.T) {
-	d := newDsCache(nil, nil, nil)
+// func Test_dscache_insert(t *testing.T) {
+// 	d := newDsCache(nil, nil, nil)
 
-	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-	rds := &cachedDs{DbDataSourcer: ds}
+// 	foo := serde.Ident{"name": "foo"}
+// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+// 	rds := &cachedDs{DbDataSourcer: ds}
 
-	d.insert(rds)
+// 	d.insert(rds)
 
-	if rds2 := d.getByIdent(foo); rds2 != rds {
-		t.Errorf("insert: getByName did not return correct value")
-	}
-}
+// 	if rds2 := d.getByIdent(foo); rds2 != rds {
+// 		t.Errorf("insert: getByName did not return correct value")
+// 	}
+// }
 
-func Test_dscache_delete(t *testing.T) {
-	d := newDsCache(nil, nil, nil)
+// func Test_dscache_delete(t *testing.T) {
+// 	d := newDsCache(nil, nil, nil)
 
-	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-	rds := &cachedDs{DbDataSourcer: ds}
-	d.insert(rds)
+// 	foo := serde.Ident{"name": "foo"}
+// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+// 	rds := &cachedDs{DbDataSourcer: ds}
+// 	d.insert(rds)
 
-	d.delete(foo)
+// 	d.delete(foo)
 
-	if rds = d.getByIdent(foo); rds != nil {
-		t.Errorf("delete: did not delete")
-	}
-}
+// 	if rds = d.getByIdent(foo); rds != nil {
+// 		t.Errorf("delete: did not delete")
+// 	}
+// }
 
 func Test_dscache_preLoad(t *testing.T) {
 	db := &fakeSerde{}
@@ -147,45 +147,45 @@ func (f *fakeSerde) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpe
 	}
 }
 
-func Test_dscache_fetchOrCreateByName(t *testing.T) {
-	db := &fakeSerde{}
-	df := &SimpleDSFinder{DftDSSPec}
-	sr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: sr}
-	d := newDsCache(db, df, dsf)
-	d.fetchOrCreateByName("foo")
-	if db.createCalled != 1 {
-		t.Errorf("fetchOrCreateByName: CreateOrReturnDataSource should be called once, we got: %d", db.createCalled)
-	}
+// func Test_dscache_fetchOrCreateByName(t *testing.T) {
+// 	db := &fakeSerde{}
+// 	df := &SimpleDSFinder{DftDSSPec}
+// 	sr := &fakeSr{}
+// 	dsf := &dsFlusher{db: db, sr: sr}
+// 	d := newDsCache(db, df, dsf)
+// 	d.fetchOrCreateByName("foo")
+// 	if db.createCalled != 1 {
+// 		t.Errorf("fetchOrCreateByName: CreateOrReturnDataSource should be called once, we got: %d", db.createCalled)
+// 	}
 
-	ds, err := d.fetchOrCreateByName("")
-	if ds != nil {
-		t.Errorf("fetchOrCreateByName: for a blank name we should get nil")
-	}
-	if err != nil {
-		t.Errorf("fetchOrCreateByName: err != nil")
-	}
+// 	ds, err := d.fetchOrCreateByName("")
+// 	if ds != nil {
+// 		t.Errorf("fetchOrCreateByName: for a blank name we should get nil")
+// 	}
+// 	if err != nil {
+// 		t.Errorf("fetchOrCreateByName: err != nil")
+// 	}
 
-	d = newDsCache(db, df, dsf)
-	db.fakeErr = true
-	if ds, err = d.fetchOrCreateByName("foo"); err == nil {
-		t.Errorf("fetchOrCreateByName: db error should error")
-	}
-	if ds != nil {
-		t.Errorf("fetchOrCreateByName: on db error we should get nil")
-	}
+// 	d = newDsCache(db, df, dsf)
+// 	db.fakeErr = true
+// 	if ds, err = d.fetchOrCreateByName("foo"); err == nil {
+// 		t.Errorf("fetchOrCreateByName: db error should error")
+// 	}
+// 	if ds != nil {
+// 		t.Errorf("fetchOrCreateByName: on db error we should get nil")
+// 	}
 
-	// non-DbDataSource should error
-	nds := rrd.NewDataSource(*DftDSSPec)
-	db.fakeErr = false
-	db.nondb = true
-	db.returnDss = []rrd.DataSourcer{nds}
-	d = newDsCache(db, df, dsf)
-	if ds, err = d.fetchOrCreateByName("foo"); err == nil {
-		t.Errorf("fetchOrCreateByName: non-DbDataSource should error")
-	}
+// 	// non-DbDataSource should error
+// 	nds := rrd.NewDataSource(*DftDSSPec)
+// 	db.fakeErr = false
+// 	db.nondb = true
+// 	db.returnDss = []rrd.DataSourcer{nds}
+// 	d = newDsCache(db, df, dsf)
+// 	if ds, err = d.fetchOrCreateByName("foo"); err == nil {
+// 		t.Errorf("fetchOrCreateByName: non-DbDataSource should error")
+// 	}
 
-}
+// }
 
 func Test_dscache_register(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
@@ -196,107 +196,107 @@ func Test_dscache_register(t *testing.T) {
 	d.register(ds) // not sure what we are testing here...
 }
 
-func Test_dscache_cachedDs_shouldBeFlushed(t *testing.T) {
-	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-	rds := &cachedDs{DbDataSourcer: ds}
+// func Test_dscache_cachedDs_shouldBeFlushed(t *testing.T) {
+// 	foo := serde.Ident{"name": "foo"}
+// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+// 	rds := &cachedDs{DbDataSourcer: ds}
 
-	// When rds.LastUpdate().IsZero() it should be false
-	if rds.shouldBeFlushed(0, 0, 0) {
-		t.Errorf("with rds.LastUpdate().IsZero(), rds.shouldBeFlushed == true")
-	}
+// 	// When rds.LastUpdate().IsZero() it should be false
+// 	if rds.shouldBeFlushed(0, 0, 0) {
+// 		t.Errorf("with rds.LastUpdate().IsZero(), rds.shouldBeFlushed == true")
+// 	}
 
-	// this will cause a LastUpdate != 0
-	rds.ProcessDataPoint(123, time.Now().Add(-2*time.Hour))
-	if rds.LastUpdate().IsZero() {
-		t.Errorf("LastUpdate is zero?")
-	}
+// 	// this will cause a LastUpdate != 0
+// 	rds.ProcessDataPoint(123, time.Now().Add(-2*time.Hour))
+// 	if rds.LastUpdate().IsZero() {
+// 		t.Errorf("LastUpdate is zero?")
+// 	}
 
-	// so far we still have 0 points, so nothing to flush
-	if rds.shouldBeFlushed(0, 0, 0) {
-		t.Errorf("with PointCount 0, rds.shouldBeFlushed == true")
-	}
+// 	// so far we still have 0 points, so nothing to flush
+// 	if rds.shouldBeFlushed(0, 0, 0) {
+// 		t.Errorf("with PointCount 0, rds.shouldBeFlushed == true")
+// 	}
 
-	rds.ProcessDataPoint(123, time.Now().Add(-time.Hour))
+// 	rds.ProcessDataPoint(123, time.Now().Add(-time.Hour))
 
-	if !rds.shouldBeFlushed(0, 0, 24*time.Hour) {
-		t.Errorf("with maxCachedPoints == 0, rds.shouldBeFlushed != true")
-	}
+// 	if !rds.shouldBeFlushed(0, 0, 24*time.Hour) {
+// 		t.Errorf("with maxCachedPoints == 0, rds.shouldBeFlushed != true")
+// 	}
 
-	if !rds.shouldBeFlushed(1000, 0, 24*time.Hour) {
-		t.Errorf("with neverflushed maxCachedPoints == 1000, rds.shouldBeFlushed != true")
-	}
+// 	if !rds.shouldBeFlushed(1000, 0, 24*time.Hour) {
+// 		t.Errorf("with neverflushed maxCachedPoints == 1000, rds.shouldBeFlushed != true")
+// 	}
 
-	if !rds.shouldBeFlushed(1000, 24*time.Hour, 24*time.Hour) {
-		t.Errorf("with neverFlushed maxCachedPoints == 1000, minCache 24hr, rds.shouldBeFlushed != true")
-	}
+// 	if !rds.shouldBeFlushed(1000, 24*time.Hour, 24*time.Hour) {
+// 		t.Errorf("with neverFlushed maxCachedPoints == 1000, minCache 24hr, rds.shouldBeFlushed != true")
+// 	}
 
-	if !rds.shouldBeFlushed(1000, 0, 0) {
-		t.Errorf("with neverflusdhed maxCachedPoints == 1000, minCache 0, maxCache 0, rds.shouldBeFlushed != true")
-	}
+// 	if !rds.shouldBeFlushed(1000, 0, 0) {
+// 		t.Errorf("with neverflusdhed maxCachedPoints == 1000, minCache 0, maxCache 0, rds.shouldBeFlushed != true")
+// 	}
 
-	rds.lastFlushRT = time.Now().Add(-time.Hour)
+// 	rds.lastFlushRT = time.Now().Add(-time.Hour)
 
-	if rds.shouldBeFlushed(1000, 0, 24*time.Hour) {
-		t.Errorf("with flushed maxCachedPoints == 1000, rds.shouldBeFlushed == true")
-	}
+// 	if rds.shouldBeFlushed(1000, 0, 24*time.Hour) {
+// 		t.Errorf("with flushed maxCachedPoints == 1000, rds.shouldBeFlushed == true")
+// 	}
 
-	if rds.shouldBeFlushed(1000, 24*time.Hour, 24*time.Hour) {
-		t.Errorf("with flushed maxCachedPoints == 1000, minCache 24hr, rds.shouldBeFlushed == true")
-	}
+// 	if rds.shouldBeFlushed(1000, 24*time.Hour, 24*time.Hour) {
+// 		t.Errorf("with flushed maxCachedPoints == 1000, minCache 24hr, rds.shouldBeFlushed == true")
+// 	}
 
-	if !rds.shouldBeFlushed(1000, 0, 0) {
-		t.Errorf("with flushed maxCachedPoints == 1000, minCache 0, maxCache 0, rds.shouldBeFlushed != true")
-	}
+// 	if !rds.shouldBeFlushed(1000, 0, 0) {
+// 		t.Errorf("with flushed maxCachedPoints == 1000, minCache 0, maxCache 0, rds.shouldBeFlushed != true")
+// 	}
 
-}
+// }
 
-func Test_dscache_cachedDs_Relinquish(t *testing.T) {
-	db := &fakeSerde{}
-	df := &SimpleDSFinder{DftDSSPec}
-	dsf := &fakeDsFlusher{}
-	dsc := newDsCache(db, df, dsf)
+// func Test_dscache_cachedDs_Relinquish(t *testing.T) {
+// 	db := &fakeSerde{}
+// 	df := &SimpleDSFinder{DftDSSPec}
+// 	dsf := &fakeDsFlusher{}
+// 	dsc := newDsCache(db, df, dsf)
 
-	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-	rds := &distDs{DbDataSourcer: ds, dsc: dsc}
+// 	foo := serde.Ident{"name": "foo"}
+// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+// 	rds := &distDs{DbDataSourcer: ds, dsc: dsc}
 
-	err := rds.Relinquish()
-	if err != nil {
-		t.Errorf("rds.Relinquish: err != nil: %v", err)
-	}
-	if dsf.called != 0 {
-		t.Errorf("if lastupdate is zero, ds should not be flushed")
-	}
+// 	err := rds.Relinquish()
+// 	if err != nil {
+// 		t.Errorf("rds.Relinquish: err != nil: %v", err)
+// 	}
+// 	if dsf.called != 0 {
+// 		t.Errorf("if lastupdate is zero, ds should not be flushed")
+// 	}
 
-	ds.ProcessDataPoint(123, time.Unix(1000, 0))
-	err = rds.Relinquish()
-	if err != nil {
-		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
-	}
-	if dsf.called != 1 {
-		t.Errorf("if lastupdate is not zero, ds should be flushed")
-	}
+// 	ds.ProcessDataPoint(123, time.Unix(1000, 0))
+// 	err = rds.Relinquish()
+// 	if err != nil {
+// 		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
+// 	}
+// 	if dsf.called != 1 {
+// 		t.Errorf("if lastupdate is not zero, ds should be flushed")
+// 	}
 
-	// test Acquire while we're at it
-	err = rds.Acquire()
-	if err != nil {
-		t.Errorf("Acquire: err != nil")
-	}
-	if dsf.called != 1 {
-		t.Errorf("Acquire: should not call flush")
-	}
+// 	// test Acquire while we're at it
+// 	err = rds.Acquire()
+// 	if err != nil {
+// 		t.Errorf("Acquire: err != nil")
+// 	}
+// 	if dsf.called != 1 {
+// 		t.Errorf("Acquire: should not call flush")
+// 	}
 
-	// receiverDs methods
-	if rds.Type() != "DataSource" {
-		t.Errorf(`rds.Type() != "DataSource"`)
-	}
+// 	// receiverDs methods
+// 	if rds.Type() != "DataSource" {
+// 		t.Errorf(`rds.Type() != "DataSource"`)
+// 	}
 
-	if rds.GetName() != foo.String() {
-		t.Errorf(`rds.GetName() != foo.String(): %v`, rds.GetName())
-	}
+// 	if rds.GetName() != foo.String() {
+// 		t.Errorf(`rds.GetName() != foo.String(): %v`, rds.GetName())
+// 	}
 
-	if rds.Id() != 0 {
-		t.Errorf("id should be 0")
-	}
-}
+// 	if rds.Id() != 0 {
+// 		t.Errorf("id should be 0")
+// 	}
+// }

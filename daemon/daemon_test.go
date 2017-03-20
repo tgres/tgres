@@ -115,8 +115,9 @@ func (m *fakeSerde) Search(query serde.SearchQuery) (serde.SearchResult, error) 
 func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return nil, nil
 }
-func (*fakeSerde) ListDbClientIps() ([]string, error) { return nil, nil }
-func (*fakeSerde) MyDbAddr() (*string, error)         { return nil, nil }
+func (*fakeSerde) ListDbClientIps() ([]string, error)     { return nil, nil }
+func (*fakeSerde) MyDbAddr() (*string, error)             { return nil, nil }
+func (*fakeSerde) VerticalFlusher() serde.VerticalFlusher { return nil }
 
 func (f *fakeSerde) FetchDataSources() ([]rrd.DataSourcer, error) {
 	f.fetchCalled++
