@@ -265,7 +265,7 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
 
-	ds.ClearRRAs(false)
+	ds.ClearRRAs()
 	if ds.rras[0].DPs() != nil {
 		t.Errorf("ClearRRAs: ds.rras[0].dps got replaced even though it's empty?")
 	}
@@ -274,17 +274,12 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 		&RoundRobinArchive{step: 20 * time.Second, size: 10, dps: map[int64]float64{1: 1}},
 	})
 	ds.lastUpdate = time.Now()
-	ds.ClearRRAs(false)
+	ds.ClearRRAs()
 	if len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0 {
 		t.Errorf("ClearRRAs: len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0")
 	}
 	if ds.lastUpdate.IsZero() {
 		t.Errorf("ClearRRAs: with false: ds.lastUpdate.IsZero()")
-	}
-
-	ds.ClearRRAs(true)
-	if !ds.lastUpdate.IsZero() {
-		t.Errorf("ClearRRAs: with true: !ds.lastUpdate.IsZero()")
 	}
 }
 
