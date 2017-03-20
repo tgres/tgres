@@ -181,7 +181,7 @@ var preprocessArgFuncs = funcMap{
 	"stdev": dslFuncType{dslMovingStdDev, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"points", argNumber, nil},
-		argDef{"windowTolerance", argNumber, nil}}},
+		argDef{"windowTolerance", argNumber, 0.1}}},
 	"weightedAverage": dslFuncType{dslWeightedAverage, false, []argDef{
 		argDef{"seriesListAvg", argSeries, nil},
 		argDef{"seriesListWeight", argSeries, nil},
@@ -275,15 +275,15 @@ var preprocessArgFuncs = funcMap{
 	// ++ minimumAbove
 	// ++ minimumBelow
 	// ++ mostDeviant
-	// ** movingAverage
-	// ** movingMedian
-	// ** removeAbovePercentile
-	// ** removeAboveValue
-	// ** removeBelowPercentile
-	// ** removeBelowValue
-	// ** stdev
+	// ++ movingAverage
+	// ++ movingMedian
+	// ++ removeAbovePercentile
+	// ++ removeAboveValue
+	// ++ removeBelowPercentile
+	// ++ removeBelowValue
+	// ++ stdev
 	// ?? useSeriesAbove // ?
-	// ** weightedAverage
+	// ++ weightedAverage
 
 	// SPECIAL
 	// ** alias
@@ -1848,7 +1848,7 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	for k, v := range avgSeries {
 		parts := strings.Split(k, ".")
 		if n >= len(parts) {
-			return nil, fmt.Errorf("Element %v our of range for series name %v", n, k)
+			return nil, fmt.Errorf("Element %v out of range for series name %v", n, k)
 		}
 		avgByPart[parts[n]] = v
 	}
@@ -1856,7 +1856,7 @@ func dslWeightedAverage(args map[string]interface{}) (SeriesMap, error) {
 	for k, v := range weightSeries {
 		parts := strings.Split(k, ".")
 		if n >= len(parts) {
-			return nil, fmt.Errorf("Element %v our of range for series name %v", n, k)
+			return nil, fmt.Errorf("Element %v out of range for series name %v", n, k)
 		}
 		weightByPart[parts[n]] = v
 	}

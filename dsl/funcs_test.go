@@ -623,3 +623,168 @@ func Test_dsl_mostDeviant(t *testing.T) {
 		}
 	}
 }
+
+// movingAverage
+func Test_dsl_movingAverage(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "movingAverage(group(sinusoid()), 2)", td.from, td.to, 4)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			av := math.Floor(v * 1e6) // to avoid float64 precision problems
+			if av != 0 && av != -500000 {
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// movingMedian
+func Test_dsl_movingMedian(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "movingMedian(group(sinusoid()), 2)", td.from, td.to, 4)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			av := math.Floor(v * 1e6) // to avoid float64 precision problems
+			if av != 0 && av != -500000 {
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// removeAbovePercentile
+func Test_dsl_removeAbovePercentile(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "removeAbovePercentile(sinusoid(), 50)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v > 0 { // 50% of a sinusoid is > 0
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// removeAboveValue
+func Test_dsl_removeAboveValue(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "removeAboveValue(sinusoid(), 0)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v > 0 {
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// removeBelowPercentile
+func Test_dsl_removeBelowPercentile(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "removeBelowPercentile(sinusoid(), 50)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v < 0 { // 50% of a sinusoid is > 0
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// removeBelowValue
+func Test_dsl_removeBelowValue(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "removeBelowValue(sinusoid(), 0)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v < 0 {
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// stdev
+func Test_dsl_stdev(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "stdev(sinusoid(), 5)", td.from, td.to, 10)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, s := range sm {
+		for s.Next() {
+			v := s.CurrentValue()
+			if v > 1 { // OK, this is a lame test
+				t.Errorf("Unexpected value: %v", v)
+			}
+		}
+	}
+}
+
+// weightedAverage
+func Test_dsl_weightedAverage(t *testing.T) {
+	td := setupTestData()
+
+	rspec := rrd.RRASpec{
+		Function: rrd.WMEAN,
+		Step:     time.Minute,
+		Span:     time.Hour,
+		Latest:   td.when,
+	}
+	size := rspec.Span.Nanoseconds() / rspec.Step.Nanoseconds()
+
+	spec := &rrd.DSSpec{
+		Step: time.Second,
+		RRAs: []rrd.RRASpec{rspec},
+	}
+
+	spec.RRAs[0].DPs = make(map[int64]float64)
+	for i := int64(0); i < size; i++ {
+		spec.RRAs[0].DPs[i] = 10
+	}
+
+	var err error
+	_, err = td.db.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar1.baz"}, spec)
+	if err != nil {
+		t.Error(err)
+	}
+
+	spec.RRAs[0].DPs = make(map[int64]float64)
+	for i := int64(0); i < size; i++ {
+		spec.RRAs[0].DPs[i] = 20
+	}
+	_, err = td.db.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar2.baz"}, spec)
+
+	sm, err := ParseDsl(td.rcache, `weightedAverage("foo.bar1.baz", "foo.bar2.baz", 0)`, td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 10); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
