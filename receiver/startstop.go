@@ -93,16 +93,6 @@ var doStop = func(r *Receiver, clstr clusterer) {
 	log.Printf("Left cluster.")
 }
 
-var stopWorkers = func(workerChs []chan *cachedDs, workerWg *sync.WaitGroup) {
-	log.Printf("stopWorkers(): closing all worker channels...")
-	for _, ch := range workerChs {
-		close(ch)
-	}
-	log.Printf("stopWorkers(): waiting for workers to finish...")
-	workerWg.Wait()
-	log.Printf("stopWorkers(): all workers finished.")
-}
-
 var stopFlushers = func(flusher dsFlusherBlocking, flusherWg *sync.WaitGroup) {
 	log.Printf("stopFlushers(): stopping flusher(s)...")
 	flusher.stop()
