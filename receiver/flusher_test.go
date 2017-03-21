@@ -18,63 +18,29 @@ package receiver
 import (
 	"fmt"
 	"sync"
+	"testing"
+	"time"
 
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
 
-// func Test_flusher_flusherChannels_queueBlocking(t *testing.T) {
-// 	var fcs flusherChannels = make([]chan *dsFlushRequest, 2)
-// 	fcs[0] = make(chan *dsFlushRequest)
-// 	fcs[1] = make(chan *dsFlushRequest)
-
-// 	called := 0
-// 	go func() {
-// 		fr := <-fcs[0]
-// 		fr.resp <- true
-// 		called++
-// 	}()
-
-// 	foo := serde.Ident{"name": "foo"}
-// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-// 	rds := &cachedDs{DbDataSourcer: ds}
-// 	fcs.queueBlocking(rds, true)
-
-// 	if called != 1 {
-// 		t.Errorf("id 0 should be send to flusher 0")
-// 	}
-// }
-
-// This is a receiver
 type fakeDsFlusher struct {
-	called    int
-	fdsReturn bool
-	sr        statReporter
+	called int
+	sr     statReporter
 }
 
-func (f *fakeDsFlusher) flushDs(ds serde.DbDataSourcer, block bool) bool {
-	f.called++
-	return f.fdsReturn
-}
-
-func (*fakeDsFlusher) enabled() bool { return true }
-
-func (f *fakeDsFlusher) statReporter() statReporter {
-	return f.sr
-}
-
-func (f *fakeDsFlusher) flusher() serde.Flusher { return f }
-
+func (f *fakeDsFlusher) flushDS(ds serde.DbDataSourcer, block bool)         { f.called++ }
+func (f *fakeDsFlusher) flushToVCache(serde.DbDataSourcer)                  {}
+func (f *fakeDsFlusher) enabled() bool                                      { return true }
+func (f *fakeDsFlusher) flusher() serde.Flusher                             { return f }
+func (f *fakeDsFlusher) statReporter() statReporter                         { return f.sr }
+func (f *fakeDsFlusher) start(_, _ *sync.WaitGroup, _ time.Duration, n int) {}
+func (f *fakeDsFlusher) stop()                                              {}
 func (f *fakeDsFlusher) FlushDataSource(ds rrd.DataSourcer) error {
 	f.called++
 	return fmt.Errorf("Fake error.")
 }
-
-// func (f *fakeDsFlusher) channels() flusherChannels {
-// 	return make(flusherChannels, 0)
-// }
-
-func (f *fakeDsFlusher) start(n int, flusherWg, startWg *sync.WaitGroup, mfs int) {}
 
 // fake stats reporter
 type fakeSr struct {
@@ -89,119 +55,38 @@ func (f *fakeSr) reportStatGauge(string, float64) {
 	f.called++
 }
 
-// func Test_flusher(t *testing.T) {
+func Test_flusher_dsFlusher_basicOp(t *testing.T) {
 
-// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
-// 	sr := &fakeSr{}
-// 	dsf := &fakeDsFlusher{sr: sr}
-// 	fc := make(chan *dsFlushRequest)
+	// TODO: What are we testing here?
 
-// 	wc.startWg.Add(1)
-// 	go flusher(wc, dsf, fc)
-// 	wc.startWg.Wait()
+	sr := &fakeSr{}
+	flusherWg, startWg := &sync.WaitGroup{}, &sync.WaitGroup{}
+	dsf := &dsFlusher{flusherCh: make(flusherChannel), sr: sr} //, vdb: serde.VerticalFlusher(), sr: r}
+	dsf.start(flusherWg, startWg, time.Second, 1)
+	startWg.Wait()
 
-// 	foo := serde.Ident{"name": "foo"}
-// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-// 	rds := &cachedDs{DbDataSourcer: ds}
-// 	resp := make(chan bool)
-// 	fc <- &dsFlushRequest{ds: rds, resp: resp}
-// 	<-resp
+	foo := serde.Ident{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	resp := make(chan bool)
+	dsf.flusherCh <- &dsFlushRequest{ds: ds, resp: resp}
+	<-resp
 
-// 	if dsf.called != 1 {
-// 		t.Errorf("FlushDataSource() not called.")
-// 	}
+	dsf.stop()
+}
 
-// 	if sr.called != 2 {
-// 		t.Errorf("reportStatCount() should have been called 2 times.")
-// 	}
+func Test_flusher_methods(t *testing.T) {
+	db := &fakeSerde{}
+	sr := &fakeSr{}
 
-// 	close(fc)
-// 	wc.wg.Wait()
-// }
+	f := &dsFlusher{db: db, sr: sr}
 
-// func Test_flusher_reportFlusherChannelFillPercent(t *testing.T) {
-// 	ch := make(chan *dsFlushRequest, 10)
-// 	sr := &fakeSr{}
-// 	go reportFlusherChannelFillPercent(ch, sr, "IdenT", time.Millisecond)
-// 	time.Sleep(50 * time.Millisecond)
-// 	if sr.called == 0 {
-// 		t.Errorf("reportFlusherChannelFillPercent: statReporter should have been called a bunch of times")
-// 	}
-// }
-
-// func Test_flusher_start(t *testing.T) {
-// 	db := &fakeSerde{}
-// 	sr := &fakeSr{}
-// 	f := &dsFlusher{db: db.Flusher(), sr: sr}
-// 	var (
-// 		startWg, flusherWg sync.WaitGroup
-// 	)
-// 	fCalled := 0
-// 	save1 := flusher
-// 	flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {
-// 		fCalled++
-// 		wc.onStarted()
-// 	}
-// 	startWg.Add(1)
-// 	f.start(1, &flusherWg, &startWg, 10)
-// 	startWg.Wait()
-// 	if fCalled == 0 {
-// 		t.Errorf("fCalled == 0")
-// 	}
-// 	if f.flushLimiter == nil {
-// 		t.Errorf("f.flushLimiter == nil")
-// 	}
-// 	flusher = save1
-// }
-
-// func Test_flusher_flushDs(t *testing.T) {
-// 	db := &fakeSerde{}
-// 	sr := &fakeSr{}
-// 	foo := serde.Ident{"name": "foo"}
-// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-
-// 	f := &dsFlusher{}
-// 	if !f.flushDs(nil, false) {
-// 		t.Errorf("nil database should return true")
-// 	}
-
-// 	var (
-// 		startWg, flusherWg sync.WaitGroup
-// 	)
-// 	save1 := flusher
-// 	flusher = func(wc wController, dsf dsFlusherBlocking, flusherCh chan *dsFlushRequest) {}
-// 	f = &dsFlusher{db: db, sr: sr}
-// 	f.start(1, &flusherWg, &startWg, 1)
-
-// 	f.flushDs(ds, false)
-// 	f.flushDs(ds, false)
-
-// 	if len(f.flusherChs[0]) != 1 {
-// 		t.Errorf("len(f.flusherChs[0])) != 1")
-// 	}
-// 	if sr.called != 1 {
-// 		fmt.Printf("sr.called != 1 (second flushDs should be rate limited)")
-// 	}
-
-// 	flusher = save1
-// }
-
-// func Test_flusher_methods(t *testing.T) {
-// 	db := &fakeSerde{}
-// 	sr := &fakeSr{}
-
-// 	f := &dsFlusher{db: db, sr: sr}
-
-// 	if !f.enabled() {
-// 		t.Errorf("enabled() should be true")
-// 	}
-// 	if db != f.flusher() {
-// 		t.Errorf("db != f.flusher()")
-// 	}
-// 	if sr != f.statReporter() {
-// 		t.Errorf("sr != f.statReporter()")
-// 	}
-// 	if len(f.channels()) != 0 {
-// 		t.Errorf("len(f.channels()) != 0")
-// 	}
-// }
+	if !f.enabled() {
+		t.Errorf("enabled() should be true")
+	}
+	if db != f.flusher() {
+		t.Errorf("db != f.flusher()")
+	}
+	if sr != f.statReporter() {
+		t.Errorf("sr != f.statReporter()")
+	}
+}

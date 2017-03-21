@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/tgres/tgres/aggregator"
+	"github.com/tgres/tgres/rrd"
+	"github.com/tgres/tgres/serde"
 )
 
 type fakeAggregatorCommandQueuer struct {
@@ -37,32 +39,37 @@ type fakeDataPointQueuer struct {
 	qdpCalled int
 }
 
-func (f *fakeDataPointQueuer) QueueDataPoint(string, time.Time, float64) {
+func (f *fakeDataPointQueuer) QueueDataPoint(serde.Ident, time.Time, float64) {
 	f.qdpCalled++
 }
 
-// func Test_pacedMetricFlush(t *testing.T) {
+func Test_pacedMetricFlush(t *testing.T) {
 
-// 	sums := map[string]float64{"foo": 123}
-// 	gauges := make(map[string]*rrd.ClockPdp)
-// 	gauges["bar"] = &rrd.ClockPdp{}
-// 	acq := &fakeAggregatorCommandQueuer{}
-// 	dpq := &fakeDataPointQueuer{}
+	ident := serde.Ident{"name": "foo"}
+	sums := make(map[string]*pacedMetricSum)
+	sums[ident.String()] = &pacedMetricSum{ident: ident}
 
-// 	sums = pacedMetricFlush(sums, gauges, acq, dpq)
+	ident = serde.Ident{"name": "bar"}
+	gauges := make(map[string]*pacedMetricGauge)
+	gauges[ident.String()] = &pacedMetricGauge{ident: ident, ClockPdp: &rrd.ClockPdp{}}
 
-// 	if len(sums) > 0 {
-// 		t.Errorf("pacedMetricFlush did not return empty sums")
-// 	}
+	acq := &fakeAggregatorCommandQueuer{}
+	dpq := &fakeDataPointQueuer{}
 
-// 	if acq.qacCalled == 0 {
-// 		t.Errorf("QueueAggregatorCommand wasn't called")
-// 	}
+	sums = pacedMetricFlush(sums, gauges, acq, dpq)
 
-// 	if dpq.qdpCalled == 0 {
-// 		t.Errorf("QueueDataPoint wasn't called")
-// 	}
-// }
+	if len(sums) > 0 {
+		t.Errorf("pacedMetricFlush did not return empty sums")
+	}
+
+	if acq.qacCalled == 0 {
+		t.Errorf("QueueAggregatorCommand wasn't called")
+	}
+
+	if dpq.qdpCalled == 0 {
+		t.Errorf("QueueDataPoint wasn't called")
+	}
+}
 
 func Test_pacedMetricPeriodicFlushSignal(t *testing.T) {
 

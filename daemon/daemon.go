@@ -38,8 +38,7 @@ import (
 
 var (
 	logFile          *os.File
-	cycleLogCh            = make(chan int)
-	quitting         bool = false
+	cycleLogCh       = make(chan int)
 	gracefulChildPid int
 )
 
@@ -277,7 +276,6 @@ var checkRemovePid = func(pidPath string) bool {
 }
 
 func Finish(cfg *Config) {
-	quitting = true
 	log.Printf("main: Waiting for all other goroutines to finish...")
 	log.Println("main: All goroutines finished, exiting.")
 
@@ -290,7 +288,6 @@ func Finish(cfg *Config) {
 	if logFile != nil {
 		logFile.Close()
 	}
-
 }
 
 func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPath, join string) {
@@ -334,8 +331,6 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPat
 func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 
 	log.Printf("Gracefully exiting...")
-
-	quitting = true
 
 	if gracefulChildPid == 0 {
 		rcvr.ClusterReady(false) // triggers a transition

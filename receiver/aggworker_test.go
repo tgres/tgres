@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -249,103 +250,105 @@ func Test_aggworkerProcessOrForward(t *testing.T) {
 	aggWorkerForwardACToNode = saveFn
 }
 
-// func Test_aggworker_theAggworker(t *testing.T) {
+func Test_aggworker_theAggworker(t *testing.T) {
 
-// 	fl := &fakeLogger{}
-// 	log.SetOutput(fl)
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
 
-// 	defer func() {
-// 		log.SetOutput(os.Stderr) // restore default output
-// 	}()
+	defer func() {
+		log.SetOutput(os.Stderr) // restore default output
+	}()
 
-// 	ident := "aggident"
-// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: ident}
-// 	aggCh := make(chan *aggregator.Command)
+	ident := "aggident"
+	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: ident}
+	aggCh := make(chan *aggregator.Command)
 
-// 	scr := &fakeSr{}
-// 	r := &Receiver{}
+	scr := &fakeSr{}
+	r := &Receiver{}
 
-// 	// cluster with a node
-// 	clstr := &fakeCluster{}
-// 	md := make([]byte, 20)
-// 	md[0] = 1 // Ready
-// 	node := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "local"}}
-// 	clstr.nodesForDd = []*cluster.Node{node}
-// 	clstr.ln = node
+	// cluster with a node
+	clstr := &fakeCluster{}
+	md := make([]byte, 20)
+	md[0] = 1 // Ready
+	node := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "local"}}
+	clstr.nodesForDd = []*cluster.Node{node}
+	clstr.ln = node
 
-// 	saveFn1, saveFn2, saveFn3 := aggWorkerIncomingAggCmds, aggWorkerPeriodicFlushSignal, aggWorkerProcessOrForward
+	saveFn1, saveFn2, saveFn3 := aggWorkerIncomingAggCmds, aggWorkerPeriodicFlushSignal, aggWorkerProcessOrForward
 
-// 	aiacCalled := 0
-// 	aggWorkerIncomingAggCmds = func(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
-// 		aiacCalled++
-// 	}
+	aiacCalled := 0
+	aggWorkerIncomingAggCmds = func(ident string, rcv chan *cluster.Msg, aggCh chan *aggregator.Command) {
+		aiacCalled++
+	}
 
-// 	apfsCalled := 0
-// 	aggWorkerPeriodicFlushSignal = func(ident string, flushCh chan time.Time, dur time.Duration) {
-// 		apfsCalled++
-// 		for {
-// 			flushCh <- time.Now()
-// 		}
-// 	}
+	apfsCalled := 0
+	aggWorkerPeriodicFlushSignal = func(ident string, flushCh chan time.Time, dur time.Duration) {
+		defer func() { recover() }()
+		apfsCalled++
+		for {
+			time.Sleep(100 * time.Millisecond)
+			flushCh <- time.Now()
+		}
+	}
 
-// 	awpofCalled := 0
-// 	aggWorkerProcessOrForward = func(ac *aggregator.Command, aggDd *distDatumAggregator, clstr clusterer, snd chan *cluster.Msg) (forwarded int) {
-// 		awpofCalled++
-// 		return 1
-// 	}
+	awpofCalled := 0
+	aggWorkerProcessOrForward = func(ac *aggregator.Command, aggDd *distDatumAggregator, clstr clusterer, snd chan *cluster.Msg) (forwarded int) {
+		awpofCalled++
+		return 1
+	}
 
-// 	wc.startWg.Add(1)
-// 	go aggWorker(wc, aggCh, clstr, 5*time.Millisecond, "prefix", scr, r)
-// 	wc.startWg.Wait()
+	wc.startWg.Add(1)
+	go aggWorker(wc, aggCh, clstr, 5*time.Millisecond, "prefix", scr, r)
+	wc.startWg.Wait()
 
-// 	time.Sleep(5 * time.Millisecond)
-// 	if aiacCalled != 1 {
-// 		t.Errorf("aggworker: aggworkerIncomingAggCmds not called")
-// 	}
+	time.Sleep(5 * time.Millisecond)
+	if aiacCalled != 1 {
+		t.Errorf("aggworker: aggworkerIncomingAggCmds not called")
+	}
 
-// 	if apfsCalled != 1 {
-// 		t.Errorf("aggworker: aggworkerPeriodicFlushSignal not called")
-// 	}
+	if apfsCalled != 1 {
+		t.Errorf("aggworker: aggworkerPeriodicFlushSignal not called")
+	}
 
-// 	// send some data
-// 	cmd := aggregator.NewCommand(aggregator.CmdAdd, serde.Ident{"name": "foo"}, 123)
+	// send some data
+	cmd := aggregator.NewCommand(aggregator.CmdAdd, serde.Ident{"name": "foo"}, 123)
 
-// 	aggCh <- cmd
-// 	aggCh <- cmd
+	aggCh <- cmd
+	aggCh <- cmd
 
-// 	if awpofCalled == 0 {
-// 		t.Errorf("aggworker: aggWorkerProcessOrForward not called")
-// 	}
+	if awpofCalled == 0 {
+		t.Errorf("aggworker: aggWorkerProcessOrForward not called")
+	}
 
-// 	close(aggCh)
+	close(aggCh)
 
-// 	wc.wg.Wait()
-// 	if !strings.Contains(string(fl.last), "last flush") {
-// 		t.Errorf("aggworker: 'last flush' log message messing on channel close")
-// 	}
+	wc.wg.Wait()
+	if !strings.Contains(string(fl.last), "last flush") {
+		t.Errorf("aggworker: 'last flush' log message messing on channel close")
+	}
 
-// 	// Now with nil cluster
-// 	aggCh = make(chan *aggregator.Command)
-// 	awpofCalled = 0
+	// Now with nil cluster
+	aggCh = make(chan *aggregator.Command)
+	awpofCalled = 0
 
-// 	wc.startWg.Add(1)
-// 	go aggWorker(wc, aggCh, nil, 5*time.Millisecond, "prefix", scr, r)
-// 	wc.startWg.Wait()
+	wc.startWg.Add(1)
+	go aggWorker(wc, aggCh, nil, 5*time.Millisecond, "prefix", scr, r)
+	wc.startWg.Wait()
 
-// 	// send some data
-// 	cmd = aggregator.NewCommand(aggregator.CmdAdd, serde.Ident{"name": "foo"}, 123)
+	// send some data
+	cmd = aggregator.NewCommand(aggregator.CmdAdd, serde.Ident{"name": "foo"}, 123)
 
-// 	aggCh <- cmd
-// 	aggCh <- cmd
+	aggCh <- cmd
+	aggCh <- cmd
 
-// 	if awpofCalled != 0 {
-// 		t.Errorf("aggworker: aggWorkerProcessOrForward called but should not be with nil cluster")
-// 	}
+	if awpofCalled != 0 {
+		t.Errorf("aggworker: aggWorkerProcessOrForward called but should not be with nil cluster")
+	}
 
-// 	close(aggCh)
+	close(aggCh)
 
-// 	aggWorkerIncomingAggCmds, aggWorkerPeriodicFlushSignal, aggWorkerProcessOrForward = saveFn1, saveFn2, saveFn3
-// }
+	aggWorkerIncomingAggCmds, aggWorkerPeriodicFlushSignal, aggWorkerProcessOrForward = saveFn1, saveFn2, saveFn3
+}
 
 func Test_aggworker_distDatumAggregator(t *testing.T) {
 	agg := &fakeAggregatorer{}

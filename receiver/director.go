@@ -305,10 +305,11 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 				if w == 0 && l == 0 {
 					break
 					log.Printf("  -  worker: %d loader: %d", w, l)
-					time.Sleep(1 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 					w, l = len(workerCh), len(loaderCh)
 				}
 			}
+			log.Printf("director: loader and worker channels empty.")
 
 			// signal to exit
 			log.Printf("director: closing worker channels, waiting for workers to finish....")

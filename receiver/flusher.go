@@ -179,10 +179,13 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 		if fr != nil {
 			ds := fr.ds.(*serde.DbDataSource)
 			if fr.resp != nil { // blocking flush requested
+				var err error
 				start := time.Now()
-				err := dsf.flusher().FlushDataSource(ds)
-				if err != nil {
-					log.Printf("%s: error flushing data source %v: %v", wc.ident(), ds, err)
+				if db := dsf.flusher(); db != nil {
+					err = db.FlushDataSource(ds)
+					if err != nil {
+						log.Printf("%s: error flushing data source %v: %v", wc.ident(), ds, err)
+					}
 				}
 				dur := time.Now().Sub(start).Seconds()
 				delete(toFlush, ds.Id())

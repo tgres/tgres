@@ -16,14 +16,18 @@
 package receiver
 
 import (
+	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
 
@@ -150,386 +154,313 @@ func Test_directorForwardDPToNode(t *testing.T) {
 	}
 }
 
-// func Test_directorProcessOrForward(t *testing.T) {
+func Test_directorProcessOrForward(t *testing.T) {
 
-// 	saveFn := directorForwardDPToNode
-// 	forward, fwErr := 0, error(nil)
-// 	directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
-// 		forward++
-// 		return fwErr
-// 	}
+	saveFn := directorForwardDPToNode
+	forward, fwErr := 0, error(nil)
+	directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan *cluster.Msg) error {
+		forward++
+		return fwErr
+	}
 
-// 	// dsc
-// 	db := &fakeSerde{}
-// 	df := &SimpleDSFinder{DftDSSPec}
-// 	sr := &fakeSr{}
-// 	dsf := &dsFlusher{db: db, sr: sr}
-// 	dsc := newDsCache(db, df, dsf)
+	st := &dpStats{forwarded_to: make(map[string]int), last: time.Now()}
 
-// 	// rds
-// 	foo := serde.Ident{"name": "foo"}
-// 	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
-// 	rds := &cachedDs{DbDataSourcer: ds}
+	// dsc
+	db := &fakeSerde{}
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, dsf)
 
-// 	// cluster
-// 	clstr := &fakeCluster{}
-// 	md := make([]byte, 20)
-// 	md[0] = 1 // Ready
-// 	node := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "local"}}
-// 	clstr.nodesForDd = []*cluster.Node{node}
-// 	clstr.ln = node
+	// cds
+	foo := serde.Ident{"name": "foo"}
+	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	cds := &cachedDs{DbDataSourcer: ds, mu: &sync.Mutex{}}
+	dp := &incomingDP{cachedIdent: newCachedIdent(serde.Ident{"name": "foo"}), timeStamp: time.Unix(1000, 0), value: 123}
+	cds.appendIncoming(dp)
 
-// 	// workerChs
-// 	workerChs := make([]chan *cachedDs, 1)
-// 	workerChs[0] = make(chan *cachedDs)
-// 	sent := 0
-// 	go func() {
-// 		for {
-// 			<-workerChs[0]
-// 			sent++
-// 		}
-// 	}()
+	// cluster
+	clstr := &fakeCluster{}
+	md := make([]byte, 20)
+	md[0] = 1 // Ready
+	node := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "local"}}
+	clstr.nodesForDd = []*cluster.Node{node}
+	clstr.ln = node
 
-// 	// Test if we are LocalNode
-// 	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-// 	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-// 	if sent < 1 {
-// 		t.Errorf("directorProcessOrForward: Nothing sent to workerChs")
-// 	}
+	// workerChs
+	workerCh := make(chan *cachedDs)
+	sent := 0
+	go func() {
+		for {
+			<-workerCh
+			sent++
+		}
+	}()
 
-// 	// Now test we are NOT LN, forward
-// 	remote := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "remote"}}
-// 	clstr.nodesForDd = []*cluster.Node{remote}
+	// Test if we are LocalNode
+	directorProcessOrForward(dsc, cds, workerCh, clstr, nil, st)
+	directorProcessOrForward(dsc, cds, workerCh, clstr, nil, st)
+	if sent < 1 {
+		t.Errorf("directorProcessOrForward: Nothing sent to workerChs")
+	}
 
-// 	n := directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-// 	if forward != 1 {
-// 		t.Errorf("directorProcessOrForward: directorForwardDPToNode not called")
-// 	}
-// 	if n != 1 {
-// 		t.Errorf("directorProcessOrForward: return value != 1")
-// 	}
+	// Now test we are NOT LN, forward
+	remote := &cluster.Node{Node: &memberlist.Node{Meta: md, Name: "remote"}}
+	clstr.nodesForDd = []*cluster.Node{remote}
 
-// 	fl := &fakeLogger{}
-// 	log.SetOutput(fl)
-// 	defer func() {
-// 		// restore default output
-// 		log.SetOutput(os.Stderr)
-// 	}()
+	directorProcessOrForward(dsc, cds, workerCh, clstr, nil, st)
+	if forward != 1 {
+		t.Errorf("directorProcessOrForward: directorForwardDPToNode not called")
+	}
 
-// 	fwErr = fmt.Errorf("some error")
-// 	n = directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-// 	if n != 0 {
-// 		t.Errorf("directorProcessOrForward: return value != 0")
-// 	}
-// 	if !strings.Contains(string(fl.last), "some error") {
-// 		t.Errorf("directorProcessOrForward: directorForwardDPToNode not logged")
-// 	}
-// 	fwErr = nil
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
 
-// 	// make an rds with points
-// 	foo = serde.Ident{"name": "foo"}
-// 	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
-// 		Step: 10 * time.Second,
-// 		RRAs: []rrd.RRASpec{
-// 			rrd.RRASpec{Function: rrd.WMEAN,
-// 				Step:   10 * time.Second,
-// 				Span:   30 * time.Second,
-// 				Latest: time.Unix(1000, 0),
-// 			},
-// 		},
-// 	}))
-// 	ds.ProcessDataPoint(123, time.Unix(2000, 0))
-// 	ds.ProcessDataPoint(123, time.Unix(3000, 0))
-// 	rds = &cachedDs{DbDataSourcer: ds}
+	// make an cds with points
+	foo = serde.Ident{"name": "foo"}
+	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
+		Step: 10 * time.Second,
+		RRAs: []rrd.RRASpec{
+			rrd.RRASpec{Function: rrd.WMEAN,
+				Step:   10 * time.Second,
+				Span:   30 * time.Second,
+				Latest: time.Unix(1000, 0),
+			},
+		},
+	}))
+	ds.ProcessDataPoint(123, time.Unix(2000, 0))
+	ds.ProcessDataPoint(123, time.Unix(3000, 0))
+	cds = &cachedDs{DbDataSourcer: ds}
 
-// 	directorProcessOrForward(dsc, rds, clstr, workerChs, nil, nil)
-// 	if !strings.Contains(string(fl.last), "PointCount") {
-// 		t.Errorf("directorProcessOrForward: Missing the PointCount warning log")
-// 	}
-// 	if rds.PointCount() != 0 {
-// 		t.Errorf("directorProcessOrForward: ClearRRAs(true) not called")
-// 	}
+	directorProcessOrForward(dsc, cds, workerCh, clstr, nil, st)
+	if !strings.Contains(string(fl.last), "PointCount") {
+		t.Errorf("directorProcessOrForward: Missing the PointCount warning log")
+	}
+	if cds.PointCount() != 0 {
+		t.Errorf("directorProcessOrForward: ClearRRAs(true) not called")
+	}
 
-// 	// restore directorForwardDPToNode
-// 	directorForwardDPToNode = saveFn
-// }
+	// restore directorForwardDPToNode
+	directorForwardDPToNode = saveFn
+}
 
-// func Test_directorProcessIncomingDP(t *testing.T) {
+func Test_directorProcessIncomingDP(t *testing.T) {
 
-// 	saveFn := directorProcessOrForward
-// 	dpofCalled := 0
-// 	directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, clstr clusterer, workerChs workerChannels, dp *IncomingDP, snd chan *cluster.Msg) (forwarded int) {
-// 		dpofCalled++
-// 		return 0
-// 	}
+	saveFn := directorProcessOrForward
+	dpofCalled := 0
+	directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
+		dpofCalled++
+	}
 
-// 	fl := &fakeLogger{}
-// 	log.SetOutput(fl)
-// 	defer func() {
-// 		// restore default output
-// 		log.SetOutput(os.Stderr)
-// 	}()
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
 
-// 	// dp
-// 	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
+	st := &dpStats{forwarded_to: make(map[string]int), last: time.Now()}
 
-// 	// dsc
-// 	db := &fakeSerde{}
-// 	df := &SimpleDSFinder{DftDSSPec}
-// 	scr := &fakeSr{}
-// 	dsf := &dsFlusher{db: db, sr: scr}
-// 	dsc := newDsCache(db, df, dsf)
+	// dp
+	dp := &incomingDP{cachedIdent: newCachedIdent(serde.Ident{"name": "foo"}), timeStamp: time.Unix(1000, 0), value: 123}
 
-// 	// cluster
-// 	clstr := &fakeCluster{cChange: make(chan bool)}
+	// dsc
+	db := &fakeSerde{}
+	df := &SimpleDSFinder{DftDSSPec}
+	scr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: scr}
+	dsc := newDsCache(db, df, dsf)
 
-// 	// workerChs
-// 	workerChs := make([]chan *incomingDpWithDs, 1)
-// 	workerChs[0] = make(chan *incomingDpWithDs)
-// 	sent := 0
-// 	go func() {
-// 		for {
-// 			<-workerChs[0]
-// 			sent++
-// 		}
-// 	}()
+	// cluster
+	clstr := &fakeCluster{cChange: make(chan bool)}
 
-// 	// NaN
-// 	dp.Value = math.NaN()
-// 	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
-// 	if scr.called != 1 {
-// 		t.Errorf("directorProcessIncomingDP: With a NaN, reportStatCount() should only be called once")
-// 	}
-// 	if dpofCalled > 0 {
-// 		t.Errorf("directorProcessIncomingDP: With a NaN, directorProcessOrForward should not be called")
-// 	}
+	// workerCh
+	workerCh := make(chan *cachedDs)
+	sent := 0
+	go func() {
+		for {
+			<-workerCh
+			sent++
+		}
+	}()
 
-// 	// A value
-// 	dp.Value = 1234
-// 	scr.called, dpofCalled = 0, 0
-// 	directorProcessIncomingDP(dp, scr, dsc, workerChs, clstr, nil)
-// 	if scr.called != 2 {
-// 		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called twice: %v", scr.called)
-// 	}
-// 	if dpofCalled != 1 {
-// 		t.Errorf("directorProcessIncomingDP: With a value, directorProcessOrForward should be called once: %v", dpofCalled)
-// 	}
+	// loaderCh
+	loaderCh := make(chan interface{})
+	lsent := 0
+	go func() {
+		for {
+			<-loaderCh
+			lsent++
+		}
+		fmt.Printf("exited!\n")
+	}()
 
-// 	// A blank name should cause a nil rds
-// 	dp.Name = ""
-// 	scr.called, dpofCalled = 0, 0
-// 	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
-// 	if scr.called != 1 {
-// 		t.Errorf("directorProcessIncomingDP: With a blank name, reportStatCount() should be called once")
-// 	}
-// 	if dpofCalled > 0 {
-// 		t.Errorf("directorProcessIncomingDP: With a blank name, directorProcessOrForward should not be called")
-// 	}
-// 	if !strings.Contains(string(fl.last), "No spec matched") {
-// 		t.Errorf("should log 'No spec matched'")
-// 	}
+	// NaN
+	dp.value = math.NaN()
+	directorProcessIncomingDP(dp, dsc, nil, nil, nil, nil, st)
+	if dpofCalled > 0 {
+		t.Errorf("directorProcessIncomingDP: With a NaN, directorProcessOrForward should not be called")
+	}
 
-// 	// fake a db error
-// 	dp.Name = "blah"
-// 	db.fakeErr = true
-// 	scr.called, dpofCalled = 0, 0
-// 	directorProcessIncomingDP(dp, scr, dsc, nil, nil, nil)
-// 	if scr.called != 1 {
-// 		t.Errorf("directorProcessIncomingDP: With a db error, reportStatCount() should be called once")
-// 	}
-// 	if dpofCalled > 0 {
-// 		t.Errorf("directorProcessIncomingDP: With a db error, directorProcessOrForward should not be called")
-// 	}
-// 	if !strings.Contains(string(fl.last), "error") {
-// 		t.Errorf("should log 'error'")
-// 	}
+	// A value
+	dp.value = 1234
+	lsent, dpofCalled = 0, 0
+	directorProcessIncomingDP(dp, dsc, loaderCh, workerCh, clstr, nil, st)
+	if lsent != 1 {
+		t.Errorf("directorProcessIncomingDP: With a value, should send it to loader")
+	}
+	if dpofCalled != 0 {
+		t.Errorf("directorProcessIncomingDP: With a value, directorProcessOrForward should not be called")
+	}
 
-// 	// nil cluster
-// 	dp.Value = 1234
-// 	db.fakeErr = false
-// 	scr.called = 0
-// 	directorProcessIncomingDP(dp, scr, dsc, workerChs, nil, nil)
-// 	if scr.called != 1 {
-// 		t.Errorf("directorProcessIncomingDP: With a value, reportStatCount() should be called once: %v", scr.called)
-// 	}
-// 	if dpofCalled != 0 {
-// 		t.Errorf("directorProcessIncomingDP: With a value and no cluster, directorProcessOrForward should not be called: %v", dpofCalled)
-// 	}
+	// A blank name should cause a nil rds
+	dp.cachedIdent = newCachedIdent(serde.Ident{"name": ""})
+	dpofCalled = 0
+	directorProcessIncomingDP(dp, dsc, nil, nil, nil, nil, st)
+	if dpofCalled > 0 {
+		t.Errorf("directorProcessIncomingDP: With a blank name, directorProcessOrForward should not be called")
+	}
 
-// 	directorProcessOrForward = saveFn
-// }
+	// fake a db error
+	dp.cachedIdent = newCachedIdent(serde.Ident{"name": "blah"})
+	db.fakeErr = true
+	dpofCalled = 0
+	directorProcessIncomingDP(dp, dsc, loaderCh, nil, nil, nil, st)
+	if dpofCalled > 0 {
+		t.Errorf("directorProcessIncomingDP: With a db error, directorProcessOrForward should not be called")
+	}
 
-// func Test_the_director(t *testing.T) {
+	// nil cluster
+	dp.value = 1234
+	db.fakeErr = false
+	directorProcessIncomingDP(dp, dsc, loaderCh, workerCh, nil, nil, st)
+	if dpofCalled != 0 {
+		t.Errorf("directorProcessIncomingDP: With a value and no cluster, directorProcessOrForward should not be called: %v", dpofCalled)
+	}
 
-// 	saveFn1 := directorIncomingDPMessages
-// 	saveFn2 := directorProcessIncomingDP
-// 	dimCalled := 0
-// 	directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan *IncomingDP) { dimCalled++ }
-// 	dpidpCalled := 0
-// 	directorProcessIncomingDP = func(dp *IncomingDP, scr statReporter, dsc *dsCache, workerChs workerChannels, clstr clusterer, snd chan *cluster.Msg) {
-// 		dpidpCalled++
-// 	}
+	directorProcessOrForward = saveFn
+}
 
-// 	fl := &fakeLogger{}
-// 	log.SetOutput(fl)
-// 	defer func() {
-// 		// restore default output
-// 		log.SetOutput(os.Stderr)
-// 	}()
+func Test_the_director(t *testing.T) {
 
-// 	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
-// 	clstr := &fakeCluster{cChange: make(chan bool)}
-// 	dpCh := make(chan *IncomingDP)
+	saveFn1 := directorIncomingDPMessages
+	saveFn2 := directorProcessIncomingDP
+	dimCalled := 0
+	directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) { dimCalled++ }
+	dpidpCalled := 0
+	directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
+		dpidpCalled++
+	}
 
-// 	// dsc
-// 	db := &fakeSerde{}
-// 	df := &SimpleDSFinder{DftDSSPec}
-// 	sr := &fakeSr{}
-// 	dsf := &dsFlusher{db: db, sr: sr}
-// 	dsc := newDsCache(db, df, dsf)
+	fl := &fakeLogger{}
+	log.SetOutput(fl)
+	defer func() {
+		// restore default output
+		log.SetOutput(os.Stderr)
+	}()
 
-// 	wc.startWg.Add(1)
-// 	go director(wc, dpCh, clstr, sr, dsc, nil)
-// 	wc.startWg.Wait()
+	wc := &wrkCtl{wg: &sync.WaitGroup{}, startWg: &sync.WaitGroup{}, id: "FOO"}
+	clstr := &fakeCluster{cChange: make(chan bool)}
+	dpCh := make(chan interface{})
 
-// 	if clstr.nReady == 0 {
-// 		t.Errorf("director: Ready(true) not called on cluster")
-// 	}
+	// dsc
+	db := &fakeSerde{}
+	df := &SimpleDSFinder{DftDSSPec}
+	sr := &fakeSr{}
+	dsf := &dsFlusher{db: db, sr: sr}
+	dsc := newDsCache(db, df, dsf)
 
-// 	if clstr.nReg == 0 {
-// 		t.Errorf("director: cluster.RegisterMsgType() not called")
-// 	}
+	wc.startWg.Add(1)
+	go director(wc, dpCh, 1, clstr, sr, dsc, nil, 0)
+	wc.startWg.Wait()
 
-// 	// This sometimes can fail because we don't wait for that goroutine in this test...
-// 	time.Sleep(5 * time.Millisecond)
-// 	if dimCalled == 0 {
-// 		t.Errorf("director: directorIncomingDPMessages not started")
-// 	}
+	if clstr.nReady == 0 {
+		t.Errorf("director: Ready(true) not called on cluster")
+	}
 
-// 	dp := &IncomingDP{Name: "foo", TimeStamp: time.Unix(1000, 0), Value: 123}
-// 	dpCh <- dp
-// 	dpCh <- dp
+	if clstr.nReg == 0 {
+		t.Errorf("director: cluster.RegisterMsgType() not called")
+	}
 
-// 	if dpidpCalled == 0 {
-// 		t.Errorf("director: directorProcessIncomingDP not called")
-// 	}
+	// This sometimes can fail because we don't wait for that goroutine in this test...
+	time.Sleep(5 * time.Millisecond)
+	if dimCalled == 0 {
+		t.Errorf("director: directorIncomingDPMessages not started")
+	}
 
-// 	// Trigger a transition
-// 	clstr.cChange <- true
-// 	dpCh <- dp
+	dp := &incomingDP{cachedIdent: newCachedIdent(serde.Ident{"name": "foo"}), timeStamp: time.Unix(1000, 0), value: 123}
+	dpCh <- dp
+	dpCh <- dp
 
-// 	if clstr.nTrans == 0 {
-// 		t.Errorf("director: on cluster change, Transition() not called")
-// 	}
+	if dpidpCalled == 0 {
+		t.Errorf("director: directorProcessIncomingDP not called")
+	}
 
-// 	// Transition with error
-// 	clstr.tErr = true
-// 	clstr.cChange <- true
-// 	dpCh <- dp
+	// Trigger a transition
+	clstr.cChange <- true
+	dpCh <- dp
 
-// 	if !strings.Contains(string(fl.last), "some error") {
-// 		t.Errorf("director: on transition error, 'some error' missing from logs")
-// 	}
+	time.Sleep(100 * time.Millisecond)
+	if clstr.nTrans == 0 {
+		t.Errorf("director: on cluster change, Transition() not called")
+	}
 
-// 	dpidpCalled = 0
-// 	close(dpCh)
-// 	time.Sleep(1 * time.Second) // so that nil dp goroutine panics/recovers
+	// // Transition with error
+	// clstr.tErr = true
+	// clstr.cChange <- true
+	// dpCh <- dp
 
-// 	if dpidpCalled > 0 {
-// 		t.Errorf("director: directorProcessIncomingDP must not be called on channel close")
-// 	}
+	// if !strings.Contains(string(fl.last), "some error") {
+	// 	t.Errorf("director: on transition error, 'some error' missing from logs")
+	// }
 
-// 	if !strings.Contains(string(fl.last), "shutting down") {
-// 		t.Errorf("director: on channel close, missing 'shutting down' log entry")
-// 	}
+	dpidpCalled = 0
+	close(dpCh)
+	time.Sleep(1 * time.Second) // so that nil dp goroutine panics/recovers
 
-// 	// overrun
-// 	dpCh = make(chan *IncomingDP, 5)
-// 	dpCh <- dp
-// 	dpCh <- dp
-// 	dpCh <- dp
-// 	dpCh <- dp
+	// if dpidpCalled > 0 {
+	// 	t.Errorf("director: directorProcessIncomingDP must not be called on channel close")
+	// }
 
-// 	wc.startWg.Add(1)
-// 	go director(wc, dpCh, clstr, sr, dsc, nil)
-// 	wc.startWg.Wait()
+	// if !strings.Contains(string(fl.last), "shutting down") {
+	// 	t.Errorf("director: on channel close, missing 'shutting down' log entry")
+	// }
 
-// 	time.Sleep(100 * time.Millisecond)
+	// overrun
+	dpCh = make(chan interface{}, 5)
+	dpCh <- dp
+	dpCh <- dp
+	dpCh <- dp
+	dpCh <- dp
 
-// 	close(dpCh)
+	wc.startWg.Add(1)
+	go director(wc, dpCh, 1, clstr, sr, dsc, nil, 0)
+	wc.startWg.Wait()
 
-// 	directorIncomingDPMessages = saveFn1
-// 	directorProcessIncomingDP = saveFn2
-// }
+	time.Sleep(100 * time.Millisecond)
 
-// func Test_director_reportDirectorChannelFillPercent(t *testing.T) {
-// 	defer func() {
-// 		// restore default output
-// 		log.SetOutput(os.Stderr)
-// 	}()
+	close(dpCh)
 
-// 	fl := &fakeLogger{}
-// 	log.SetOutput(fl)
+	directorIncomingDPMessages = saveFn1
+	directorProcessIncomingDP = saveFn2
+}
 
-// 	ch := make(chan *IncomingDP, 10)
-// 	sr := &fakeSr{}
-// 	for i := 0; i < 9; i++ {
-// 		ch <- &IncomingDP{}
-// 	}
-// 	queue := &dpQueue{}
-// 	queue.push(&IncomingDP{})
-// 	go reportDirectorChannelFillPercent(ch, queue, sr, time.Millisecond)
-// 	time.Sleep(50 * time.Millisecond)
-// 	if sr.called == 0 {
-// 		t.Errorf("reportDirectorChannelFillPercent: statReporter should have been called a bunch of times")
-// 	}
-// 	if !strings.Contains(string(fl.last), "WARNING") {
-// 		t.Errorf("reportDirectorChannelFillPercent: there should be a warning about director channel nearly full")
-// 	}
-// }
-
-// func Test_director_queue(t *testing.T) {
-
-// 	queue := &dpQueue{}
-// 	dp := &IncomingDP{}
-// 	queue.push(dp)
-// 	if queue.pop() != dp {
-// 		t.Errorf("queue: pop returned wrong dp")
-// 	}
-// 	if queue.size() != 0 {
-// 		t.Errorf("queue: should be empty")
-// 	}
-// 	queue.push(&IncomingDP{})
-// 	if queue.size() != 1 {
-// 		t.Errorf("queue: size != 1")
-// 	}
-// }
-
-// func Test_director_checkSetAside(t *testing.T) {
-// 	queue := &dpQueue{}
-// 	dp := &IncomingDP{}
-// 	dp2 := &IncomingDP{}
-
-// 	r := checkSetAside(dp, queue, true)
-// 	if r != nil {
-// 		t.Errorf("with skip, checkSetAside should return nil")
-// 	}
-// 	if queue.size() != 1 {
-// 		t.Errorf("checkSetAside: queue size != 1")
-// 	}
-// 	r = checkSetAside(dp2, queue, false)
-// 	if r != dp {
-// 		t.Errorf("checkSetAside returned wrong point")
-// 	}
-// 	r = checkSetAside(nil, queue, false)
-// 	if r != dp2 {
-// 		t.Errorf("checkSetAside returned wrong point")
-// 	}
-// 	if queue.size() != 0 {
-// 		t.Errorf("checkSetAside: queue size != 0")
-// 	}
-// 	r = checkSetAside(nil, queue, false)
-// 	if r != nil {
-// 		t.Errorf("with skip false and empty queue, checkSetAside should return our point: nil")
-// 	}
-// }
+func Test_director_fifoQueue(t *testing.T) {
+	queue := &fifoQueue{}
+	dp := &incomingDP{}
+	queue.push(dp)
+	if queue.pop() != dp {
+		t.Errorf("queue: pop returned wrong dp")
+	}
+	if queue.size() != 0 {
+		t.Errorf("queue: should be empty")
+	}
+	queue.push(&incomingDP{})
+	if queue.size() != 1 {
+		t.Errorf("queue: size != 1")
+	}
+}
