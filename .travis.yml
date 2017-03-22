@@ -4,4 +4,4 @@ go:
   - 1.7.x
   - master
 
-script: go test -v ./...
+script: make test
