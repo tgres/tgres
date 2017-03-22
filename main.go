@@ -29,6 +29,10 @@ import (
 	"github.com/tgres/tgres/daemon"
 )
 
+var (
+	buildTime, gitRevision string
+)
+
 func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool, version bool) {
 
 	// Parse the flags, if any
@@ -42,12 +46,23 @@ func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool, version bo
 	return
 }
 
+func printVersion() {
+	fmt.Printf("Tgres version: %v\n", Version)
+	if buildTime != "" {
+		fmt.Printf("Build time: %v\n", buildTime)
+	}
+	if gitRevision != "" {
+		fmt.Printf("Git revision: %v\n", gitRevision)
+	}
+
+}
+
 func main() {
 
 	textCfgPath, gracefulProtos, join, bg, version := parseFlags()
 
 	if version {
-		fmt.Printf("Tgres version: %v\n", Version)
+		printVersion()
 		return
 	}
 
