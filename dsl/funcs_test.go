@@ -3,6 +3,7 @@ package dsl
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -436,15 +437,13 @@ func Test_dsl_asPercent(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	n := 0
-	for _, s := range sm {
+	for k, s := range sm {
 		var expect float64
-		switch n {
-		case 0:
+		if strings.Contains(k, "10") {
 			expect = 10.0 / (10 + 20 + 30) * 100
-		case 1:
+		} else if strings.Contains(k, "20") {
 			expect = 20.0 / (10 + 20 + 30) * 100
-		case 2:
+		} else if strings.Contains(k, "30") {
 			expect = 30.0 / (10 + 20 + 30) * 100
 		}
 		expect = math.Floor(expect * 1e6) // to avoid float64 precision problems
@@ -454,7 +453,6 @@ func Test_dsl_asPercent(t *testing.T) {
 				t.Errorf("Unexpected value: %v (expected: %v)", v, expect)
 			}
 		}
-		n++
 	}
 }
 
