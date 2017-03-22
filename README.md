@@ -1,4 +1,6 @@
 
+[![Build Status](https://travis-ci.org/tgres/tgres.svg?branch=master)](https://travis-ci.org/tgres/tgres)
+
 Tgres is a program comprised of several packages which together can be
 used to receive, store and present time-series data using a relational
 database as persistent storage (currently only PostgreSQL).
