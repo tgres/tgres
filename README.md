@@ -51,7 +51,7 @@ for tinkering for those interested.
 
 ### Getting Started
 
-You need a newer Go (1.6.1+) and PostgreSQL 9.5 or later. To get the
+You need a newer Go (1.7+) and PostgreSQL 9.5 or later. To get the
 daemon compiled all you need is:
 
 ```
