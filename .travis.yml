@@ -5,3 +5,8 @@ go:
   - 1.8
 
 script: make test
+
+notifications:
+  email:
+    on_success: change
+    on_failure: always
