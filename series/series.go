@@ -17,7 +17,7 @@
 // is the Series interface, which describes a Series. A Series is an
 // object which can be iterated over with Next(). The idea is that the
 // underlying data could be large and fetched as needed from a
-// database as needed.
+// database or some other storage.
 package series
 
 import "time"

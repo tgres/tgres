@@ -16,4 +16,4 @@
 package main
 
 // TODO: For now this is fine
-var Version = "0.9.0a"
+var Version = "0.10.0b"
