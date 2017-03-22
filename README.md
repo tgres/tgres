@@ -23,7 +23,10 @@ how Tgres stores data see this
 
 ### Current Status
 
-Mar 2017: Tgres is ready for wider testing.
+Mar 22 2017: Version 0.10.0b was tagged. This is our first beta (which
+is more stable than alpha). Please try it out, and take a minute to
+open an issue or even a PR if you see/fix any problems. Your feedback
+is most appreciated!
 
 Feb 2017 Note: A major change in the database structure has been made,
 Tgres now uses the "write optimized" / "vertical" storage. This change
