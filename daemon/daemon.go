@@ -59,7 +59,8 @@ var savePid = func(pidPath string) error {
 }
 
 var initDb = func(connectString string) (serde.DbSerDe, error) {
-	return serde.InitDb(connectString, "")
+	prefix := os.Getenv("TGRES_DB_PREFIX")
+	return serde.InitDb(connectString, prefix)
 }
 
 // Figure out which address to bind to and which to advertize for the
