@@ -723,6 +723,7 @@ func (p *pgvSerDe) fetchDataSource(ident Ident) (*DbDataSource, error) {
 		log.Printf("fetchDataSource(): error querying database: %v", err)
 		return nil, err
 	}
+	defer rows.Close()
 
 	if rows.Next() {
 		ds, err := dataSourceFromRow(rows)
