@@ -771,10 +771,8 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		return nil, err
 	}
 	if !rows.Next() {
-		if !rows.Next() {
-			log.Printf("FetchOrCreateDataSource(): unable to lookup/create")
-			return nil, fmt.Errorf("unable to lookup/create")
-		}
+		log.Printf("FetchOrCreateDataSource(): unable to lookup/create")
+		return nil, fmt.Errorf("unable to lookup/create")
 	}
 	defer rows.Close()
 
