@@ -147,6 +147,7 @@ func NewClusterBind(baddr string, bport int, aaddr string, aport int, rpcport in
 
 	rpc.Register(&ClusterRPC{c})
 	if c.rpc, err = net.Listen("tcp", fmt.Sprintf("%s:%d", baddr, c.rpcPort)); err != nil {
+		c.Memberlist.Shutdown()
 		return nil, err
 	}
 

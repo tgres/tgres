@@ -221,14 +221,28 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		signal.Notify(ch, syscall.SIGUSR1)
 		s := <-ch
 		log.Printf("start(): Received %v, proceeding to load the data", s)
+	} else {
+		log.Printf("start(): Proceeding with initialization.") // i.e. this is not graceful
 	}
 
 	// Initialize cluster
 	// We had to wait until after graceful, so that the new cluster can bind to sockets
 	var c *cluster.Cluster
-	c, err = initCluster(bindAddr, advAddr, joinIps)
+	const (
+		clusterPause = 5 * time.Second
+		attempts     = 10
+	)
+	for i := 0; i < attempts; i++ {
+		c, err = initCluster(bindAddr, advAddr, joinIps)
+		if err != nil {
+			log.Printf("Error initializing cluster, will try again (up to %v times) in %v: %v", attempts, clusterPause, err)
+			time.Sleep(clusterPause)
+			continue
+		}
+		break
+	}
 	if err != nil {
-		log.Printf("Error initializing cluster, exiting: %v", err)
+		log.Printf("Error initializing cluster, giving up and exiting: %v", err)
 		return
 	}
 	rcvr.SetCluster(c)

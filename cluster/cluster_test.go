@@ -12,7 +12,8 @@ func ExampleCluster_output() {
 
 	c, err := NewCluster()
 	if err != nil {
-		fmt.Printf("Error creating cluster: %v\n", err)
+		fmt.Printf("Error creating cluster (address in use?): %v\n", err)
+		return
 	}
 
 	if err = c.Join([]string{}); err != nil {
