@@ -17,6 +17,8 @@ package daemon
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -243,7 +245,7 @@ func (g *graphitePickleServiceManager) graphitePickleServer() error {
 		}
 		tempDelay = 0
 
-		go handleGraphitePickleProtocol(g.rcvr, conn, 10)
+		go handleGraphitePickleProtocol(g.rcvr, conn, 35)
 	}
 }
 
@@ -267,8 +269,29 @@ func handleGraphitePickleProtocol(rcvr *receiver.Receiver, conn net.Conn, timeou
 		items, itemSlice, dp []interface{}
 	)
 
-	items, err = pickle.ListOrTuple(pickle.Unpickle(conn))
-	if err == nil {
+	for {
+		var (
+			length uint32
+			nRead  int
+		)
+
+		if err = binary.Read(conn, binary.BigEndian, &length); err != nil {
+			break
+		}
+
+		buff := make([]byte, length)
+		if nRead, err = conn.Read(buff); err != nil {
+			break
+		}
+		if nRead != int(length) {
+			err = fmt.Errorf("Icomplete read. length: %v nRead: %v", length, nRead)
+			break
+		}
+
+		if items, err = pickle.ListOrTuple(pickle.Unpickle(bytes.NewBuffer(buff))); err != nil {
+			break
+		}
+
 		for _, item = range items {
 			itemSlice, err = pickle.ListOrTuple(item, err)
 			if len(itemSlice) == 2 {
@@ -292,6 +315,9 @@ func handleGraphitePickleProtocol(rcvr *receiver.Receiver, conn net.Conn, timeou
 				err = fmt.Errorf("item wrong length: %d", len(itemSlice))
 				break
 			}
+		}
+		if err != nil {
+			break
 		}
 	}
 
