@@ -461,7 +461,7 @@ func (g *graphiteTextServiceManager) graphiteTextServer() error {
 		}
 		tempDelay = 0
 
-		go handleGraphiteTextProtocol(g.rcvr, conn, 10)
+		go handleGraphiteTextProtocol(g.rcvr, conn, 35)
 	}
 }
 
