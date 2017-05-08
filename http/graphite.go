@@ -104,7 +104,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 						fmt.Fprintf(w, ",")
 					}
 					value := series.CurrentValue()
-					ts := series.CurrentTime().Add(-series.Step()).Unix() // NOTE: Graphite protocol marks the *beginning* of the point
+					ts := series.CurrentTime().Unix()
 					if ts > 0 {
 						if math.IsNaN(value) || math.IsInf(value, 0) {
 							fmt.Fprintf(w, "[null, %v]", ts)
