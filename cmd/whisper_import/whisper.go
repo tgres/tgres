@@ -70,8 +70,6 @@ func newWhisper(path string) (*whisper, error) {
 	return &whisper{header: header, file: f}, nil
 }
 
-// NEXT MAKE THIS NICE AND CLEAN
-
 func (w *whisper) dumpArchive(n int) ([]point, error) {
 	if n >= len(w.header.archives) {
 		return nil, fmt.Errorf("database contains only %d archives", len(w.header.archives))

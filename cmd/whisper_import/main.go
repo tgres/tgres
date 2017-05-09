@@ -22,8 +22,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/tgres/tgres/daemon"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
@@ -60,20 +62,33 @@ var (
 func main() {
 
 	var (
-		whisperDir, root, dbConnect, namePrefix string
-		batchSize                               int
+		whisperDir, root, dbConnect, namePrefix, specStr string
+		batchSize, staleDays, rraSpecStep                int
+		dsSpec                                           *rrd.DSSpec
 	)
 
-	flag.StringVar(&whisperDir, "whisperDir", "/opt/graphite/storage/whisper/", "location where all whisper files are stored")
+	flag.StringVar(&whisperDir, "whisper-dir", "/opt/graphite/storage/whisper/", "location where all whisper files are stored")
 	flag.StringVar(&root, "root", "", "location of files to be imported, should be subdirectory of whisperDir, defaults to whisperDir")
 	flag.StringVar(&dbConnect, "dbconnect", "host=/var/run/postgresql dbname=tgres sslmode=disable", "db connect string")
 	flag.StringVar(&namePrefix, "prefix", "", "series name prefix")
 	flag.IntVar(&batchSize, "batch", 200, "batch size - should equal to segment width")
+	flag.IntVar(&staleDays, "stale-days", 0, "Max days since last update before we ignore this DS (0 = process all)")
+	flag.StringVar(&specStr, "spec", "", "Spec (config file format, comma-separated) to use for new DSs (Blank = infer from whisper file)")
+	flag.IntVar(&rraSpecStep, "step", 10, "Step to be used with spec parameter (seconds)")
 
 	flag.Parse()
 
 	if root == "" {
 		root = whisperDir
+	}
+
+	if specStr != "" {
+		var err error
+		if dsSpec, err = specFromStr(specStr, rraSpecStep); err != nil {
+			fmt.Printf("Error parsing spec: %v\n", err)
+			return
+		}
+		fmt.Printf("Aaa newly created DSs will follow this spec (step %ds) : %q\n", rraSpecStep, specStr)
 	}
 
 	var db serde.SerDe
@@ -84,6 +99,13 @@ func main() {
 		fmt.Printf("Error connecting to database: %v\n", err)
 		return
 	}
+
+	var wg sync.WaitGroup
+	ch := make(chan verticalCache)
+	wg.Add(1)
+	go vcacheFlusher(ch, db.VerticalFlusher(), &wg)
+	wg.Add(1)
+	go vcacheFlusher(ch, db.VerticalFlusher(), &wg)
 
 	vcache := make(verticalCache)
 
@@ -98,11 +120,15 @@ func main() {
 
 			if count >= batchSize {
 				fmt.Printf("+++ Batch size reached: %v\n", batchSize)
-				vcache.flush(db.VerticalFlusher())
+				ch <- vcache
 				vcache = make(verticalCache)
 				totalCount += count
 				count = 0
 			}
+
+			fmt.Printf("Processing: %v\n", path)
+
+			name := nameFromPath(path, whisperDir, namePrefix)
 
 			wsp, err := newWhisper(path)
 			if err != nil {
@@ -110,15 +136,24 @@ func main() {
 				return nil
 			}
 
-			fmt.Printf("Processing: %v\n", path)
+			if staleDays > 0 {
+				ts := findMostRecentTS(wsp)
+				if time.Now().Sub(ts) > time.Duration(staleDays*24)*time.Hour {
+					fmt.Printf("Most recent update %v older than %v days, ignoring %q.\n", ts, staleDays, name)
+					return nil
+				}
+			}
 
-			name := nameFromPath(path, whisperDir, namePrefix)
+			// We need a spec
+			var spec *rrd.DSSpec
+			if dsSpec != nil {
+				spec = dsSpec
+			} else {
+				spec = specFromHeader(wsp.header)
+			}
 
-			// So at this point we can create/fetch an RRD. First, we will need a database.
-
-			spec := specFromHeader(wsp.header) // We need a spec
-
-			ds, err := db.Fetcher().FetchOrCreateDataSource(serde.Ident{"name": name}, &spec)
+			// NB: If the DS exists, our spec is ignored
+			ds, err := db.Fetcher().FetchOrCreateDataSource(serde.Ident{"name": name}, spec)
 			if err != nil {
 				fmt.Printf("Database error: %v\n", err)
 				return err
@@ -130,7 +165,8 @@ func main() {
 			// permitting us to update points in the past.
 			// We need to save the original latest
 			var latests []time.Time
-			newDs := rrd.NewDataSource(spec)
+
+			newDs := rrd.NewDataSource(ds.Spec()) // NB: We must match the ds spec, not ours
 			rras := ds.RRAs()
 			for i, rra := range newDs.RRAs() {
 				latests = append(latests, rras[i].Latest())
@@ -160,11 +196,26 @@ func main() {
 		},
 	)
 
+	// final flush
 	if len(vcache) > 0 {
-		vcache.flush(db.VerticalFlusher())
+		ch <- vcache
 	}
+	close(ch)
+	wg.Wait() // Wait for flusher to exit.
 
 	fmt.Printf("DONE: GRAND TOTAL %d points across %d series in %d SQL ops.\n", totalPoints, totalCount, totalSqlOps)
+}
+
+func vcacheFlusher(ch chan verticalCache, db serde.VerticalFlusher, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		vcache, ok := <-ch
+		if !ok {
+			fmt.Printf("Flusher channel closed, exiting.\n")
+			return
+		}
+		vcache.flush(db)
+	}
 }
 
 func nameFromPath(path, whisperDir, prefix string) string {
@@ -180,6 +231,25 @@ func nameFromPath(path, whisperDir, prefix string) string {
 		name = prefix + "." + name
 	}
 	return name
+}
+
+func findMostRecentTS(wsp *whisper) time.Time {
+	archs := wsp.header.archives
+
+	latest := uint32(0)
+	for i, _ := range archs {
+		points, _ := wsp.dumpArchive(i)
+
+		if len(points) > 0 {
+			sort.Sort(archive(points))
+
+			last := points[len(points)-1].TimeStamp
+			if latest < last {
+				latest = last
+			}
+		}
+	}
+	return time.Unix(int64(latest), 0)
 }
 
 func processAllPoints(ds rrd.DataSourcer, wsp *whisper) {
@@ -244,7 +314,7 @@ func processArchivePoints(ds rrd.DataSourcer, points archive) {
 	fmt.Printf("Processed %d points\n", n)
 }
 
-func specFromHeader(h *header) rrd.DSSpec {
+func specFromHeader(h *header) *rrd.DSSpec {
 
 	// Archives are stored in order of precision, so first archive
 	// step is the DS step. (TODO: it should be gcd of all
@@ -263,5 +333,33 @@ func specFromHeader(h *header) rrd.DSSpec {
 		})
 	}
 
-	return spec
+	return &spec
+}
+
+func specFromStr(text string, step int) (*rrd.DSSpec, error) {
+
+	var cfgSpecs []*daemon.ConfigRRASpec
+
+	parts := strings.Split(text, ",")
+	for _, part := range parts {
+		cfgSpec := &daemon.ConfigRRASpec{}
+		if err := cfgSpec.UnmarshalText([]byte(part)); err != nil {
+			return nil, err
+		}
+		cfgSpecs = append(cfgSpecs, cfgSpec)
+	}
+
+	spec := &rrd.DSSpec{
+		Step: time.Duration(step) * time.Second,
+		RRAs: make([]rrd.RRASpec, len(cfgSpecs)),
+	}
+	for i, r := range cfgSpecs {
+		spec.RRAs[i] = rrd.RRASpec{
+			Function: r.Function,
+			Step:     r.Step,
+			Span:     r.Span,
+			Xff:      float32(r.Xff),
+		}
+	}
+	return spec, nil
 }

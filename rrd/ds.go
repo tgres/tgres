@@ -44,6 +44,7 @@ type DataSourcer interface {
 	PointCount() int
 	ClearRRAs()
 	ProcessDataPoint(value float64, ts time.Time) error
+	Spec() DSSpec
 }
 
 // NewDataSource returns a new DataSource in accordance with the passed
@@ -315,6 +316,19 @@ func (ds *DataSource) checkLastUpdate() {
 			ds.lastUpdate = rraLatest
 		}
 	}
+}
+
+// Return a DSSpec corresponding to this DS
+func (ds *DataSource) Spec() DSSpec {
+	spec := DSSpec{
+		Step:      ds.step,
+		Heartbeat: ds.heartbeat,
+		RRAs:      make([]RRASpec, len(ds.rras)),
+	}
+	for i, rra := range ds.rras {
+		spec.RRAs[i] = rra.Spec()
+	}
+	return spec
 }
 
 // DSSpec describes a DataSource. DSSpec is a schema that is used to

@@ -86,6 +86,7 @@ type RoundRobinArchiver interface {
 	DPs() map[int64]float64
 	Copy() RoundRobinArchiver
 	Begins(now time.Time) time.Time
+	Spec() RRASpec
 
 	// A side benefit from these being unexported is that you can only
 	// satisfy this interface by including this implementation
@@ -168,6 +169,16 @@ func (rra *RoundRobinArchive) Begins(now time.Time) time.Time {
 // PointCount returns the number of points in this RRA.
 func (rra *RoundRobinArchive) PointCount() int {
 	return len(rra.dps)
+}
+
+// Spec matching this RRA
+func (rra *RoundRobinArchive) Spec() RRASpec {
+	return RRASpec{
+		Function: rra.cf,
+		Step:     rra.step,
+		Span:     time.Duration(rra.size) * rra.step,
+		Xff:      rra.xff,
+	}
 }
 
 // Includes tells whether the given time is within the RRA

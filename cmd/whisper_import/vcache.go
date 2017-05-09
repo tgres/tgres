@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tgres/tgres/rrd"
@@ -67,33 +68,60 @@ func (vc verticalCache) update(rra serde.DbRoundRobinArchiver, origLatest time.T
 	}
 }
 
-func (vc verticalCache) flush(db serde.VerticalFlusher) error {
-	fmt.Printf("Starting vcache flush (%d segments)...\n", len(vc))
-	pointCount, sqlOps := 0, 0
-	for k, segment := range vc {
-		fmt.Printf("  flushing %d rows for segment %v:%v...\n", len(segment.rows), k.bundleId, k.seg)
-		for i, row := range segment.rows {
-			so, err := db.VerticalFlushDPs(k.bundleId, k.seg, i, row)
-			if err != nil {
-				return err
-			}
-			sqlOps += so
-			pointCount += len(row)
-		}
+type stats struct {
+	m                  *sync.Mutex
+	pointCount, sqlOps int
+}
 
-		if len(segment.latests) > 0 {
-			fmt.Printf("  flushing latests for segment %v:%v...\n", k.bundleId, k.seg)
-			so, err := db.VerticalFlushLatests(k.bundleId, k.seg, segment.latests)
-			if err != nil {
-				return err
-			}
-			sqlOps += so
-		} else {
-			fmt.Printf("  no latests to flush for segment %v:%v...\n", k.bundleId, k.seg)
-		}
+func (vc verticalCache) flush(db serde.VerticalFlusher) error {
+	var wg sync.WaitGroup
+	fmt.Printf("[db] Starting vcache flush (%d segments)...\n", len(vc))
+
+	st := stats{m: &sync.Mutex{}}
+
+	for k, segment := range vc {
+
+		wg.Add(1)
+		go flushSegment(db, &wg, &st, k, segment)
+
 	}
-	fmt.Printf("Vcache flush complete, %d points in %d SQL ops.\n", pointCount, sqlOps)
-	totalPoints += pointCount
-	totalSqlOps += sqlOps
+	wg.Wait()
+
+	fmt.Printf("[db] Vcache flush complete, %d points in %d SQL ops.\n", st.pointCount, st.sqlOps)
+	totalPoints += st.pointCount
+	totalSqlOps += st.sqlOps
 	return nil
+}
+
+func flushSegment(db serde.VerticalFlusher, wg *sync.WaitGroup, st *stats, k bundleKey, segment *verticalCacheSegment) {
+	defer wg.Done()
+
+	fmt.Printf("[db]  flushing %d rows for segment %v:%v...\n", len(segment.rows), k.bundleId, k.seg)
+
+	for i, row := range segment.rows {
+		so, err := db.VerticalFlushDPs(k.bundleId, k.seg, i, row)
+		if err != nil {
+			fmt.Printf("[db] Error flushing segment %v:%v: %v\n", k.bundleId, k.seg, err)
+			return
+		}
+		st.m.Lock()
+		st.sqlOps += so
+		st.pointCount += len(row)
+		st.m.Unlock()
+	}
+
+	if len(segment.latests) > 0 {
+		fmt.Printf("[db]  flushing latests for segment %v:%v...\n", k.bundleId, k.seg)
+		so, err := db.VerticalFlushLatests(k.bundleId, k.seg, segment.latests)
+		if err != nil {
+			fmt.Printf("[db] Error flushing segment %v:%v: %v\n", k.bundleId, k.seg, err)
+			return
+		}
+		st.m.Lock()
+		st.sqlOps += so
+		st.m.Unlock()
+	} else {
+		fmt.Printf("[db]  no latests to flush for segment %v:%v...\n", k.bundleId, k.seg)
+	}
+
 }
