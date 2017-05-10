@@ -169,7 +169,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 
 	toFlush := make(map[int64]serde.DbDataSourcer)
 
-	limiter := rate.NewLimiter(rate.Limit(10), 10) // TODO: Why 10?
+	limiter := rate.NewLimiter(rate.Limit(50), 50) // TODO: Why 50?
 
 	for {
 

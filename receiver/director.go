@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +69,9 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 
 	cnt, err := cds.processIncoming()
 	if err != nil {
-		log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
+		if !strings.Contains(err.Error(), "not greater than data source") {
+			log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
+		}
 	}
 
 	cds.mu.Lock()
