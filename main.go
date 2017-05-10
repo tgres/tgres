@@ -38,7 +38,7 @@ func parseFlags() (textCfgPath, gracefulProtos, join string, bg bool, version bo
 	// Parse the flags, if any
 	flag.StringVar(&textCfgPath, "c", "./etc/tgres.conf", "path to config file")
 	flag.StringVar(&join, "join", "", "List of add:port,addr:port,... of nodes to join")
-	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (internal use only)")
+	flag.StringVar(&gracefulProtos, "graceful", "", "list of fds (DEPRECATED)") // TODO Remove me
 	flag.BoolVar(&bg, "bg", false, "Immediately background itself")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.Parse()
@@ -59,7 +59,10 @@ func printVersion() {
 
 func main() {
 
-	textCfgPath, gracefulProtos, join, bg, version := parseFlags()
+	textCfgPath, gracefulProtos, join, bg, version := parseFlags() // TODO remove gracefulProtos from this line
+	if gp := os.Getenv("TGRES_PROTOS"); gp != "" {
+		gracefulProtos = gp
+	}
 
 	if version {
 		printVersion()

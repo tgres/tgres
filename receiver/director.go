@@ -25,7 +25,7 @@ import (
 	"github.com/tgres/tgres/cluster"
 )
 
-var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) {
+var directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan<- interface{}) {
 	defer func() { recover() }() // if we're writing to a closed channel below
 
 	for {
@@ -72,6 +72,19 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 	}
 
 	cds.mu.Lock()
+	if cds.PointCount() > 100 {
+		// This can happen if there was a gap in sending data. There is
+		// a great chance that there are many more series in a similar
+		// situation. When this is the case, we should apply a higher
+		// delay so that they can end up in vcache together.
+		if cds.lastFlush.IsZero() {
+			cds.lastFlush = time.Now() // We're done for now
+		} else if cds.lastFlush.After(time.Now().Add(-3 * cds.Step())) {
+			cds.mu.Unlock()
+			return 0
+		}
+	}
+
 	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
@@ -158,7 +171,7 @@ func reportOverrunQueueSize(queue *fifoQueue, sr statReporter, nap time.Duration
 	}
 }
 
-var loader = func(loaderCh, dpCh chan interface{}, dsc *dsCache, sr statReporter) {
+var loader = func(loaderCh chan interface{}, dpCh chan<- interface{}, dsc *dsCache, sr statReporter) {
 
 	// NOTE: Loader does not use an elastic channel to provide "back
 	// pressure" when there are too many db operations. When this
@@ -208,34 +221,32 @@ type dpStats struct {
 	last                               time.Time
 }
 
-var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, maxQLen int) {
+var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int) {
 	wc.onEnter()
 	defer wc.onExit()
 
 	var (
 		clusterChgCh chan bool
 		snd, rcv     chan *cluster.Msg
-		queue        = &fifoQueue{}
 	)
 
 	if clstr != nil {
 		clusterChgCh = clstr.NotifyClusterChanges() // Monitor Cluster changes
 		snd, rcv = clstr.RegisterMsgType()          // Channel for event forwards to other nodes and us
-		go directorIncomingDPMessages(rcv, dpCh)
+		go directorIncomingDPMessages(rcv, dpChIn)
 		log.Printf("director: marking cluster node as Ready.")
 		clstr.Ready(true)
 	}
 
-	go reportOverrunQueueSize(queue, sr, time.Second)
-
-	dpOutCh := make(chan interface{}, 128)
-	go elasticCh(dpCh, dpOutCh, queue)
+	if queue != nil {
+		go reportOverrunQueueSize(queue, sr, time.Second)
+	}
 
 	// Experimentation shows that the length of loader channel doesn't
 	// matter much - making it 64K doesn't provide better performance
 	// than 4K.
 	loaderCh := make(chan interface{}, 4096)
-	go loader(loaderCh, dpCh, dsc, sr)
+	go loader(loaderCh, dpChIn, dsc, sr)
 
 	var workerWg sync.WaitGroup
 	workerCh := make(chan *cachedDs, 128)
@@ -260,12 +271,12 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 		case _, ok = <-clusterChgCh:
 			if ok {
 				// See distDs.Relinquish() for some documentation
-				if err := clstr.Transition(45 * time.Second); err != nil {
+				if err := clstr.Transition(15 * time.Second); err != nil {
 					log.Printf("director: Transition error: %v", err)
 				}
 			}
 			continue
-		case x, ok = <-dpOutCh:
+		case x, ok = <-dpChOut:
 			switch x := x.(type) {
 			case *incomingDP:
 				dp = x
@@ -284,7 +295,7 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 		}
 
 		if dp != nil {
-			if maxQLen > 0 && queue.size() > maxQLen {
+			if queue != nil && maxQLen > 0 && queue.size() > maxQLen {
 				stats.dropped++
 				continue // /dev/null
 			}
@@ -304,10 +315,10 @@ var director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr c
 				w, l := len(workerCh), len(loaderCh)
 				if w == 0 && l == 0 {
 					break
-					log.Printf("  -  worker: %d loader: %d", w, l)
-					time.Sleep(100 * time.Millisecond)
-					w, l = len(workerCh), len(loaderCh)
 				}
+				log.Printf("  -  worker: %d loader: %d", w, l)
+				time.Sleep(100 * time.Millisecond)
+				w, l = len(workerCh), len(loaderCh)
 			}
 			log.Printf("director: loader and worker channels empty.")
 

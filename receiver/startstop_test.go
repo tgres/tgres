@@ -54,18 +54,20 @@ func Test_startstop_doStart(t *testing.T) {
 	fl := &dsFlusher{db: db, sr: sr}
 	dsc := newDsCache(db, df, fl)
 
-	r := &Receiver{dpCh: make(chan interface{}), dsc: dsc}
+	ch := make(chan interface{})
+	r := &Receiver{dpChIn: ch, dpChOut: ch, dsc: dsc}
 
 	saveDisp := director
 	saveSaw := startAllWorkers
 	called := 0
 	stopped := false
-	director = func(wc wController, dpCh chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, maxQLen int) {
+	director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache,
+		dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int) {
 		wc.onEnter()
 		defer wc.onExit()
 		called++
 		wc.onStarted()
-		if dp := <-dpCh; dp == nil {
+		if dp := <-dpChOut; dp == nil {
 			stopped = true
 		}
 	}

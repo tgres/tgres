@@ -64,7 +64,7 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, minStep time.Durat
 	log.Printf(" -- ds flusher...")
 	startWg.Add(1)
 	f.flusherCh = make(chan *dsFlushRequest, 1024) // TODO why 1024?
-	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "flusher"}, f, f.flusherCh, f.sr)
+	go dsUpdater(&wrkCtl{wg: flusherWg, startWg: startWg, id: "ds_updater"}, f, f.flusherCh, f.sr)
 
 	if tdb, ok := f.db.(tsTableSizer); ok {
 		log.Printf(" -- ts table size reporter")
@@ -96,6 +96,14 @@ func (f *dsFlusher) verticalFlush(ds serde.DbDataSourcer) {
 
 func (f *dsFlusher) flushDS(ds serde.DbDataSourcer, block bool) {
 	f.flusherCh.queueBlocking(ds, block)
+
+	// Mark dirty false, so that in the final DS flush we can skip it.
+	// TODO: There is a possibility that the DS will not actually be
+	// flushed until some time (much) later, so marking it non-dirty here
+	// is not entirely correct. (Unless this is a blocking flush).
+	if cds, ok := ds.(*cachedDs); ok {
+		cds.dirty = false
+	}
 }
 
 func (f *dsFlusher) flushToVCache(ds serde.DbDataSourcer) {
@@ -159,7 +167,7 @@ var dsUpdater = func(wc wController, dsf dsFlusherBlocking, ch chan *dsFlushRequ
 	log.Printf("  - %s started.", wc.ident())
 	wc.onStarted()
 
-	toFlush := make(map[int64]*serde.DbDataSource)
+	toFlush := make(map[int64]serde.DbDataSourcer)
 
 	limiter := rate.NewLimiter(rate.Limit(10), 10) // TODO: Why 10?
 

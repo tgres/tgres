@@ -17,11 +17,16 @@ package daemon
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"os"
+	"sync/atomic"
 	"time"
 
+	"github.com/tgres/tgres/blaster"
 	"github.com/tgres/tgres/dsl"
+	"github.com/tgres/tgres/graceful"
 	h "github.com/tgres/tgres/http"
 	"github.com/tgres/tgres/receiver"
 )
@@ -51,4 +56,66 @@ func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 16}
 	server.Serve(l)
+}
+
+type wwwServer struct {
+	rcvr       *receiver.Receiver
+	rcache     dsl.NamedDSFetcher
+	blstr      *blaster.Blaster
+	listener   *graceful.Listener
+	listenSpec string
+	stop       int32
+}
+
+func (g *wwwServer) File() *os.File {
+	if g.listener != nil {
+		return g.listener.File()
+	}
+	return nil
+}
+
+func (g *wwwServer) Stop() {
+	if g.stopped() {
+		return
+	}
+	if g.listener != nil {
+		log.Printf("Closing listener %s\n", g.listenSpec)
+		g.listener.Close()
+	}
+	atomic.StoreInt32(&(g.stop), 1)
+}
+
+func (g *wwwServer) stopped() bool {
+	return atomic.LoadInt32(&(g.stop)) != 0
+}
+
+func (g *wwwServer) Start(file *os.File) error {
+	var (
+		gl  net.Listener
+		err error
+	)
+
+	if g.listenSpec != "" {
+		if file != nil {
+			gl, err = net.FileListener(file)
+		} else {
+			gl, err = net.Listen("tcp", processListenSpec(g.listenSpec))
+		}
+	} else {
+		log.Printf("Not starting HTTP server because http-listen-spec is blank.")
+		return nil
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting HTTP protocol: %v\n", err)
+		return fmt.Errorf("Error starting HTTP protocol: %v", err)
+	}
+
+	g.listener = graceful.NewListener(gl)
+
+	log.Printf("HTTP protocol Listening on %s\n", processListenSpec(g.listenSpec))
+
+	go httpServer(g.listenSpec, g.listener, g.rcvr, g.rcache)
+
+	return nil
 }

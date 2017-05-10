@@ -350,7 +350,7 @@ func Test_the_director(t *testing.T) {
 	saveFn1 := directorIncomingDPMessages
 	saveFn2 := directorProcessIncomingDP
 	dimCalled := 0
-	directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan interface{}) { dimCalled++ }
+	directorIncomingDPMessages = func(rcv chan *cluster.Msg, dpCh chan<- interface{}) { dimCalled++ }
 	dpidpCalled := 0
 	directorProcessIncomingDP = func(dp *incomingDP, dsc *dsCache, loaderCh chan interface{}, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
 		dpidpCalled++
@@ -375,7 +375,7 @@ func Test_the_director(t *testing.T) {
 	dsc := newDsCache(db, df, dsf)
 
 	wc.startWg.Add(1)
-	go director(wc, dpCh, 1, clstr, sr, dsc, nil, 0)
+	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0)
 	wc.startWg.Wait()
 
 	if clstr.nReady == 0 {
@@ -438,7 +438,7 @@ func Test_the_director(t *testing.T) {
 	dpCh <- dp
 
 	wc.startWg.Add(1)
-	go director(wc, dpCh, 1, clstr, sr, dsc, nil, 0)
+	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0)
 	wc.startWg.Wait()
 
 	time.Sleep(100 * time.Millisecond)

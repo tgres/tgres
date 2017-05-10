@@ -231,6 +231,7 @@ var preprocessArgFuncs = funcMap{
 	// -- reduceSeries // relies on mapSeries
 	// ++ sumSeries
 	// ++ sumSeriesWithWildcards
+	// ++ averageSeriesWithWildcards
 
 	// TRANSFORM
 	// ++ absolute()

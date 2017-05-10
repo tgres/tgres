@@ -108,7 +108,7 @@ var initCluster = func(bindAddr, advAddr string, joinIps []string) (c *cluster.C
 }
 
 var createReceiver = func(cfg *Config, c *cluster.Cluster, db serde.SerDe) *receiver.Receiver {
-	r := receiver.New(db, receiver.MatchingDSSpecFinder(cfg))
+	r := receiver.NewWithMaxQueue(db, receiver.MatchingDSSpecFinder(cfg), cfg.MaxReceiverQueueSize)
 	r.MinStep = cfg.MinStep.Duration
 	r.StatFlushDuration = cfg.StatFlush.Duration
 	r.StatsNamePrefix = cfg.StatsNamePrefix
@@ -213,6 +213,7 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		// flushed correctly, at which point it is OK for us to
 		// start the receiver.
 
+		log.Printf("start(): All listeners are listening.")
 		parent := syscall.Getppid()
 		log.Printf("start(): Killing parent pid: %v", parent)
 		syscall.Kill(parent, syscall.SIGTERM)
@@ -315,25 +316,23 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPat
 	files, protos := serviceMgr.listenerFilesAndProtocols()
 	log.Printf("gracefulRestart(): Beginning graceful restart with sockets: %v and protos: %q", files, protos)
 
-	rcvr.ClusterReady(false) // triggers a transition
-	// Allow enough time for a transition to start
-	time.Sleep(500 * time.Millisecond) // TODO This is a hack
-
 	mypath, _ := filepath.Abs(os.Args[0]) // TODO we should really be the starting working directory
 	args := []string{
-		"-c", cfgPath,
-		"-graceful", protos}
+		"-c", cfgPath}
 
 	if join != "" {
 		args = append(args, "-join", join)
 	}
 
+	os.Unsetenv("TGRES_PROTOS")
+	env := append(os.Environ(), fmt.Sprintf("TGRES_PROTOS=%s", protos))
+
 	cmd := exec.Command(mypath, args...)
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = files
 
-	// The new process will kill -TERM us when it's ready
 	err := cmd.Start()
 	if err != nil {
 		log.Printf("gracefulRestart(): Failed to launch, error: %v", err)
@@ -341,20 +340,26 @@ func gracefulRestart(rcvr *receiver.Receiver, serviceMgr *serviceManager, cfgPat
 		gracefulChildPid = cmd.Process.Pid
 		log.Printf("gracefulRestart(): Forked child, waiting to be killed...")
 	}
+
+	// The new process will kill -TERM us when it's ready to accept
+	// connections which will trigger gracefulExit().  If it does not
+	// (because it failed), it's business as ususal we just carry on.
 }
 
 func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 
 	log.Printf("Gracefully exiting...")
 
-	if gracefulChildPid == 0 {
-		rcvr.ClusterReady(false) // triggers a transition
-		// Allow enough time for a transition to start
-		time.Sleep(500 * time.Millisecond) // TODO This is a hack
-	}
+	log.Printf("Closing TCP Listeners...")
+	serviceMgr.closeListeners(false)
+	log.Printf("TCP listeners closed.")
+
+	rcvr.ClusterReady(false) // triggers a transition
+	// Allow enough time for a transition to start
+	time.Sleep(500 * time.Millisecond) // TODO This is a hack
 
 	log.Printf("Waiting for all TCP connections to finish...")
-	serviceMgr.closeListeners()
+	serviceMgr.closeListeners(true)
 	log.Printf("TCP connections finished.")
 
 	// Stop the receiver

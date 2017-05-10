@@ -41,7 +41,7 @@ func (q *fifoQueue) size() int {
 // TL;DR This clever structure provides never-blocking channel-like
 // behavior.  inLoop and outLoop are optimizations to read or send as
 // much as we can at a time for performance.
-func elasticCh(cin <-chan interface{}, cout chan<- interface{}, queue *fifoQueue) {
+func elasticCh(cin <-chan interface{}, cout chan<- interface{}, queue *fifoQueue, maxQueue int) {
 
 	const maxReceive = 1024
 	var (
@@ -69,7 +69,9 @@ func elasticCh(cin <-chan interface{}, cout chan<- interface{}, queue *fifoQueue
 					vo = vi
 					out = cout
 				} else {
-					queue.push(vi)
+					if maxQueue > 0 && queue.size() < maxQueue {
+						queue.push(vi)
+					} // else /dev/null
 				}
 				select {
 				case vi, ok = <-in:

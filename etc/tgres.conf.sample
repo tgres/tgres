@@ -17,7 +17,7 @@ http-listen-spec            = "0.0.0.0:8888"
 graphite-line-listen-spec   = "0.0.0.0:2003"
 graphite-text-listen-spec   = "0.0.0.0:2003"
 graphite-udp-listen-spec    = "0.0.0.0:2003"
-graphite-pickle-listen-spec = "0.0.0.0:2004"
+#graphite-pickle-listen-spec = "0.0.0.0:2004" # TODO to be deprecated
 
 statsd-text-listen-spec     = "0.0.0.0:8125"
 statsd-udp-listen-spec      = "0.0.0.0:8125"

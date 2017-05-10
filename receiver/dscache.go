@@ -159,6 +159,7 @@ type cachedDs struct {
 	lastProcess  time.Time
 	lastFlush    time.Time
 	lastDSFlush  time.Time
+	dirty        bool // for flushDS
 	mu           *sync.Mutex
 }
 
@@ -197,6 +198,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	}
 
 	cds.lastProcess = time.Now()
+	cds.dirty = true
 
 	if count < BIG {
 		// leave the backing array in place to avoid extra memory allocations
@@ -247,7 +249,14 @@ func (ds *distDs) Relinquish() error {
 
 	if !ds.LastUpdate().IsZero() {
 		ds.dsc.dsf.flushToVCache(ds.DbDataSourcer)
-		ds.dsc.dsf.flushDS(ds.DbDataSourcer, true)
+
+		// TODO This is a hack. The best solution to speed up DS
+		// flushes is to delegate LastUpdate (as well as
+		// value/duration) to a separate array-based table, just like
+		// we do with rra_latest.
+		if cds := ds.dsc.getByIdent(newCachedIdent(ds.Ident())); cds != nil && cds.dirty {
+			ds.dsc.dsf.flushDS(ds.DbDataSourcer, true)
+		}
 	}
 	ds.dsc.delete(ds.Ident())
 

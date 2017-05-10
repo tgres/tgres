@@ -669,6 +669,7 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 		if e := recover(); e != nil {
 			log.Printf("WARNING: Transition panic!")
 		}
+		log.Printf("Transition(): Complete!")
 	}()
 	var wg sync.WaitGroup
 
@@ -683,11 +684,14 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 
 	var waitDdsLock sync.RWMutex
 	waitDds := make(map[string]DistDatum)
+	relCnt := 0
 
 	for _, dde := range c.dds {
 		wg.Add(1)
 		go func(dde *ddEntry) {
 			defer wg.Done()
+
+			//log.Printf("Transition(): processing %s", dde.dd.GetName())
 
 			// The idea is that the first node in the list is the
 			// "lead" responsible for saving the data. What happens
@@ -718,6 +722,14 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 						log.Printf("Transition(): Sending relinquish of id %s:%d to node %s", dde.dd.Type(), dde.dd.Id(), newNode.Name())
 						c.snd <- m
 					}
+
+					waitDdsLock.Lock()
+					relCnt++
+					if relCnt%1000 == 0 {
+						log.Printf("Transition(): %d of %d relinquish processed.", relCnt, len(c.dds))
+					}
+					waitDdsLock.Unlock()
+
 				} else if oldNode != nil && newNode != nil && ln.Name() == newNode.Name() { // we are the new node
 					if debug {
 						log.Printf("Transition(): Id %s:%d (%s) is moving to this node from node %s", dde.dd.Type(), dde.dd.Id(), dde.dd.GetName(), oldNode.Name())
@@ -790,6 +802,5 @@ func (c *Cluster) Transition(timeout time.Duration) error {
 	}()
 
 	wg.Wait()
-	log.Printf("Transition(): Complete!")
 	return nil
 }

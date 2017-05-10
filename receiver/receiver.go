@@ -87,8 +87,12 @@ type Receiver struct {
 	serde   serde.SerDe // the database, required
 	dsc     *dsCache    // the DS cache
 
-	flusher       dsFlusherBlocking        // orchestration of flush queues
-	dpCh          chan interface{}         // incoming data points
+	flusher dsFlusherBlocking // orchestration of flush queues
+
+	dpChIn  chan<- interface{} // incoming data points input
+	dpChOut <-chan interface{} // incoming data points output
+	queue   *fifoQueue         // incoming data points elastic queue
+
 	aggCh         chan *aggregator.Command // aggregator commands (for statsd type stuff)
 	pacedMetricCh chan *pacedMetric        // paced metrics (only flushed periodically)
 
@@ -106,15 +110,33 @@ type Receiver struct {
 // DSSpec with which the DS is to be created. If you pass nil, then
 // the default SimpleDSFinder is used which always returns DftDSSPec.
 func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
+	return NewWithMaxQueue(serde, finder, 0)
+}
+
+func NewWithMaxQueue(serde serde.SerDe, finder MatchingDSSpecFinder, maxQueue int) *Receiver {
 	if finder == nil {
 		finder = &SimpleDSFinder{DftDSSPec}
 	}
+
+	// The elastic channel must exist before the receiver is started,
+	// so that incoming data points could be sent in even when we
+	// don't know how to process them yet. This happens during a
+	// graceful restart.  TODO: Until the receiver is started
+	// (i.e. director() is running), the size of the queue is not
+	// controlled.
+	var queue = &fifoQueue{}
+	dpChIn := make(chan interface{}, 256)
+	dpChOut := make(chan interface{}, 128)
+	go elasticCh(dpChIn, dpChOut, queue, maxQueue+256)
+
 	r := &Receiver{
 		serde:             serde,
 		MinStep:           10 * time.Second,
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
-		dpCh:              make(chan interface{}, 256),
+		dpChIn:            dpChIn,
+		dpChOut:           dpChOut,
+		queue:             queue,
 		aggCh:             make(chan *aggregator.Command, 256),
 		pacedMetricCh:     make(chan *pacedMetric, 256),
 		ReportStats:       false,
@@ -125,6 +147,7 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	r.flusher = &dsFlusher{db: serde.Flusher(), vdb: serde.VerticalFlusher(), sr: r}
 	r.dsc = newDsCache(serde.Fetcher(), finder, r.flusher)
 	return r
+
 }
 
 // Before using the receiver it must be Started. This starts all the
@@ -170,7 +193,7 @@ func (r *Receiver) SetCluster(c clusterer) {
 // paced metrics (QueueSum/QueueGauge) for non-rate data.
 func (r *Receiver) QueueDataPoint(ident serde.Ident, ts time.Time, v float64) {
 	if !r.stopped {
-		r.dpCh <- &incomingDP{cachedIdent: newCachedIdent(ident), timeStamp: ts, value: v}
+		r.dpChIn <- &incomingDP{cachedIdent: newCachedIdent(ident), timeStamp: ts, value: v}
 	}
 }
 

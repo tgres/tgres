@@ -97,10 +97,11 @@ func Test_Receiver_SetCluster(t *testing.T) {
 }
 
 func Test_Receiver_QueueDataPoint(t *testing.T) {
-	r := &Receiver{dpCh: make(chan interface{})}
+	ch := make(chan interface{})
+	r := &Receiver{dpChIn: ch, dpChOut: ch}
 	called := 0
 	go func() {
-		<-r.dpCh
+		<-r.dpChOut
 		called++
 	}()
 	r.QueueDataPoint(serde.Ident{}, time.Time{}, 0)

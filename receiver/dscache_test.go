@@ -217,6 +217,16 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 	if err != nil {
 		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
 	}
+	if dsf.called != 0 {
+		t.Errorf("if lastupdate is not zero but there is no rds in cache, ds should not be flushed")
+	}
+
+	cds := &cachedDs{DbDataSourcer: ds, dirty: true}
+	dsc.insert(cds)
+	err = rds.Relinquish()
+	if err != nil {
+		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
+	}
 	if dsf.called != 1 {
 		t.Errorf("if lastupdate is not zero, ds should be flushed")
 	}

@@ -65,7 +65,7 @@ var doStart = func(r *Receiver) {
 	log.Printf("Receiver: All workers running, starting director.")
 
 	startWg.Add(1)
-	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpCh, r.NWorkers, r.cluster, r, r.dsc, r.flusher, r.MaxReceiverQueueSize)
+	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpChIn, r.dpChOut, r.NWorkers, r.cluster, r, r.dsc, r.flusher, r.queue, r.MaxReceiverQueueSize)
 	startWg.Wait()
 
 	log.Printf("Receiver: Starting runtime cpu/mem reporter.")
@@ -76,7 +76,7 @@ var doStart = func(r *Receiver) {
 
 var stopDirector = func(r *Receiver) {
 	log.Printf("Closing director channel...")
-	r.dpCh <- nil // signal to close
+	r.dpChIn <- nil // signal to close
 	r.directorWg.Wait()
 	log.Printf("Director finished.")
 }

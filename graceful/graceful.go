@@ -36,32 +36,24 @@ func (w gracefulConn) Close() error {
 	if err == nil {
 		TcpWg.Done()
 	}
-
 	return err
 }
 
 type Listener struct {
 	net.Listener
-	stop    chan error
 	stopped bool
 }
 
-func NewListener(l net.Listener) (gl *Listener) {
-	gl = &Listener{Listener: l, stop: make(chan error)}
-	go func() {
-		_ = <-gl.stop
-		gl.stopped = true
-		gl.stop <- gl.Listener.Close()
-	}()
-	return
+func NewListener(l net.Listener) *Listener {
+	return &Listener{Listener: l}
 }
 
 func (gl *Listener) Close() error {
 	if gl.stopped {
 		return syscall.EINVAL
 	}
-	gl.stop <- nil
-	return <-gl.stop
+	gl.stopped = true
+	return gl.Listener.Close()
 }
 
 func (gl *Listener) Accept() (c net.Conn, err error) {
