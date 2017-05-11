@@ -656,7 +656,7 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 		// Use multi-statement update // TODO make me a funciton!
 		//
 		for _, args := range multiStmtUpdateArgs(chunks, []interface{}{bundle_id, seg, i}) {
-
+			// NB: This loop executes at most once.
 			tx, err := p.dbConn.Begin()
 			if err != nil {
 				return 0, err

@@ -79,13 +79,23 @@ func (vc verticalCache) flush(db serde.VerticalFlusher) error {
 
 	st := stats{m: &sync.Mutex{}}
 
+	n, MAX := 0, 64
 	for k, segment := range vc {
 
 		wg.Add(1)
 		go flushSegment(db, &wg, &st, k, segment)
+		delete(vc, k)
+		n++
+
+		if n >= MAX {
+			fmt.Printf("[db] ... ... waiting on %d of %d segment flushes ...\n", n, len(vc))
+			wg.Wait()
+			n = 0
+		}
 
 	}
-	wg.Wait()
+	fmt.Printf("[db] ... ... waiting on %d segment flushes (final) ...\n", n)
+	wg.Wait() // final wait
 
 	fmt.Printf("[db] Vcache flush complete, %d points in %d SQL ops.\n", st.pointCount, st.sqlOps)
 	totalPoints += st.pointCount

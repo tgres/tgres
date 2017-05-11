@@ -62,9 +62,10 @@ var (
 func main() {
 
 	var (
-		whisperDir, root, dbConnect, namePrefix, specStr string
-		batchSize, staleDays, rraSpecStep                int
-		dsSpec                                           *rrd.DSSpec
+		whisperDir, root, dbConnect       string
+		namePrefix, specStr, skipTo       string
+		batchSize, staleDays, rraSpecStep int
+		dsSpec                            *rrd.DSSpec
 	)
 
 	flag.StringVar(&whisperDir, "whisper-dir", "/opt/graphite/storage/whisper/", "location where all whisper files are stored")
@@ -75,6 +76,7 @@ func main() {
 	flag.IntVar(&staleDays, "stale-days", 0, "Max days since last update before we ignore this DS (0 = process all)")
 	flag.StringVar(&specStr, "spec", "", "Spec (config file format, comma-separated) to use for new DSs (Blank = infer from whisper file)")
 	flag.IntVar(&rraSpecStep, "step", 10, "Step to be used with spec parameter (seconds)")
+	flag.StringVar(&skipTo, "skip-to", "", "Skip to this series. (Assumes they're always in the same order, which depends on your filesystem).")
 
 	flag.Parse()
 
@@ -111,6 +113,11 @@ func main() {
 
 	count := 0
 
+	var skipping bool
+	if skipTo != "" {
+		skipping = true
+	}
+
 	filepath.Walk(
 		root,
 		func(path string, info os.FileInfo, err error) error {
@@ -126,9 +133,16 @@ func main() {
 				count = 0
 			}
 
-			fmt.Printf("Processing: %v\n", path)
-
 			name := nameFromPath(path, whisperDir, namePrefix)
+			if skipping {
+				if name == skipTo {
+					skipping = false
+				}
+				fmt.Printf("Skipping: %v\n", name)
+				return nil
+			}
+
+			fmt.Printf("Processing: %v\n", path)
 
 			wsp, err := newWhisper(path)
 			if err != nil {
