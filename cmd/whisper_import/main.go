@@ -180,7 +180,13 @@ func main() {
 			// We need to save the original latest
 			var latests []time.Time
 
-			newDs := rrd.NewDataSource(ds.Spec()) // NB: We must match the ds spec, not ours
+			// NB: We must match the ds spec, not ours, but we don't want XFF
+			dssp := ds.Spec()
+			for i, _ := range dssp.RRAs {
+				dssp.RRAs[i].Xff = 0
+			}
+
+			newDs := rrd.NewDataSource(dssp)
 			rras := ds.RRAs()
 			for i, rra := range newDs.RRAs() {
 				latests = append(latests, rras[i].Latest())
@@ -316,16 +322,22 @@ func processAllPoints(ds rrd.DataSourcer, wsp *whisper) {
 func processArchivePoints(ds rrd.DataSourcer, points archive) {
 	n := 0
 	sort.Sort(points)
+	var begin, end time.Time
 	for _, p := range points {
 		if p.TimeStamp != 0 {
 			ts := time.Unix(int64(p.TimeStamp), 0)
 			if ts.After(ds.LastUpdate()) {
 				ds.ProcessDataPoint(p.Value, ts)
 				n++
+
+				if begin.IsZero() {
+					begin = ts
+				}
+				end = ts
 			}
 		}
 	}
-	fmt.Printf("Processed %d points\n", n)
+	fmt.Printf("Processed %d points between %v and %v\n", n, begin, end)
 }
 
 func specFromHeader(h *header) *rrd.DSSpec {
