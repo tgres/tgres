@@ -65,6 +65,7 @@ func main() {
 		whisperDir, root, dbConnect       string
 		namePrefix, specStr, skipTo       string
 		batchSize, staleDays, rraSpecStep int
+		createOnly                        bool
 		dsSpec                            *rrd.DSSpec
 	)
 
@@ -77,6 +78,7 @@ func main() {
 	flag.StringVar(&specStr, "spec", "", "Spec (config file format, comma-separated) to use for new DSs (Blank = infer from whisper file)")
 	flag.IntVar(&rraSpecStep, "step", 10, "Step to be used with spec parameter (seconds)")
 	flag.StringVar(&skipTo, "skip-to", "", "Skip to this series. (Assumes they're always in the same order, which depends on your filesystem).")
+	flag.BoolVar(&createOnly, "create-only", false, "Do not save data, just create the DS and RRAs")
 
 	flag.Parse()
 
@@ -171,6 +173,10 @@ func main() {
 			if err != nil {
 				fmt.Printf("Database error: %v\n", err)
 				return err
+			}
+
+			if createOnly {
+				return nil
 			}
 
 			// This trickery replaces the internal DataSource and
