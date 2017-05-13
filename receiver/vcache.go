@@ -263,7 +263,7 @@ type iVer struct {
 func (iv *iVer) version(i int64) int {
 	version := iv.ver
 	if i > iv.i {
-		version++
+		version--
 	}
 	return version
 }
