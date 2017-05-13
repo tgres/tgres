@@ -236,7 +236,7 @@ type arrayUpdateChunk struct {
 	vals       []interface{}
 }
 
-func arrayUpdateChunks(m map[int64]float64) []*arrayUpdateChunk {
+func arrayUpdateChunks(m map[int64]interface{}) []*arrayUpdateChunk {
 
 	if len(m) == 0 {
 		return nil

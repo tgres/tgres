@@ -108,8 +108,12 @@ func flushSegment(db serde.VerticalFlusher, wg *sync.WaitGroup, st *stats, k bun
 
 	fmt.Printf("[db]  flushing %d rows for segment %v:%v...\n", len(segment.rows), k.bundleId, k.seg)
 
+	// Build a map of latest i and version according to flushLatests
+	ivers := latestIVers(segment.latests, segment.step, segment.size)
+
 	for i, row := range segment.rows {
-		so, err := db.VerticalFlushDPs(k.bundleId, k.seg, i, row)
+		idps, vers := dataPointsWithVersions(row, i, ivers)
+		so, err := db.VerticalFlushDPs(k.bundleId, k.seg, i, idps, vers)
 		if err != nil {
 			fmt.Printf("[db] Error flushing segment %v:%v: %v\n", k.bundleId, k.seg, err)
 			return
@@ -134,4 +138,39 @@ func flushSegment(db serde.VerticalFlusher, wg *sync.WaitGroup, st *stats, k bun
 		fmt.Printf("[db]  no latests to flush for segment %v:%v...\n", k.bundleId, k.seg)
 	}
 
+}
+
+type iVer struct {
+	i   int64
+	ver int
+}
+
+func (iv *iVer) version(i int64) int {
+	version := iv.ver
+	if i > iv.i {
+		version++
+	}
+	return version
+}
+
+func latestIVers(latests map[int64]time.Time, step time.Duration, size int64) map[int64]*iVer {
+	result := make(map[int64]*iVer, len(latests))
+	for idx, latest := range latests {
+		i := rrd.SlotIndex(latest, step, size)
+		span_ms := (step.Nanoseconds() / 1e6) * size
+		latest_ms := latest.UnixNano() / 1e6
+		ver := int((latest_ms / span_ms) % 32767)
+		result[idx] = &iVer{i: i, ver: ver}
+	}
+	return result
+}
+
+func dataPointsWithVersions(in crossRRAPoints, i int64, ivs map[int64]*iVer) (dps, vers map[int64]interface{}) {
+	dps = make(map[int64]interface{}, len(in))
+	vers = make(map[int64]interface{}, len(in))
+	for idx, dp := range in {
+		dps[idx] = dp
+		vers[idx] = ivs[idx].version(i)
+	}
+	return dps, vers
 }

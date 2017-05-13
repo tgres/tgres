@@ -16,6 +16,7 @@
 package receiver
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -93,9 +94,11 @@ func (bc *verticalCache) update(rra serde.DbRoundRobinArchiver) {
 
 	for i, v := range rra.DPs() {
 		if len(segment.rows[i]) == 0 {
-			segment.rows[i] = map[int64]float64{idx: v}
+			segment.rows[i] = make(map[int64]float64, serde.PgSegmentWidth)
 		}
-		segment.rows[i][idx] = v
+		if !math.IsNaN(v) { // With versions NaNs can be ignored.
+			segment.rows[i][idx] = v
+		}
 	}
 
 	latest := rra.Latest()
@@ -162,49 +165,78 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 
 		now := time.Now()
 
+		segment.Lock()
+
+		// We need to iterate over the rows twice, the first time to
+		// collect correct values for flushLatests which we will then
+		// use to compute versions for the data points.
+
+		// TODO: Should this be configurable, it seems a little lame
+		// flushDelay ensures that we do not flush entries that are
+		// incomplete because enough time has not passed for them to
+		// become "saturated" with points.
+		flushDelay := bc.minStep * 2
+		if flushDelay > time.Minute {
+			flushDelay = time.Minute
+		}
+
 		// This is our version of latests, since if we're going to
 		// possibly skip the latest segment row, the latests in the
 		// cache are not what should be written to the database.
-		flushLatests := make(map[int64]time.Time)
+		flushLatests := make(map[int64]time.Time, len(segment.latests))
 
-		segment.Lock()
-
+		// First iteration: build flushLatests
 		for i, dps := range segment.rows {
 
-			// Do not flush entries that are at least 2 minStep "old", to make sure we're flushing "saturated" segments.
-			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < bc.minStep*2 {
+			// Translation: Unless a full flush is requested, if this
+			// segment has a maxLatest value (precaution) and this
+			// value is less than flushDelay in the past, continue.
+			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < flushDelay {
 				continue
 			}
 
-			if full { // insist, even if we block
-				ch <- &vDpFlushRequest{key.bundleId, key.seg, i, dps, nil}
-			} else { // just skip over if channel full
-				select {
-				default:
-					// we're blocked
-					blocked++
-					continue
-				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, dps, nil}:
-				}
-			}
-
-			// delete the flushed segment row
-			delete(segment.rows, i)
-
-			// compute latests
+			// latests - keep the highest value we come across
 			for idx, _ := range dps {
 				l := rrd.SlotTime(i, segment.latests[idx], segment.step, segment.size)
 				if flushLatests[idx].Before(l) { // no value is zero time
 					flushLatests[idx] = l
 				}
 			}
+		}
+
+		// Build a map of latest i and version according to flushLatests
+		flushIVers := latestIVers(flushLatests, segment.step, segment.size)
+
+		// Second iteration: datapoints and versions
+		for i, dps := range segment.rows {
+
+			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < flushDelay {
+				continue
+			}
+
+			idps, vers := dataPointsWithVersions(dps, i, flushIVers)
+
+			if full { // insist, even if we block
+				ch <- &vDpFlushRequest{key.bundleId, key.seg, i, idps, vers, nil}
+			} else { // just skip over if channel full
+				select {
+				default:
+					// we're blocked, we'll try again next time
+					blocked++
+					continue
+				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, idps, vers, nil}:
+				}
+			}
+
+			// delete the flushed segment row
+			delete(segment.rows, i)
 
 			count += len(dps)
 			flushCount += 1 // how many chunks get pushed to the channel => one or more SQL
 		}
 
 		if len(flushLatests) > 0 {
-			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, flushLatests}
+			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, nil, flushLatests}
 			lcount += len(flushLatests)
 			flushCount += 1
 		}
@@ -221,4 +253,42 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 	st.flushBlocked = blocked
 
 	return st
+}
+
+type iVer struct {
+	i   int64
+	ver int
+}
+
+func (iv *iVer) version(i int64) int {
+	version := iv.ver
+	if i > iv.i {
+		version++
+	}
+	return version
+}
+
+func latestIVers(latests map[int64]time.Time, step time.Duration, size int64) map[int64]*iVer {
+	result := make(map[int64]*iVer, len(latests))
+	for idx, latest := range latests {
+		i := rrd.SlotIndex(latest, step, size)
+		span_ms := (step.Nanoseconds() / 1e6) * size
+		latest_ms := latest.UnixNano() / 1e6
+		ver := int((latest_ms / span_ms) % 32767)
+		result[idx] = &iVer{i: i, ver: ver}
+	}
+	return result
+}
+
+// Convert data points map into two maps: (1) same dps, only as
+// interface{}, (2) versions as interface{} (interface{} because this
+// is what the postgres interface will eventually need.
+func dataPointsWithVersions(in crossRRAPoints, i int64, ivs map[int64]*iVer) (dps, vers map[int64]interface{}) {
+	dps = make(map[int64]interface{}, len(in))
+	vers = make(map[int64]interface{}, len(in))
+	for idx, dp := range in {
+		dps[idx] = dp
+		vers[idx] = ivs[idx].version(i)
+	}
+	return dps, vers
 }
