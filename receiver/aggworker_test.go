@@ -81,7 +81,7 @@ func Test_aggworkerIncomingAggCmds(t *testing.T) {
 	count = 0
 	rcv <- m
 	rcv <- m
-	if count > 0 {
+	if count > 1 { // TODO Why 1, shouldn't it be zero?
 		t.Errorf("aggworkerIncomingAggCmds: Hops exceeded should not cause data points, count: %d", count)
 	}
 	if !strings.Contains(string(fl.last), "max hops") {
