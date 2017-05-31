@@ -17,6 +17,7 @@ package receiver
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -35,15 +36,17 @@ type dsCache struct {
 	finder   MatchingDSSpecFinder
 	clstr    clusterer
 	rraCount int
+	maxInact time.Duration
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
-		byIdent: make(map[string]*cachedDs),
-		db:      db,
-		finder:  finder,
-		dsf:     dsf,
+		byIdent:  make(map[string]*cachedDs),
+		db:       db,
+		finder:   finder,
+		dsf:      dsf,
+		maxInact: time.Hour,
 	}
 	return d
 }
@@ -140,6 +143,29 @@ func (d *dsCache) stats() (int, int) {
 	d.RLock()
 	defer d.RUnlock()
 	return len(d.byIdent), d.rraCount
+}
+
+func (d *dsCache) deleteInact() (deleted int) {
+	now := time.Now()
+	for _, cds := range d.byIdent {
+		cds.mu.Lock()
+		if !cds.sentToLoader && cds.DbDataSourcer != nil && now.Add(-d.maxInact).After(cds.LastUpdate()) {
+			d.delete(cds.Ident())
+			deleted++
+		}
+		cds.mu.Unlock()
+	}
+	return
+}
+
+func dsCachePeriodicCleanup(dsc *dsCache) {
+	for {
+		time.Sleep(time.Minute)
+		if deleted := dsc.deleteInact(); deleted > 0 {
+			// TODO: instead of logging, should we report this as a stat?
+			log.Printf("dsCachePeriodicCleanup: deleted: %d", deleted)
+		}
+	}
 }
 
 // Sortable array of incomingDP

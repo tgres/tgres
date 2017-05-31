@@ -224,7 +224,8 @@ type dpStats struct {
 	last                               time.Time
 }
 
-var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int) {
+var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan interface{}, nWorkers int, clstr clusterer,
+	sr statReporter, dsc *dsCache, dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int, maxMem uint64) {
 	wc.onEnter()
 	defer wc.onExit()
 
@@ -260,6 +261,9 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 	}
 
 	wc.onStarted()
+
+	var currentMemory uint64 = runtimeMemory()
+	var memoryChecked time.Time = time.Now()
 
 	stats := dpStats{forwarded_to: make(map[string]int), last: time.Now()}
 
@@ -298,16 +302,22 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 		}
 
 		if dp != nil {
-			if queue != nil && maxQLen > 0 && queue.size() > maxQLen {
-				stats.dropped++
-				continue // /dev/null
+			stats.total++
+
+			if maxMem > 0 && memoryChecked.Before(time.Now().Add(-100*time.Millisecond)) {
+				currentMemory = runtimeMemory()
+				memoryChecked = time.Now()
 			}
 
-			// if the dp ident is not found, it will be submitted to
-			// the loader, which will return it to us through the dpCh
-			// as a cachedDs.
-			directorProcessIncomingDP(dp, dsc, loaderCh, workerCh, clstr, snd, &stats)
-			stats.total++
+			if (maxMem > 0 && currentMemory > maxMem) || (queue != nil && maxQLen > 0 && queue.size() > maxQLen) {
+				stats.dropped++
+				// this data poind goes to /dev/null
+			} else {
+				// if the dp ident is not found, it will be submitted to
+				// the loader, which will return it to us through the dpCh
+				// as a cachedDs.
+				directorProcessIncomingDP(dp, dsc, loaderCh, workerCh, clstr, snd, &stats)
+			}
 		} else if cds != nil {
 			// this came from the loader, we do not need to look it up
 			directorProcessOrForward(dsc, cds, workerCh, clstr, snd, &stats)

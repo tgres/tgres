@@ -62,7 +62,7 @@ func Test_startstop_doStart(t *testing.T) {
 	called := 0
 	stopped := false
 	director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan interface{}, nWorkers int, clstr clusterer, sr statReporter, dsc *dsCache,
-		dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int) {
+		dsf dsFlusherBlocking, queue *fifoQueue, maxQLen int, maxMem uint64) {
 		wc.onEnter()
 		defer wc.onExit()
 		called++

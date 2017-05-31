@@ -65,7 +65,10 @@ func (vc verticalCache) update(rra serde.DbRoundRobinArchiver, origLatest time.T
 			segment.latestIndex = rrd.SlotIndex(latest, rra.Step(), rra.Size())
 		}
 		segment.latests[idx] = latest
+	} else {
+		segment.latests[idx] = origLatest
 	}
+
 }
 
 type stats struct {
@@ -106,7 +109,11 @@ func (vc verticalCache) flush(db serde.VerticalFlusher) error {
 func flushSegment(db serde.VerticalFlusher, wg *sync.WaitGroup, st *stats, k bundleKey, segment *verticalCacheSegment) {
 	defer wg.Done()
 
-	fmt.Printf("[db]  flushing %d rows for segment %v:%v...\n", len(segment.rows), k.bundleId, k.seg)
+	if len(segment.rows) == 0 {
+		return
+	}
+
+	fmt.Printf("[db]  flushing %d rows (%d wide) for segment %v:%v...\n", len(segment.rows), len(segment.latests), k.bundleId, k.seg)
 
 	// Build a map of latest i and version according to flushLatests
 	ivers := latestIVers(segment.latests, segment.step, segment.size)
@@ -138,6 +145,7 @@ func flushSegment(db serde.VerticalFlusher, wg *sync.WaitGroup, st *stats, k bun
 		fmt.Printf("[db]  no latests to flush for segment %v:%v...\n", k.bundleId, k.seg)
 	}
 
+	fmt.Printf("[db]  DONE     %d rows (%d wide) for segment %v:%v...\n", len(segment.rows), len(segment.latests), k.bundleId, k.seg)
 }
 
 type iVer struct {
