@@ -469,7 +469,8 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	defer rows.Close()
 
 	result := make([]rrd.DataSourcer, 0)
-	var currentDs *DbDataSource
+	var lastDsr *dsRecord
+	var maxLatest time.Time
 	var rras []rrd.RoundRobinArchiver
 	for rows.Next() {
 		var (
@@ -493,19 +494,40 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 			latest = &time.Time{}
 		}
 
-		if currentDs == nil || currentDs.id != dsr.id {
+		if maxLatest.Before(*latest) {
+			maxLatest = *latest
+		}
 
-			if currentDs != nil && len(rras) > 0 {
-				// this is fully baked, output it
-				currentDs.SetRRAs(rras)
-				result = append(result, currentDs)
+		if lastDsr == nil || lastDsr.id != dsr.id {
+
+			if lastDsr != nil && len(rras) > 0 { // this is fully baked, output it
+
+				// We are using the latest of all the latests
+				// (maxLatest) as lastUpdate value. This is a bit of a
+				// hack, but it helps with a situation when tgres may
+				// have been killed without having a chance to save
+				// the DS record. TODO: lastupdate should be an array
+				// in a separate table. NOTE FetchOrCreateDataSource()
+				// does NOT do this (it just makes code complicated).
+
+				if lastDsr.lastupdate == nil {
+					lastDsr.lastupdate = &time.Time{}
+				}
+
+				if lastDsr.lastupdate.Before(maxLatest) {
+					lastDsr.lastupdate = &maxLatest
+				}
+
+				ds, err := dataSourceFromDsRec(lastDsr)
+				if err != nil {
+					return nil, fmt.Errorf("error scanning: %v", err)
+				}
+
+				ds.SetRRAs(rras)
+				result = append(result, ds)
 			}
 
-			if currentDs, err = dataSourceFromDsRec(&dsr); err != nil {
-				return nil, fmt.Errorf("error scanning: %v", err)
-			}
-
-			rras = nil
+			rras, maxLatest, lastDsr = nil, time.Time{}, &dsr
 		}
 
 		var rra *DbRoundRobinArchive

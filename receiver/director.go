@@ -355,9 +355,10 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 			}
 			sr.reportStatCount("receiver.created", 0)
 			stats = dpStats{forwarded_to: make(map[string]int), last: time.Now()}
-			dsCount, rraCount := dsc.stats()
+			dsCount, rraCount, evicted := dsc.stats()
 			sr.reportStatGauge("receiver.cache.ds_count", float64(dsCount))
 			sr.reportStatGauge("receiver.cache.rra_count", float64(rraCount))
+			sr.reportStatCount("receiver.cache.evicted", float64(evicted))
 		}
 	}
 }
