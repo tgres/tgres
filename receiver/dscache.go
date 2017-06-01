@@ -35,15 +35,18 @@ type dsCache struct {
 	finder   MatchingDSSpecFinder
 	clstr    clusterer
 	rraCount int
+	evicted  int
+	maxInact time.Duration
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	d := &dsCache{
-		byIdent: make(map[string]*cachedDs),
-		db:      db,
-		finder:  finder,
-		dsf:     dsf,
+		byIdent:  make(map[string]*cachedDs),
+		db:       db,
+		finder:   finder,
+		dsf:      dsf,
+		maxInact: time.Hour,
 	}
 	return d
 }
@@ -136,10 +139,40 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 	}
 }
 
-func (d *dsCache) stats() (int, int) {
+func (d *dsCache) stats() (int, int, int) {
 	d.RLock()
 	defer d.RUnlock()
-	return len(d.byIdent), d.rraCount
+	evicted := d.evicted
+	d.evicted = 0
+	return len(d.byIdent), d.rraCount, evicted
+}
+
+func (d *dsCache) evictInact() {
+	now := time.Now()
+	d.Lock()
+	defer d.Unlock()
+	for _, cds := range d.byIdent {
+		cds.mu.Lock()
+		// TODO: Relying on LastUpdate() may not be the best practice
+		// because there should be nothing wrong with it being in the
+		// past. We should probably rely on a separate actual time
+		// update timestamp? (Checking for dirty should help with
+		// needless evictions.)
+		if !cds.dirty && !cds.sentToLoader && cds.DbDataSourcer != nil && now.Add(-d.maxInact).After(cds.LastUpdate()) {
+			d.rraCount -= len(cds.RRAs())
+			delete(d.byIdent, cds.Ident().String())
+			d.evicted++
+		}
+		cds.mu.Unlock()
+	}
+	return
+}
+
+func dsCachePeriodicCleanup(dsc *dsCache) {
+	for {
+		time.Sleep(time.Minute)
+		dsc.evictInact()
+	}
 }
 
 // Sortable array of incomingDP

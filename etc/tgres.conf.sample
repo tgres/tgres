@@ -5,6 +5,8 @@ min-step                = "10s"
 
 # 0 - unlilimited (default). points in excess are discarded
 #max-receiver-queue-size  = 1000000
+# 0 - unlimited (default). this is very inexact, can be off by gigs.
+#max-memory-bytes         = 8000000000
 
 # number of flushers == number of workers
 workers                 = 4

@@ -65,7 +65,9 @@ var doStart = func(r *Receiver) {
 	log.Printf("Receiver: All workers running, starting director.")
 
 	startWg.Add(1)
-	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpChIn, r.dpChOut, r.NWorkers, r.cluster, r, r.dsc, r.flusher, r.queue, r.MaxReceiverQueueSize)
+	go director(&wrkCtl{wg: &r.directorWg, startWg: &startWg, id: "director"}, r.dpChIn,
+		r.dpChOut, r.NWorkers, r.cluster, r, r.dsc, r.flusher, r.queue,
+		r.MaxReceiverQueueSize, r.MaxMemoryBytes)
 	startWg.Wait()
 
 	log.Printf("Receiver: Starting runtime cpu/mem reporter.")

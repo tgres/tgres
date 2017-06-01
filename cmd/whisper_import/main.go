@@ -65,6 +65,7 @@ func main() {
 		whisperDir, root, dbConnect       string
 		namePrefix, specStr, skipTo       string
 		batchSize, staleDays, rraSpecStep int
+		heartBeat                         int
 		createOnly                        bool
 		dsSpec                            *rrd.DSSpec
 	)
@@ -79,6 +80,7 @@ func main() {
 	flag.IntVar(&rraSpecStep, "step", 10, "Step to be used with spec parameter (seconds)")
 	flag.StringVar(&skipTo, "skip-to", "", "Skip to this series. (Assumes they're always in the same order, which depends on your filesystem).")
 	flag.BoolVar(&createOnly, "create-only", false, "Do not save data, just create the DS and RRAs")
+	flag.IntVar(&heartBeat, "hb", 1800, "Heartbeat (seconds).")
 
 	flag.Parse()
 
@@ -88,7 +90,7 @@ func main() {
 
 	if specStr != "" {
 		var err error
-		if dsSpec, err = specFromStr(specStr, rraSpecStep); err != nil {
+		if dsSpec, err = specFromStr(specStr, rraSpecStep, heartBeat); err != nil {
 			fmt.Printf("Error parsing spec: %v\n", err)
 			return
 		}
@@ -144,7 +146,7 @@ func main() {
 				return nil
 			}
 
-			fmt.Printf("Processing: %v\n", path)
+			fmt.Printf("Processing: %v as %q \n", path, name)
 
 			wsp, err := newWhisper(path)
 			if err != nil {
@@ -165,7 +167,7 @@ func main() {
 			if dsSpec != nil {
 				spec = dsSpec
 			} else {
-				spec = specFromHeader(wsp.header)
+				spec = specFromHeader(wsp.header, heartBeat)
 			}
 
 			// NB: If the DS exists, our spec is ignored
@@ -285,12 +287,13 @@ func processAllPoints(ds rrd.DataSourcer, wsp *whisper) {
 
 	start, end := uint32(0), uint32(0)
 
+	var msgs []string
 	for i, arch := range archs {
 
 		step := time.Duration(arch.Step) * time.Second
 		span := time.Duration(arch.Size) * step
 
-		fmt.Printf("  archive: %d step: %v span: %v CF: %d\n", i, step, span, wsp.header.metadata.CF)
+		msgs = append(msgs, fmt.Sprintf("(%d) step: %v span: %v CF: %d", i, step, span, wsp.header.metadata.CF))
 
 		points, _ := wsp.dumpArchive(i)
 
@@ -321,6 +324,7 @@ func processAllPoints(ds rrd.DataSourcer, wsp *whisper) {
 			end = start
 		}
 	}
+	fmt.Printf("  Archives: %s\n", strings.Join(msgs, ", "))
 
 	processArchivePoints(ds, allPoints)
 }
@@ -346,7 +350,7 @@ func processArchivePoints(ds rrd.DataSourcer, points archive) {
 	fmt.Printf("Processed %d points between %v and %v\n", n, begin, end)
 }
 
-func specFromHeader(h *header) *rrd.DSSpec {
+func specFromHeader(h *header, hb int) *rrd.DSSpec {
 
 	// Archives are stored in order of precision, so first archive
 	// step is the DS step. (TODO: it should be gcd of all
@@ -354,7 +358,8 @@ func specFromHeader(h *header) *rrd.DSSpec {
 	dsStep := h.archives[0].Step
 
 	spec := rrd.DSSpec{
-		Step: time.Duration(dsStep) * time.Second,
+		Step:      time.Duration(dsStep) * time.Second,
+		Heartbeat: time.Duration(hb) * time.Second,
 	}
 
 	for _, arch := range h.archives {
@@ -368,7 +373,7 @@ func specFromHeader(h *header) *rrd.DSSpec {
 	return &spec
 }
 
-func specFromStr(text string, step int) (*rrd.DSSpec, error) {
+func specFromStr(text string, step, hb int) (*rrd.DSSpec, error) {
 
 	var cfgSpecs []*daemon.ConfigRRASpec
 
@@ -382,8 +387,9 @@ func specFromStr(text string, step int) (*rrd.DSSpec, error) {
 	}
 
 	spec := &rrd.DSSpec{
-		Step: time.Duration(step) * time.Second,
-		RRAs: make([]rrd.RRASpec, len(cfgSpecs)),
+		Step:      time.Duration(step) * time.Second,
+		Heartbeat: time.Duration(hb) * time.Second,
+		RRAs:      make([]rrd.RRASpec, len(cfgSpecs)),
 	}
 	for i, r := range cfgSpecs {
 		spec.RRAs[i] = rrd.RRASpec{

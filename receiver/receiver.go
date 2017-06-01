@@ -70,6 +70,11 @@ type Receiver struct {
 	// negative value means unlimited.
 	MaxReceiverQueueSize int
 
+	// MaxMemoryBytes is the limit after which points are
+	// discarded. It is based on runtime.ReadMemStats() and is rough
+	// and approximate, but better than nothing.
+	MaxMemoryBytes uint64
+
 	StatFlushDuration time.Duration // Period after which stats are flushed
 	StatsNamePrefix   string        // Stat names are prefixed with this
 
@@ -146,8 +151,8 @@ func NewWithMaxQueue(serde serde.SerDe, finder MatchingDSSpecFinder, maxQueue in
 
 	r.flusher = &dsFlusher{db: serde.Flusher(), vdb: serde.VerticalFlusher(), sr: r}
 	r.dsc = newDsCache(serde.Fetcher(), finder, r.flusher)
+	go dsCachePeriodicCleanup(r.dsc)
 	return r
-
 }
 
 // Before using the receiver it must be Started. This starts all the

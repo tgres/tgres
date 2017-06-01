@@ -39,6 +39,7 @@ type Config struct { // Needs to be exported for TOML to work
 	DbConnectString          string   `toml:"db-connect-string"`
 	MinStep                  duration `toml:"min-step"`
 	MaxReceiverQueueSize     int      `toml:"max-receiver-queue-size"`
+	MaxMemoryBytes           int      `toml:"max-memory-bytes"`
 	GraphiteTextListenSpec   string   `toml:"graphite-text-listen-spec"`
 	GraphiteUdpListenSpec    string   `toml:"graphite-udp-listen-spec"`
 	GraphitePickleListenSpec string   `toml:"graphite-pickle-listen-spec"`
@@ -221,6 +222,17 @@ func (c *Config) processMaxReceiverQueueSize() error {
 	return nil
 }
 
+func (c *Config) processMaxMemoryBytes() error {
+	if c.MaxMemoryBytes == 0 {
+		log.Printf("max-memory-bytes unspecified, defaults to 0 (unlimited)")
+	} else if c.MaxMemoryBytes <= 0 {
+		log.Printf("Max Memory (heap allocation bytes) is unlimited (%d) (max-memory-bytes).", c.MaxMemoryBytes)
+	} else {
+		log.Printf("Max Memory (heap allocation bytes) is limited to %d (max-memory-bytes).", c.MaxMemoryBytes)
+	}
+	return nil
+}
+
 func (c *Config) processStatFlushInterval() error {
 	if c.StatFlush.Duration == 0 {
 		return fmt.Errorf("stat-flush-interval is missing")
@@ -302,6 +314,7 @@ type configer interface {
 	processDbConnectString() error
 	processMinStep() error
 	processMaxReceiverQueueSize() error
+	processMaxMemoryBytes() error
 	processStatFlushInterval() error
 	processStatsNamePrefix() error
 	processWorkers() error
@@ -326,6 +339,9 @@ var processConfig = func(c configer, wd string) error {
 		return err
 	}
 	if err := c.processMaxReceiverQueueSize(); err != nil {
+		return err
+	}
+	if err := c.processMaxMemoryBytes(); err != nil {
 		return err
 	}
 	if err := c.processStatFlushInterval(); err != nil {

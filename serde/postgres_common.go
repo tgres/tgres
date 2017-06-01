@@ -40,12 +40,22 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 		return nil, err
 	}
 
+	// If LastUpdate was more than HeartBeat ago, to avoid wasting
+	// memory, simply set LU to now. This way everything inbetween
+	// will automatically become NaN because of timestamp versioning.
+	hb := time.Duration(dsr.hbMs) * time.Millisecond
+	lu := *dsr.lastupdate
+	now := time.Now()
+	if lu.Before(now.Add(-hb)) {
+		lu = now
+	}
+
 	ds := NewDbDataSource(dsr.id, ident,
 		rrd.NewDataSource(
 			rrd.DSSpec{
 				Step:       time.Duration(dsr.stepMs) * time.Millisecond,
-				Heartbeat:  time.Duration(dsr.hbMs) * time.Millisecond,
-				LastUpdate: *dsr.lastupdate,
+				Heartbeat:  hb,
+				LastUpdate: lu,
 				Value:      dsr.value,
 				Duration:   time.Duration(dsr.durationMs) * time.Millisecond,
 			},
@@ -236,7 +246,7 @@ type arrayUpdateChunk struct {
 	vals       []interface{}
 }
 
-func arrayUpdateChunks(m map[int64]float64) []*arrayUpdateChunk {
+func arrayUpdateChunks(m map[int64]interface{}) []*arrayUpdateChunk {
 
 	if len(m) == 0 {
 		return nil

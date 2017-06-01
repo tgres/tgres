@@ -37,7 +37,7 @@ type dsFlusher struct {
 
 type vDpFlushRequest struct {
 	bundleId, seg, i int64
-	dps              crossRRAPoints
+	dps, vers        map[int64]interface{}
 	latests          map[int64]time.Time
 }
 
@@ -264,7 +264,7 @@ var vdbflusher = func(wc wController, db serde.VerticalFlusher, ch chan *vDpFlus
 
 		if len(dpr.dps) > 0 {
 			start := time.Now()
-			sqlOps, err := db.VerticalFlushDPs(dpr.bundleId, dpr.seg, dpr.i, dpr.dps)
+			sqlOps, err := db.VerticalFlushDPs(dpr.bundleId, dpr.seg, dpr.i, dpr.dps, dpr.vers)
 			if err != nil {
 				log.Printf("vdbflusher: ERROR in VerticalFlushDps: %v", err)
 			}

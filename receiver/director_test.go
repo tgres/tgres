@@ -375,7 +375,7 @@ func Test_the_director(t *testing.T) {
 	dsc := newDsCache(db, df, dsf)
 
 	wc.startWg.Add(1)
-	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0)
+	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0, 0)
 	wc.startWg.Wait()
 
 	if clstr.nReady == 0 {
@@ -438,7 +438,7 @@ func Test_the_director(t *testing.T) {
 	dpCh <- dp
 
 	wc.startWg.Add(1)
-	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0)
+	go director(wc, dpCh, dpCh, 1, clstr, sr, dsc, nil, nil, 0, 0)
 	wc.startWg.Wait()
 
 	time.Sleep(100 * time.Millisecond)

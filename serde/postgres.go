@@ -17,6 +17,18 @@
 // A vertical RRA implementation
 //
 
+// TODO Data layout notes
+//
+// Versioning and Backfill problem
+//
+// When there is a large gap in data, it needs to filled in which
+// causes a lot of database activity. To address this issue Tgres
+// stores a version for each the data point. The data point is a
+// number a smallint incrementing by 1 every time round-robin goes
+// full circle. This means that a gap can be left without updating the
+// data, the tv view will convert the values to NULL if the version
+// does not match the expected version.
+
 package serde
 
 import (
@@ -142,7 +154,7 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 	if p.sqlUpdateTs, err = p.dbConn.Prepare(fmt.Sprintf(
-		"UPDATE %[1]sts AS ts SET dp[$4:$5] = $6 WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3",
+		"UPDATE %[1]sts AS ts SET dp[$4:$5] = $6, ver[$7:$8] = $9 WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -262,7 +274,8 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
        rra_bundle_id INT NOT NULL REFERENCES %[1]srra_bundle(id) ON DELETE CASCADE,
        seg INT NOT NULL,
        i INT NOT NULL,
-       dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
+       dp DOUBLE PRECISION[] NOT NULL DEFAULT '{}',
+       ver SMALLINT[] NOT NULL DEFAULT '{}');
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]sts (rra_bundle_id, seg, i);
     `
@@ -274,17 +287,42 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 	}
 	create_sql = `
 -- normal view
-CREATE VIEW %[1]stv AS
-  SELECT rra.ds_id AS ds_id, rra.id AS rra_id, rra_bundle.step_ms AS step_ms,
-         rra_latest.latest[rra.idx] - INTERVAL '1 MILLISECOND' * rra_bundle.step_ms *
-           MOD(rra_bundle.size + MOD(EXTRACT(EPOCH FROM rra_latest.latest[rra.idx])::BIGINT*1000/rra_bundle.step_ms, rra_bundle.size) - i, rra_bundle.size) AS t,
-         dp[rra.idx] AS r
-   FROM %[1]srra AS rra
-   JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
-   JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
-   JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg;
+  -- sub-queries are for clarity, they do not affect performance here
+  -- (as best i can tell explains are identical between this and non-nested)
+CREATE OR REPLACE VIEW %[1]stv AS
+    SELECT ds_id, rra_id, step_ms, t, r
+      FROM (
+      SELECT ds_id, rra_id, step_ms, r
+           , latest - '00:00:00.001'::interval * step_ms * mod(size + latest_i - i, size) AS t
+           , ver
+           , latest_ver - (i > latest_i)::INT AS expected_version
+        FROM (
+        SELECT ds_id, rra_id, step_ms, r
+             , size, i, latest, ver
+             , mod(latest_ms/step_ms, size) AS latest_i
+             , mod(latest_ms / (step_ms::bigint * size), 32767)::smallint AS latest_ver
+          FROM (
+          SELECT rra.ds_id AS ds_id
+               , rra.id AS rra_id
+               , rra_bundle.step_ms AS step_ms
+               , date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 AS latest_ms
+               , rra_latest.latest[rra.idx] AS latest
+               , rra_bundle.size AS size
+               , ts.i AS i
+               , dp[rra.idx] AS r
+               , ver[rra.idx] AS ver
+            FROM %[1]srra AS rra
+            JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
+            JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
+            JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
+          ) a
+        ) b
+      ) c
+WHERE expected_version = coalesce(ver, expected_version);
+
 -- debug view
-CREATE VIEW %[1]stvd AS
+-- TODO add version stuff to it
+CREATE OR REPLACE VIEW %[1]stvd AS
   SELECT
       ds_id
     , rra_id
@@ -322,10 +360,10 @@ CREATE VIEW %[1]stvd AS
   ) foo;
 `
 	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			log.Printf("ERROR: initial CREATE VIEW failed: %v", err)
-			return err
-		}
+		//if !strings.Contains(err.Error(), "already exists") {
+		log.Printf("ERROR: initial CREATE VIEW failed: %v", err)
+		return err
+		//}
 	} else {
 		rows.Close()
 	}
@@ -431,7 +469,8 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	defer rows.Close()
 
 	result := make([]rrd.DataSourcer, 0)
-	var currentDs *DbDataSource
+	var lastDsr *dsRecord
+	var maxLatest time.Time
 	var rras []rrd.RoundRobinArchiver
 	for rows.Next() {
 		var (
@@ -455,19 +494,40 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 			latest = &time.Time{}
 		}
 
-		if currentDs == nil || currentDs.id != dsr.id {
+		if maxLatest.Before(*latest) {
+			maxLatest = *latest
+		}
 
-			if currentDs != nil && len(rras) > 0 {
-				// this is fully baked, output it
-				currentDs.SetRRAs(rras)
-				result = append(result, currentDs)
+		if lastDsr == nil || lastDsr.id != dsr.id {
+
+			if lastDsr != nil && len(rras) > 0 { // this is fully baked, output it
+
+				// We are using the latest of all the latests
+				// (maxLatest) as lastUpdate value. This is a bit of a
+				// hack, but it helps with a situation when tgres may
+				// have been killed without having a chance to save
+				// the DS record. TODO: lastupdate should be an array
+				// in a separate table. NOTE FetchOrCreateDataSource()
+				// does NOT do this (it just makes code complicated).
+
+				if lastDsr.lastupdate == nil {
+					lastDsr.lastupdate = &time.Time{}
+				}
+
+				if lastDsr.lastupdate.Before(maxLatest) {
+					lastDsr.lastupdate = &maxLatest
+				}
+
+				ds, err := dataSourceFromDsRec(lastDsr)
+				if err != nil {
+					return nil, fmt.Errorf("error scanning: %v", err)
+				}
+
+				ds.SetRRAs(rras)
+				result = append(result, ds)
 			}
 
-			if currentDs, err = dataSourceFromDsRec(&dsr); err != nil {
-				return nil, fmt.Errorf("error scanning: %v", err)
-			}
-
-			rras = nil
+			rras, maxLatest, lastDsr = nil, time.Time{}, &dsr
 		}
 
 		var rra *DbRoundRobinArchive
@@ -591,7 +651,6 @@ func (p *pgvSerDe) fetchRoundRobinArchives(ds *DbDataSource) ([]rrd.RoundRobinAr
 	return rras, nil
 }
 
-// Unlike the "horizontal" version, this does NOT flush the RRAs.
 func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 	dbds, ok := ds.(DbDataSourcer)
 	if !ok {
@@ -623,16 +682,38 @@ func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 	return nil
 }
 
-func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float64) (sqlOps int, err error) {
+func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps, vers map[int64]interface{}) (sqlOps int, err error) {
+	// Due to the way PG array syntax works, we use two different
+	// methods of updating data points. When the data points updated
+	// are *one* contiguous chunk, we can use the form array[a:b] =
+	// '{...}' and it appears in the statement once. Such a statement
+	// can be prepared. When the data points are in *multiple*
+	// chunks, then we use the form array[a:b] = '{...}', array[c:d] =
+	// '{...}',.... This form cannot be prepared (or I don't know
+	// how). The advantage of the single-statement (latter) is that it
+	// is one statement, but it is not prepared. The multi-statement
+	// (former) is more statements, but they are prepared.
+	//
+	// Our strategy is multi-statement is only used when there is just
+	// one chunk, otherwise we use non-prepared single-statement
+	// (which happens much more in the real world). Some testing
+	// showed that this is most performant, though who knows.
+	//
+	// Summary (yes, confusing):
+	//   1 chunk  => multi-stmt
+	//   N chunks => single-stmt
 
 	chunks := arrayUpdateChunks(dps)
+	vchunks := arrayUpdateChunks(vers)
 
 	if len(chunks) > 1 {
 		//
 		// Use single-statement update  // TODO make me a function!
 		//
-		dest, args := singleStmtUpdateArgs(chunks, "dp", 4, []interface{}{bundle_id, seg, i})
-		stmt := fmt.Sprintf("UPDATE %[1]sts AS ts SET %s WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3", p.prefix, dest)
+		dest1, args := singleStmtUpdateArgs(chunks, "dp", 4, []interface{}{bundle_id, seg, i})
+		dest2, args := singleStmtUpdateArgs(vchunks, "ver", 4+3*len(chunks), args)
+
+		stmt := fmt.Sprintf("UPDATE %[1]sts AS ts SET %s, %s WHERE rra_bundle_id = $1 AND seg = $2 AND i = $3", p.prefix, dest1, dest2)
 
 		res, err := p.dbConn.Exec(stmt, args...)
 		if err != nil {
@@ -655,30 +736,33 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 		//
 		// Use multi-statement update // TODO make me a funciton!
 		//
+		// NB: These loops are executes at most once because of the if / else we're in.
 		for _, args := range multiStmtUpdateArgs(chunks, []interface{}{bundle_id, seg, i}) {
-			// NB: This loop executes at most once.
-			tx, err := p.dbConn.Begin()
-			if err != nil {
-				return 0, err
-			}
-			defer tx.Commit() // TODO is this actually faster?
+			for _, args := range multiStmtUpdateArgs(vchunks, args) {
 
-			res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...)
-			if err != nil {
-				return 0, err
-			}
-			sqlOps++
-
-			if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
-				if _, err = tx.Stmt(p.sqlInsertTs).Exec(bundle_id, seg, i); err != nil {
+				tx, err := p.dbConn.Begin()
+				if err != nil {
 					return 0, err
 				}
-				if res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...); err != nil {
+				defer tx.Commit() // TODO is this actually faster?
+
+				res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...)
+				if err != nil {
 					return 0, err
-				} else if affected, _ := res.RowsAffected(); affected == 0 {
-					return 0, fmt.Errorf("Unable to update row?")
 				}
 				sqlOps++
+
+				if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
+					if _, err = tx.Stmt(p.sqlInsertTs).Exec(bundle_id, seg, i); err != nil {
+						return 0, err
+					}
+					if res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...); err != nil {
+						return 0, err
+					} else if affected, _ := res.RowsAffected(); affected == 0 {
+						return 0, fmt.Errorf("Unable to update row?")
+					}
+					sqlOps++
+				}
 			}
 		}
 		return sqlOps, nil
@@ -686,15 +770,14 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps map[int64]float
 }
 
 func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) (sqlOps int, err error) {
+
 	ilatests := make(map[int64]interface{})
 	for k, v := range latests {
 		ilatests[k] = v
 	}
+	chunks := arrayUpdateChunks(ilatests)
 
-	dest, args := arrayUpdateStatement_(ilatests, 3, "latest")
-	args = append([]interface{}{bundle_id, seg}, args...)
-
-	// TODO: Same as with VerticalFlushDPs - prepare and run multiple times?
+	dest, args := singleStmtUpdateArgs(chunks, "latest", 3, []interface{}{bundle_id, seg})
 	stmt := fmt.Sprintf("UPDATE %[1]srra_latest AS rra_latest SET %s WHERE rra_bundle_id = $1 AND seg = $2", p.prefix, dest)
 
 	res, err := p.dbConn.Exec(stmt, args...)
