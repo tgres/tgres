@@ -468,10 +468,18 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	}
 	defer rows.Close()
 
-	result := make([]rrd.DataSourcer, 0)
-	var lastDsr *dsRecord
-	var maxLatest time.Time
-	var rras []rrd.RoundRobinArchiver
+	type dsRecWithRRAs struct {
+		dsr  *dsRecord
+		rras []rrd.RoundRobinArchiver
+	}
+
+	dss := make([]*dsRecWithRRAs, 0)
+	var (
+		lastDsr          *dsRecord
+		maxCurrentLatest time.Time
+		maxLastUpdate    time.Time
+		rras             []rrd.RoundRobinArchiver
+	)
 	for rows.Next() {
 		var (
 			err    error
@@ -494,8 +502,8 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 			latest = &time.Time{}
 		}
 
-		if maxLatest.Before(*latest) {
-			maxLatest = *latest
+		if maxCurrentLatest.Before(*latest) {
+			maxCurrentLatest = *latest
 		}
 
 		if lastDsr == nil || lastDsr.id != dsr.id {
@@ -503,7 +511,7 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 			if lastDsr != nil && len(rras) > 0 { // this is fully baked, output it
 
 				// We are using the latest of all the latests
-				// (maxLatest) as lastUpdate value. This is a bit of a
+				// (maxCurrentLatest) as lastUpdate value. This is a bit of a
 				// hack, but it helps with a situation when tgres may
 				// have been killed without having a chance to save
 				// the DS record. TODO: lastupdate should be an array
@@ -514,20 +522,19 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 					lastDsr.lastupdate = &time.Time{}
 				}
 
-				if lastDsr.lastupdate.Before(maxLatest) {
-					lastDsr.lastupdate = &maxLatest
+				if lastDsr.lastupdate.Before(maxCurrentLatest) {
+					lastDsr.lastupdate = &maxCurrentLatest
 				}
 
-				ds, err := dataSourceFromDsRec(lastDsr)
-				if err != nil {
-					return nil, fmt.Errorf("error scanning: %v", err)
-				}
+				dss = append(dss, &dsRecWithRRAs{lastDsr, rras})
 
-				ds.SetRRAs(rras)
-				result = append(result, ds)
+				// Keep track of the absolute latest
+				if maxLastUpdate.Before(*lastDsr.lastupdate) {
+					maxLastUpdate = *lastDsr.lastupdate
+				}
 			}
 
-			rras, maxLatest, lastDsr = nil, time.Time{}, &dsr
+			rras, maxCurrentLatest, lastDsr = nil, time.Time{}, &dsr
 		}
 
 		var rra *DbRoundRobinArchive
@@ -538,6 +545,26 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
 		rras = append(rras, rra)
 	}
+
+	// Weed out DSs that are older than some time period
+	// TODO: max idle time should be configurable?
+	skipped := 0
+	result := make([]rrd.DataSourcer, 0, len(dss))
+	limit := maxLastUpdate.Add(-time.Hour * 24 * 3)
+	for i := 0; i < len(dss); i++ {
+		if limit.Before(*dss[i].dsr.lastupdate) {
+			ds, err := dataSourceFromDsRec(dss[i].dsr)
+			if err != nil {
+				return nil, fmt.Errorf("error scanning: %v", err)
+			}
+			ds.SetRRAs(dss[i].rras)
+			result = append(result, ds)
+		} else {
+			skipped++
+		}
+	}
+
+	log.Printf("FetchDataSources: skipped %d data sources older than %v", skipped, limit)
 
 	return result, nil
 }
@@ -660,12 +687,12 @@ func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
 		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", dbds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
 	}
 	durationMs := ds.Duration().Nanoseconds() / 1e6
-	if rows, err := p.sqlUpdateDS.Query(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
+	if res, err := p.sqlUpdateDS.Exec(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
 		// TODO Check number of rows updated - what if this DS does not exist in the DB?
 		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
 		return err
-	} else {
-		rows.Close()
+	} else if affected, _ := res.RowsAffected(); affected == 0 {
+		return fmt.Errorf("Unable to update DS row for id: %d", dbds.Id())
 	}
 
 	for _, rra := range ds.RRAs() {
