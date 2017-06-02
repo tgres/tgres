@@ -118,7 +118,7 @@ func New(serde serde.SerDe, finder MatchingDSSpecFinder) *Receiver {
 	return NewWithMaxQueue(serde, finder, 0)
 }
 
-func NewWithMaxQueue(serde serde.SerDe, finder MatchingDSSpecFinder, maxQueue int) *Receiver {
+func NewWithMaxQueue(db serde.SerDe, finder MatchingDSSpecFinder, maxQueue int) *Receiver {
 	if finder == nil {
 		finder = &SimpleDSFinder{DftDSSPec}
 	}
@@ -135,7 +135,7 @@ func NewWithMaxQueue(serde serde.SerDe, finder MatchingDSSpecFinder, maxQueue in
 	go elasticCh(dpChIn, dpChOut, queue, maxQueue+256)
 
 	r := &Receiver{
-		serde:             serde,
+		serde:             db,
 		MinStep:           10 * time.Second,
 		StatFlushDuration: 10 * time.Second,
 		StatsNamePrefix:   "stats",
@@ -149,9 +149,17 @@ func NewWithMaxQueue(serde serde.SerDe, finder MatchingDSSpecFinder, maxQueue in
 		NWorkers:          1,
 	}
 
-	r.flusher = &dsFlusher{db: serde.Flusher(), vdb: serde.VerticalFlusher(), sr: r}
-	r.dsc = newDsCache(serde.Fetcher(), finder, r.flusher)
+	r.flusher = &dsFlusher{db: db.Flusher(), vdb: db.VerticalFlusher(), sr: r}
+	r.dsc = newDsCache(db.Fetcher(), finder, r.flusher)
 	go dsCachePeriodicCleanup(r.dsc)
+
+	// Register DS delete listener
+	if el := db.EventListener(); el != nil {
+		el.RegisterDeleteListener(func(ident serde.Ident) {
+			r.dsc.delete(ident)
+		})
+	}
+
 	return r
 }
 

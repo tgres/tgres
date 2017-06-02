@@ -33,6 +33,7 @@ package serde
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -40,7 +41,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/series"
 )
@@ -48,6 +49,7 @@ import (
 type pgvSerDe struct {
 	dbConn *sql.DB
 	prefix string
+	listen *pq.Listener
 
 	sql3, sql6                   *sql.Stmt
 	sqlSelectDSByIdent           *sql.Stmt
@@ -70,7 +72,8 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
 		return nil, err
 	} else {
-		p := &pgvSerDe{dbConn: dbConn, prefix: prefix}
+		l := pq.NewListener(connect_string, time.Second, 8*time.Second, nil)
+		p := &pgvSerDe{dbConn: dbConn, listen: l, prefix: prefix}
 		if err := p.dbConn.Ping(); err != nil {
 			return nil, err
 		}
@@ -80,6 +83,7 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 		if err := p.prepareSqlStatements(); err != nil {
 			return nil, err
 		}
+
 		return p, nil
 	}
 }
@@ -87,6 +91,7 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 func (p *pgvSerDe) Fetcher() Fetcher                 { return p }
 func (p *pgvSerDe) Flusher() Flusher                 { return p }
 func (p *pgvSerDe) VerticalFlusher() VerticalFlusher { return p }
+func (p *pgvSerDe) EventListener() EventListener     { return p }
 func (p *pgvSerDe) DbAddresser() DbAddresser         { return p }
 
 // A hack to use the DB to see who else is connected
@@ -279,17 +284,21 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]sts (rra_bundle_id, seg, i);
     `
-	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix, PgSegmentWidth)); err != nil {
+	if _, err := p.dbConn.Exec(fmt.Sprintf(create_sql, p.prefix, PgSegmentWidth)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
 		return err
-	} else {
-		rows.Close()
 	}
+
+	// NB: BEGIN > DROP > CREATE > COMMIT is the equivalent of CREATE OR REPLACE
+	// See https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis
+
 	create_sql = `
 -- normal view
   -- sub-queries are for clarity, they do not affect performance here
   -- (as best i can tell explains are identical between this and non-nested)
-CREATE OR REPLACE VIEW %[1]stv AS
+BEGIN;
+DROP VIEW %[1]stv;
+CREATE VIEW %[1]stv AS
     SELECT ds_id, rra_id, step_ms, t, r
       FROM (
       SELECT ds_id, rra_id, step_ms, r
@@ -322,7 +331,8 @@ WHERE expected_version = coalesce(ver, expected_version);
 
 -- debug view
 -- TODO add version stuff to it
-CREATE OR REPLACE VIEW %[1]stvd AS
+DROP VIEW %[1]stvd;
+CREATE VIEW %[1]stvd AS
   SELECT
       ds_id
     , rra_id
@@ -358,14 +368,37 @@ CREATE OR REPLACE VIEW %[1]stvd AS
      JOIN %[1]srra_latest rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
      JOIN %[1]sts ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
   ) foo;
+COMMIT;
 `
-	if rows, err := p.dbConn.Query(fmt.Sprintf(create_sql, p.prefix)); err != nil {
+	if _, err := p.dbConn.Exec(fmt.Sprintf(create_sql, p.prefix)); err != nil {
 		//if !strings.Contains(err.Error(), "already exists") {
 		log.Printf("ERROR: initial CREATE VIEW failed: %v", err)
 		return err
 		//}
-	} else {
-		rows.Close()
+	}
+
+	create_sql = `
+BEGIN;
+DROP TRIGGER IF EXISTS %[1]sds_delete_trigger ON %[1]sds;
+
+CREATE OR REPLACE FUNCTION %[1]sds_delete_notify() RETURNS TRIGGER AS
+$body$
+  BEGIN
+    PERFORM pg_notify('%[1]sds_delete_event', OLD.ident::text);
+    RETURN NULL;
+  END;
+$body$
+LANGUAGE plpgsql;
+
+CREATE TRIGGER %[1]sds_delete_trigger AFTER DELETE ON %[1]sds
+  FOR EACH ROW
+  EXECUTE PROCEDURE %[1]sds_delete_notify();
+
+COMMIT;
+`
+	if _, err := p.dbConn.Exec(fmt.Sprintf(create_sql, p.prefix)); err != nil {
+		log.Printf("ERROR: initial CREATE TRIGGER failed: %v", err)
+		return err
 	}
 
 	return nil
@@ -1035,4 +1068,36 @@ func (p *pgvSerDe) rraBundleIncrPos(id int64) (int64, error) {
 		return pos, nil
 	}
 	return 0, fmt.Errorf("rraBundleIncrPos: could not increment pos?")
+}
+
+// DS delete LISTEN/NOTIFY
+
+func (p *pgvSerDe) RegisterDeleteListener(handler func(Ident)) error {
+	err := p.listen.Listen(fmt.Sprintf("%[1]sds_delete_event", p.prefix))
+	if err != nil {
+		return err
+	}
+
+	go handleDeleteNotifications(p.listen, handler)
+	return nil
+}
+
+func handleDeleteNotifications(l *pq.Listener, handler func(Ident)) {
+	for {
+		select {
+		case n := <-l.Notify:
+			// TODO: Should we be checking the n.Channel value to make sure
+			// it is not some other event?
+			var ident Ident
+			err := json.Unmarshal([]byte(n.Extra), &ident)
+			if err != nil {
+				log.Printf("handleDeleteNotifications(): error unmarshalling ident: %v", err)
+			}
+			handler(ident)
+		case <-time.After(30 * time.Second):
+			// This is what the example code does, not sure we need it
+			// https://godoc.org/github.com/lib/pq/listen_example
+			go l.Ping()
+		}
+	}
 }

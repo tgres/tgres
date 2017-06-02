@@ -66,6 +66,10 @@ type Fetcher interface {
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
+type EventListener interface {
+	RegisterDeleteListener(func(Ident)) error
+}
+
 type Flusher interface {
 	FlushDataSource(ds rrd.DataSourcer) error
 }
@@ -79,6 +83,7 @@ type SerDe interface {
 	Fetcher() Fetcher
 	Flusher() Flusher
 	VerticalFlusher() VerticalFlusher
+	EventListener() EventListener
 }
 
 type DbAddresser interface {
