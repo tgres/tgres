@@ -109,6 +109,7 @@ type fakeSerde struct {
 
 func (m *fakeSerde) Fetcher() serde.Fetcher                                     { return m }
 func (m *fakeSerde) Flusher() serde.Flusher                                     { return nil } // Flushing not supported
+func (m *fakeSerde) EventListener() serde.EventListener                         { return nil } // not supported
 func (m *fakeSerde) DbAddresser() serde.DbAddresser                             { return m }
 func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error)      { return nil, nil }
 func (m *fakeSerde) Search(query serde.SearchQuery) (serde.SearchResult, error) { return nil, nil }
