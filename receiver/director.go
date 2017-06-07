@@ -76,6 +76,7 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 
 	cds.mu.Lock()
 	if cds.PointCount() > 100 {
+		// TODO: Does this still apply?
 		// This can happen if there was a gap in sending data. There is
 		// a great chance that there are many more series in a similar
 		// situation. When this is the case, we should apply a higher
@@ -91,16 +92,6 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
-
-		// Once a minute request a flush of the DS and its RRAs. This
-		// is a cautionary measure, we only really need to flush these
-		// on exit. The key information is the value/duration for
-		// partially updated PDPs. Note that if the flusher is busy
-		// (i.e. channel is full), it will ignore this request.
-		if cds.lastDSFlush.Before(time.Now().Add(-time.Minute)) {
-			dsf.flushDS(cds, false)
-			cds.lastDSFlush = time.Now()
-		}
 	}
 	cds.mu.Unlock()
 	return cnt

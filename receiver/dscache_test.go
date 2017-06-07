@@ -48,7 +48,7 @@ func Test_dscache_insert(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 
 	d.insert(rds)
@@ -62,7 +62,7 @@ func Test_dscache_delete(t *testing.T) {
 	d := newDsCache(nil, nil, nil)
 
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	rds := &cachedDs{DbDataSourcer: ds}
 	d.insert(rds)
 
@@ -83,7 +83,7 @@ func Test_dscache_preLoad(t *testing.T) {
 	}
 
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	db.returnDss = []rrd.DataSourcer{ds}
 	d.preLoad()
 	if len(d.byIdent) == 0 {
@@ -112,7 +112,6 @@ type fakeSerde struct {
 
 func (m *fakeSerde) Fetcher() serde.Fetcher                                { return m }
 func (m *fakeSerde) Flusher() serde.Flusher                                { return nil } // Flushing not supported
-func (m *fakeSerde) VerticalFlusher() serde.VerticalFlusher                { return nil }
 func (m *fakeSerde) EventListener() serde.EventListener                    { return nil } // not supported
 func (f *fakeSerde) FetchDataSourceById(id int64) (rrd.DataSourcer, error) { return nil, nil }
 func (m *fakeSerde) Search(serde.SearchQuery) (serde.SearchResult, error)  { return nil, nil }
@@ -145,7 +144,7 @@ func (f *fakeSerde) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpe
 		return rrd.NewDataSource(*DftDSSPec), nil
 	} else {
 		foo := serde.Ident{"name": "foo"}
-		return serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec)), nil
+		return serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec)), nil
 	}
 }
 
@@ -153,7 +152,7 @@ func Test_dscache_fetchOrCreateByIdent(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
 	sr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: sr}
+	dsf := &dsFlusher{db: db.Flusher(), sr: sr}
 	d := newDsCache(db, df, dsf)
 
 	cds := d.getByIdentOrCreateEmpty(newCachedIdent(serde.Ident{"name": "foo"}))
@@ -191,7 +190,7 @@ func Test_dscache_register(t *testing.T) {
 	d.clstr = &fakeCluster{}
 
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	d.register(ds) // not sure what we are testing here...
 }
 
@@ -202,7 +201,7 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 	dsc := newDsCache(db, df, dsf)
 
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	rds := &distDs{DbDataSourcer: ds, dsc: dsc}
 
 	err := rds.Relinquish()
@@ -222,22 +221,13 @@ func Test_dscache_cachedDs_Relinquish(t *testing.T) {
 		t.Errorf("if lastupdate is not zero but there is no rds in cache, ds should not be flushed")
 	}
 
-	cds := &cachedDs{DbDataSourcer: ds, dirty: true}
-	dsc.insert(cds)
-	err = rds.Relinquish()
-	if err != nil {
-		t.Errorf("rds.Relinquish (2): err != nil: %v", err)
-	}
-	if dsf.called != 1 {
-		t.Errorf("if lastupdate is not zero, ds should be flushed")
-	}
-
 	// test Acquire while we're at it
+	dsf.called = 0
 	err = rds.Acquire()
 	if err != nil {
 		t.Errorf("Acquire: err != nil")
 	}
-	if dsf.called != 1 {
+	if dsf.called != 0 {
 		t.Errorf("Acquire: should not call flush")
 	}
 

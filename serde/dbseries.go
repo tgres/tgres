@@ -138,10 +138,10 @@ func (dps *dbSeriesV2) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	aligned_from := dps.from.Truncate(time.Duration(finalGroupByMs) * time.Millisecond)
 
 	if debug {
-		log.Printf("seriesQuerySqlUsingViewAndSeries() sql3 %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
+		log.Printf("seriesQuerySqlUsingViewAndSeries() sqlSelectSeries %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
 			dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 	}
-	rows, err = dps.db.sql3.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
+	rows, err = dps.db.sqlSelectSeries.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 
 	if err != nil {
 		log.Printf("seriesQuery(): error %v", err)

@@ -107,13 +107,16 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	ch := make(chan verticalCache)
+	ch := make(chan *verticalCache)
 	wg.Add(1)
-	go vcacheFlusher(ch, db.VerticalFlusher(), &wg)
+	go vcacheFlusher(ch, db.Flusher(), &wg)
 	wg.Add(1)
-	go vcacheFlusher(ch, db.VerticalFlusher(), &wg)
+	go vcacheFlusher(ch, db.Flusher(), &wg)
 
-	vcache := make(verticalCache)
+	vcache := &verticalCache{
+		dps: make(map[bundleKey]*verticalCacheSegment),
+		dss: make(map[int64]map[int64]interface{}),
+	}
 
 	count := 0
 
@@ -132,7 +135,10 @@ func main() {
 			if count >= batchSize {
 				fmt.Printf("+++ Batch size reached: %v\n", batchSize)
 				ch <- vcache
-				vcache = make(verticalCache)
+				vcache = &verticalCache{
+					dps: make(map[bundleKey]*verticalCacheSegment),
+					dss: make(map[int64]map[int64]interface{}),
+				}
 				totalCount += count
 				count = 0
 			}
@@ -209,14 +215,14 @@ func main() {
 			processAllPoints(ds, wsp)
 
 			for i, rra := range ds.RRAs() {
-				vcache.update(rra.(serde.DbRoundRobinArchiver), latests[i])
+				vcache.updateDps(rra.(serde.DbRoundRobinArchiver), latests[i])
 			}
 
 			// Only flush the DS if LastUpdate has advanced,
 			// otherwise leave as is.
-			if dbds.LastUpdate().After(oldDs.LastUpdate()) {
+			if dbds.Created() || dbds.LastUpdate().After(oldDs.LastUpdate()) {
 				fmt.Printf("Saving DS LastUpdated for %v\n", dbds.Ident())
-				db.Flusher().FlushDataSource(dbds)
+				vcache.updateDss(dbds)
 			}
 
 			count++
@@ -225,8 +231,9 @@ func main() {
 	)
 
 	// final flush
-	if len(vcache) > 0 {
+	if len(vcache.dps) > 0 {
 		ch <- vcache
+		totalCount += count
 	}
 	close(ch)
 	wg.Wait() // Wait for flusher to exit.
@@ -234,7 +241,7 @@ func main() {
 	fmt.Printf("DONE: GRAND TOTAL %d points across %d series in %d SQL ops.\n", totalPoints, totalCount, totalSqlOps)
 }
 
-func vcacheFlusher(ch chan verticalCache, db serde.VerticalFlusher, wg *sync.WaitGroup) {
+func vcacheFlusher(ch chan *verticalCache, db serde.Flusher, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		vcache, ok := <-ch

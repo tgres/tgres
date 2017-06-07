@@ -32,6 +32,12 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 	if dsr.lastupdate == nil {
 		dsr.lastupdate = &time.Time{}
 	}
+	if dsr.value == nil {
+		dsr.value = new(float64)
+	}
+	if dsr.durationMs == nil {
+		dsr.durationMs = new(int64)
+	}
 
 	var ident Ident
 	err := json.Unmarshal(dsr.identJson, &ident)
@@ -50,14 +56,14 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 		lu = now
 	}
 
-	ds := NewDbDataSource(dsr.id, ident,
+	ds := NewDbDataSource(dsr.id, ident, dsr.seg, dsr.idx,
 		rrd.NewDataSource(
 			rrd.DSSpec{
 				Step:       time.Duration(dsr.stepMs) * time.Millisecond,
 				Heartbeat:  hb,
 				LastUpdate: lu,
-				Value:      dsr.value,
-				Duration:   time.Duration(dsr.durationMs) * time.Millisecond,
+				Value:      *dsr.value,
+				Duration:   time.Duration(*dsr.durationMs) * time.Millisecond,
 			},
 		),
 	)
@@ -69,7 +75,7 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 
 func dsRecordFromRow(rows *sql.Rows) (*dsRecord, error) {
 	var dsr dsRecord
-	err := rows.Scan(&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.lastupdate, &dsr.value, &dsr.durationMs, &dsr.created)
+	err := rows.Scan(&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.seg, &dsr.idx, &dsr.lastupdate, &dsr.value, &dsr.durationMs, &dsr.created)
 	return &dsr, err
 }
 
@@ -302,6 +308,9 @@ func singleStmtUpdateArgs(chunks []*arrayUpdateChunk, col string, n int, prefix 
 		dests = append(dests, fmt.Sprintf("%s[$%d:$%d]=$%d", col, n, n+1, n+2))
 		args = append(args, chunk.begin, chunk.end, pq.Array(chunk.vals))
 		n += 3
+	}
+	if len(dests) == 0 {
+		return fmt.Sprintf("%s[0:0]=NULL", col), args
 	}
 	return strings.Join(dests, ","), args
 }

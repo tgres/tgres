@@ -51,7 +51,7 @@ func Test_startstop_doStart(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
 	sr := &fakeSr{}
-	fl := &dsFlusher{db: db, sr: sr}
+	fl := &dsFlusher{db: db.Flusher(), sr: sr}
 	dsc := newDsCache(db, df, fl)
 
 	ch := make(chan interface{})

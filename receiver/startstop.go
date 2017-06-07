@@ -120,9 +120,10 @@ var stopPacedMetricWorker = func(pacedMetricCh chan *pacedMetric, pacedMetricWg 
 }
 
 var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
-	if r.flusher.flusher() == nil { // This serde doesn't support flushing
-		return
-	}
+	// TODO
+	// if r.flusher.flusher() == nil { // This serde doesn't support flushing
+	// 	return
+	// }
 
 	log.Printf("Starting flusher(s)...")
 	r.flusher.start(&r.flusherWg, startWg, r.MinStep, r.NWorkers)

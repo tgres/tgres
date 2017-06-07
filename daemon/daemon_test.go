@@ -116,9 +116,8 @@ func (m *fakeSerde) Search(query serde.SearchQuery) (serde.SearchResult, error) 
 func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	return nil, nil
 }
-func (*fakeSerde) ListDbClientIps() ([]string, error)     { return nil, nil }
-func (*fakeSerde) MyDbAddr() (*string, error)             { return nil, nil }
-func (*fakeSerde) VerticalFlusher() serde.VerticalFlusher { return nil }
+func (*fakeSerde) ListDbClientIps() ([]string, error) { return nil, nil }
+func (*fakeSerde) MyDbAddr() (*string, error)         { return nil, nil }
 
 func (f *fakeSerde) FetchDataSources() ([]rrd.DataSourcer, error) {
 	f.fetchCalled++
@@ -144,6 +143,6 @@ func (f *fakeSerde) FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpe
 	if f.nondb {
 		return rrd.NewDataSource(*receiver.DftDSSPec), nil
 	} else {
-		return serde.NewDbDataSource(0, serde.Ident{"name": "foo"}, rrd.NewDataSource(*receiver.DftDSSPec)), nil
+		return serde.NewDbDataSource(0, serde.Ident{"name": "foo"}, 0, 0, rrd.NewDataSource(*receiver.DftDSSPec)), nil
 	}
 }

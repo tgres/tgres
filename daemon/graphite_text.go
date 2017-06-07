@@ -148,6 +148,9 @@ func (g *graphiteTextServiceManager) graphiteTCPTextServer() error {
 
 	var tempDelay time.Duration
 	for {
+		if g.stopped() {
+			return nil
+		}
 		conn, err := g.listener.Accept()
 
 		if err != nil {

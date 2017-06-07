@@ -169,12 +169,12 @@ func Test_directorProcessOrForward(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
 	sr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: sr}
+	dsf := &dsFlusher{db: db.Flusher(), sr: sr}
 	dsc := newDsCache(db, df, dsf)
 
 	// cds
 	foo := serde.Ident{"name": "foo"}
-	ds := serde.NewDbDataSource(0, foo, rrd.NewDataSource(*DftDSSPec))
+	ds := serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(*DftDSSPec))
 	cds := &cachedDs{DbDataSourcer: ds, mu: &sync.Mutex{}}
 	dp := &incomingDP{cachedIdent: newCachedIdent(serde.Ident{"name": "foo"}), timeStamp: time.Unix(1000, 0), value: 123}
 	cds.appendIncoming(dp)
@@ -222,7 +222,7 @@ func Test_directorProcessOrForward(t *testing.T) {
 
 	// make an cds with points
 	foo = serde.Ident{"name": "foo"}
-	ds = serde.NewDbDataSource(0, foo, rrd.NewDataSource(rrd.DSSpec{
+	ds = serde.NewDbDataSource(0, foo, 0, 0, rrd.NewDataSource(rrd.DSSpec{
 		Step: 10 * time.Second,
 		RRAs: []rrd.RRASpec{
 			rrd.RRASpec{Function: rrd.WMEAN,
@@ -272,7 +272,7 @@ func Test_directorProcessIncomingDP(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
 	scr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: scr}
+	dsf := &dsFlusher{db: db.Flusher(), sr: scr}
 	dsc := newDsCache(db, df, dsf)
 
 	// cluster
@@ -371,7 +371,7 @@ func Test_the_director(t *testing.T) {
 	db := &fakeSerde{}
 	df := &SimpleDSFinder{DftDSSPec}
 	sr := &fakeSr{}
-	dsf := &dsFlusher{db: db, sr: sr}
+	dsf := &dsFlusher{db: db.Flusher(), sr: sr}
 	dsc := newDsCache(db, df, dsf)
 
 	wc.startWg.Add(1)

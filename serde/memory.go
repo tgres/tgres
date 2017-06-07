@@ -37,9 +37,7 @@ func NewMemSerDe() *memSerDe {
 	}
 }
 
-func (m *memSerDe) Fetcher() Fetcher                         { return m }
-func (m *memSerDe) Flusher() Flusher                         { return nil } // Flushing not supported
-func (m *memSerDe) FlushDataSource(ds rrd.DataSourcer) error { return nil }
+func (m *memSerDe) Fetcher() Fetcher { return m }
 
 type srRow struct {
 	ident Ident
@@ -92,7 +90,7 @@ func (m *memSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		return ds, nil
 	}
 	m.lastId++
-	ds := NewDbDataSource(m.lastId, ident, rrd.NewDataSource(*dsSpec))
+	ds := NewDbDataSource(m.lastId, ident, 0, 0, rrd.NewDataSource(*dsSpec))
 	m.byIdent[ident.String()] = ds
 	return ds, nil
 }

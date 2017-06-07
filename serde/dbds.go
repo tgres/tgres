@@ -25,6 +25,8 @@ type DbDataSource struct {
 	rrd.DataSourcer
 	ident   Ident
 	id      int64
+	seg     int64 // segment
+	idx     int64 // array index
 	created bool
 }
 
@@ -32,18 +34,24 @@ type DbDataSourcer interface {
 	rrd.DataSourcer
 	Ident() Ident
 	Id() int64
+	Seg() int64
+	Idx() int64
 	Created() bool
 }
 
 func (ds *DbDataSource) Ident() Ident  { return ds.ident }
 func (ds *DbDataSource) Id() int64     { return ds.id }
 func (ds *DbDataSource) Created() bool { return ds.created }
+func (ds *DbDataSource) Seg() int64    { return ds.seg }
+func (ds *DbDataSource) Idx() int64    { return ds.idx }
 
-func NewDbDataSource(id int64, ident Ident, ds rrd.DataSourcer) *DbDataSource {
+func NewDbDataSource(id int64, ident Ident, seg, idx int64, ds rrd.DataSourcer) *DbDataSource {
 	return &DbDataSource{
 		DataSourcer: ds,
 		id:          id,
 		ident:       ident,
+		seg:         seg,
+		idx:         idx,
 	}
 }
 
@@ -51,6 +59,8 @@ func (ds *DbDataSource) Copy() rrd.DataSourcer {
 	result := &DbDataSource{
 		id:    ds.id,
 		ident: make(Ident, len(ds.ident)),
+		seg:   ds.seg,
+		idx:   ds.idx,
 	}
 	if ds.DataSourcer != nil {
 		result.DataSourcer = ds.DataSourcer.Copy()
@@ -67,7 +77,9 @@ type dsRecord struct {
 	stepMs     int64
 	hbMs       int64
 	lastupdate *time.Time
-	value      float64
-	durationMs int64
+	value      *float64
+	durationMs *int64
+	seg        int64
+	idx        int64
 	created    bool
 }

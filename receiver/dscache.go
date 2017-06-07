@@ -46,7 +46,7 @@ func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBloc
 		db:       db,
 		finder:   finder,
 		dsf:      dsf,
-		maxInact: time.Hour,
+		maxInact: time.Hour, // TODO: Make configurable?
 	}
 	return d
 }
@@ -92,7 +92,7 @@ func (d *dsCache) preLoad() error {
 		if !ok {
 			return fmt.Errorf("preLoad: ds must be a serde.DbDataSourcer")
 		}
-		d.insert(&cachedDs{DbDataSourcer: dbds, mu: &sync.Mutex{}})
+		d.insert(&cachedDs{DbDataSourcer: dbds, mu: &sync.Mutex{}, lastProcess: time.Now()})
 		d.register(dbds)
 	}
 
@@ -105,8 +105,8 @@ func (d *dsCache) getByIdentOrCreateEmpty(ident *cachedIdent) *cachedDs {
 	if result == nil {
 		if spec := d.finder.FindMatchingDSSpec(ident.Ident); spec != nil {
 			// return a cachedDs with nil DataSourcer
-			dbds := serde.NewDbDataSource(0, ident.Ident, nil)
-			result = &cachedDs{DbDataSourcer: dbds, spec: spec, mu: &sync.Mutex{}}
+			dbds := serde.NewDbDataSource(0, ident.Ident, 0, 0, nil)
+			result = &cachedDs{DbDataSourcer: dbds, spec: spec, mu: &sync.Mutex{}, lastProcess: time.Now()}
 			d.insert(result)
 		}
 	}
@@ -153,12 +153,7 @@ func (d *dsCache) evictInact() {
 	defer d.Unlock()
 	for _, cds := range d.byIdent {
 		cds.mu.Lock()
-		// TODO: Relying on LastUpdate() may not be the best practice
-		// because there should be nothing wrong with it being in the
-		// past. We should probably rely on a separate actual time
-		// update timestamp? (Checking for dirty should help with
-		// needless evictions.)
-		if !cds.dirty && !cds.sentToLoader && cds.DbDataSourcer != nil && now.Add(-d.maxInact).After(cds.LastUpdate()) {
+		if !cds.sentToLoader && cds.DbDataSourcer != nil && !cds.lastProcess.IsZero() && now.Add(-d.maxInact).After(cds.lastProcess) {
 			d.rraCount -= len(cds.RRAs())
 			delete(d.byIdent, cds.Ident().String())
 			d.evicted++
@@ -191,8 +186,6 @@ type cachedDs struct {
 	sentToLoader bool
 	lastProcess  time.Time
 	lastFlush    time.Time
-	lastDSFlush  time.Time
-	dirty        bool // for flushDS
 	mu           *sync.Mutex
 }
 
@@ -231,7 +224,6 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	}
 
 	cds.lastProcess = time.Now()
-	cds.dirty = true
 
 	if count < BIG {
 		// leave the backing array in place to avoid extra memory allocations
@@ -279,17 +271,8 @@ func (ds *distDs) Relinquish() error {
 	// vcache is flushed, but this does not need synchronization.
 	//
 	// vcache is fully flushed in flusher.stop()
-
 	if !ds.LastUpdate().IsZero() {
 		ds.dsc.dsf.flushToVCache(ds.DbDataSourcer)
-
-		// TODO This is a hack. The best solution to speed up DS
-		// flushes is to delegate LastUpdate (as well as
-		// value/duration) to a separate array-based table, just like
-		// we do with rra_latest.
-		if cds := ds.dsc.getByIdent(newCachedIdent(ds.Ident())); cds != nil && cds.dirty {
-			ds.dsc.dsf.flushDS(ds.DbDataSourcer, true)
-		}
 	}
 	ds.dsc.delete(ds.Ident())
 

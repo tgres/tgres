@@ -149,7 +149,8 @@ func NewWithMaxQueue(db serde.SerDe, finder MatchingDSSpecFinder, maxQueue int) 
 		NWorkers:          1,
 	}
 
-	r.flusher = &dsFlusher{db: db.Flusher(), vdb: db.VerticalFlusher(), sr: r}
+	//r.flusher = &dsFlusher{db: db.Flusher(), vdb: db.VerticalFlusher(), sr: r}
+	r.flusher = &dsFlusher{db: db.Flusher(), sr: r}
 	r.dsc = newDsCache(db.Fetcher(), finder, r.flusher)
 	go dsCachePeriodicCleanup(r.dsc)
 

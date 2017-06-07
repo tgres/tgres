@@ -51,19 +51,17 @@ type pgvSerDe struct {
 	prefix string
 	listen *pq.Listener
 
-	sql3, sql6                   *sql.Stmt
+	sqlSelectSeries              *sql.Stmt
 	sqlSelectDSByIdent           *sql.Stmt
 	sqlInsertDS                  *sql.Stmt
-	sqlUpdateDS                  *sql.Stmt
+	sqlInsertDSState             *sql.Stmt
 	sqlSelectRRAsByDsId          *sql.Stmt
 	sqlInsertRRA                 *sql.Stmt
-	sqlUpdateRRA                 *sql.Stmt
 	sqlInsertRRABundle           *sql.Stmt
 	sqlSelectRRABundleByStepSize *sql.Stmt
 	sqlSelectRRABundle           *sql.Stmt
-	sqlInsertRRALatest           *sql.Stmt
-	sqlSelectRRALatest           *sql.Stmt
-	sqlUpdateRRALatest           *sql.Stmt
+	sqlInsertRRAState            *sql.Stmt
+	sqlSelectRRAState            *sql.Stmt
 	sqlInsertTs                  *sql.Stmt
 	sqlUpdateTs                  *sql.Stmt
 }
@@ -78,21 +76,20 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 			return nil, err
 		}
 		if err := p.createTablesIfNotExist(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("createTablesIfNotExist: %v", err)
 		}
 		if err := p.prepareSqlStatements(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("prepareSqlStatements: %v", err)
 		}
 
 		return p, nil
 	}
 }
 
-func (p *pgvSerDe) Fetcher() Fetcher                 { return p }
-func (p *pgvSerDe) Flusher() Flusher                 { return p }
-func (p *pgvSerDe) VerticalFlusher() VerticalFlusher { return p }
-func (p *pgvSerDe) EventListener() EventListener     { return p }
-func (p *pgvSerDe) DbAddresser() DbAddresser         { return p }
+func (p *pgvSerDe) Fetcher() Fetcher             { return p }
+func (p *pgvSerDe) Flusher() Flusher             { return p }
+func (p *pgvSerDe) EventListener() EventListener { return p }
+func (p *pgvSerDe) DbAddresser() DbAddresser     { return p }
 
 // A hack to use the DB to see who else is connected
 func (p *pgvSerDe) ListDbClientIps() ([]string, error) {
@@ -164,17 +161,21 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		return err
 	}
 
-	if p.sqlUpdateRRA, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
-		return err
-	}
-	if p.sql3, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
+	// if p.sqlUpdateRRA, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
+	// 	return err
+	// }
+	if p.sqlSelectSeries, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
 		"LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = $4 AND rra_id = $5 "+
 		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt",
 		p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlSelectDSByIdent, err = p.dbConn.Prepare(fmt.Sprintf(
-		"SELECT id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, false AS created FROM  %[1]sds WHERE ident = $1",
+		"SELECT id, ident, step_ms, heartbeat_ms, ds.seg, ds.idx, "+
+			"dsst.lastupdate[ds.idx] AS lastupdate, dsst.value[ds.idx] AS value, dsst.duration_ms[ds.idx] AS duration_ms, "+
+			"false AS created "+
+			"FROM %[1]sds ds JOIN %[1]sds_state dsst ON ds.seg = dsst.seg "+
+			"WHERE ident = $1",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -182,21 +183,25 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		// Here created is a trick to determine whether this was an INSERT or an UPDATE
 		"INSERT INTO %[1]sds AS ds (ident, step_ms, heartbeat_ms) VALUES ($1, $2, $3) "+
 			"ON CONFLICT (ident) DO UPDATE SET created = false "+
-			"RETURNING id, ident, step_ms, heartbeat_ms, lastupdate, value, duration_ms, created", p.prefix)); err != nil {
+			"RETURNING id, ident, step_ms, heartbeat_ms, seg, idx, "+
+			"NULL::TIMESTAMPTZ AS lastupdate, 'NaN'::DOUBLE PRECISION AS value, "+
+			"0::BIGINT AS duration_ms, created", p.prefix)); err != nil {
+		return err
+	}
+	if p.sqlInsertDSState, err = p.dbConn.Prepare(fmt.Sprintf(
+		"INSERT INTO %[1]sds_state AS dss (seg) VALUES ($1) ON CONFLICT(seg) DO NOTHING",
+		p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlInsertRRA, err = p.dbConn.Prepare(fmt.Sprintf(
 		"INSERT INTO %[1]srra AS rra (ds_id, rra_bundle_id, pos, seg, idx, cf, xff) VALUES ($1, $2, $3, $4, $5, $6, $7) "+
 			"ON CONFLICT (ds_id, rra_bundle_id, cf) DO UPDATE SET ds_id = rra.ds_id "+
-			"RETURNING id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff, value, duration_ms", p.prefix)); err != nil {
+			"RETURNING id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff", p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlSelectRRAsByDsId, err = p.dbConn.Prepare(fmt.Sprintf(
-		"SELECT id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff, value, duration_ms FROM %[1]srra rra WHERE ds_id = $1 ",
+		"SELECT id, ds_id, rra_bundle_id, pos, seg, idx, cf, xff FROM %[1]srra rra WHERE ds_id = $1 ",
 		p.prefix)); err != nil {
-		return err
-	}
-	if p.sqlUpdateDS, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]sds SET lastupdate = $1, value = $2, duration_ms = $3 WHERE id = $4", p.prefix)); err != nil {
 		return err
 	}
 	if p.sqlSelectRRABundleByStepSize, err = p.dbConn.Prepare(fmt.Sprintf(
@@ -215,13 +220,13 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sqlSelectRRALatest, err = p.dbConn.Prepare(fmt.Sprintf(
-		"SELECT latest[$3] AS latest FROM %[1]srra_latest AS rl WHERE rl.rra_bundle_id = $1 AND rl.seg = $2",
+	if p.sqlSelectRRAState, err = p.dbConn.Prepare(fmt.Sprintf(
+		"SELECT latest[$3], value[$3], duration_ms[$3] AS latest FROM %[1]srra_state AS rl WHERE rl.rra_bundle_id = $1 AND rl.seg = $2",
 		p.prefix)); err != nil {
 		return err
 	}
-	if p.sqlInsertRRALatest, err = p.dbConn.Prepare(fmt.Sprintf(
-		"INSERT INTO %[1]srra_latest AS rra_latest (rra_bundle_id, seg) VALUES ($1, $2) ON CONFLICT(rra_bundle_id, seg) DO NOTHING",
+	if p.sqlInsertRRAState, err = p.dbConn.Prepare(fmt.Sprintf(
+		"INSERT INTO %[1]srra_state AS rra_state (rra_bundle_id, seg) VALUES ($1, $2) ON CONFLICT(rra_bundle_id, seg) DO NOTHING",
 		p.prefix)); err != nil {
 		return err
 	}
@@ -232,18 +237,25 @@ const PgSegmentWidth = 200 // TODO Make me configurable
 
 func (p *pgvSerDe) createTablesIfNotExist() error {
 	create_sql := `
+       -- NB: seg and idx are based on id, using lastval()
        CREATE TABLE IF NOT EXISTS %[1]sds (
        id SERIAL NOT NULL PRIMARY KEY,
        ident JSONB NOT NULL DEFAULT '{}' CONSTRAINT nonempty_ident CHECK (ident <> '{}'),
        step_ms BIGINT NOT NULL,
        heartbeat_ms BIGINT NOT NULL,
-       lastupdate TIMESTAMPTZ,
-       value DOUBLE PRECISION NOT NULL DEFAULT 'NaN',
-       duration_ms BIGINT NOT NULL DEFAULT 0,
+       seg INT NOT NULL DEFAULT (lastval()-1) / %[2]d,
+       idx INT NOT NULL DEFAULT mod(lastval()-1, %[2]d)+1,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
        created BOOL NOT NULL DEFAULT true);
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ds_ident_uniq ON %[1]sds (ident);
        CREATE INDEX IF NOT EXISTS %[1]sidx_ds_ident ON %[1]sds USING gin(ident);
+
+       CREATE TABLE IF NOT EXISTS %[1]sds_state (
+       seg INT NOT NULL PRIMARY KEY,
+       lastupdate TIMESTAMPTZ[] NOT NULL DEFAULT '{}',
+       duration_ms BIGINT[] NOT NULL DEFAULT '{}',
+       value DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
 
        CREATE TABLE IF NOT EXISTS %[1]srra_bundle (
        id SERIAL NOT NULL PRIMARY KEY,
@@ -254,12 +266,14 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_bundle_spec ON %[1]srra_bundle (step_ms, size);
 
-       CREATE TABLE IF NOT EXISTS %[1]srra_latest (
+       CREATE TABLE IF NOT EXISTS %[1]srra_state (
        rra_bundle_id INT NOT NULL REFERENCES %[1]srra_bundle(id) ON DELETE CASCADE,
        seg INT NOT NULL,
-       latest TIMESTAMPTZ[] NOT NULL DEFAULT '{}');
+       latest TIMESTAMPTZ[] NOT NULL DEFAULT '{}',
+       duration_ms BIGINT[] NOT NULL DEFAULT '{}',
+       value DOUBLE PRECISION[] NOT NULL DEFAULT '{}');
 
-       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_latest_bundle_id_seg ON %[1]srra_latest (rra_bundle_id, seg);
+       CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_rra_state_bundle_id_seg ON %[1]srra_state (rra_bundle_id, seg);
 
        CREATE TABLE IF NOT EXISTS %[1]srra (
        id SERIAL NOT NULL PRIMARY KEY,
@@ -289,6 +303,82 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
 		return err
 	}
 
+	// TODO: Remove this later. And we should consider a better migration mechanism.
+	migrate_sql := `
+DO $$
+  DECLARE r RECORD;
+  DECLARE q TEXT;
+BEGIN
+  IF (SELECT COUNT(1) FROM %[1]sds) = 0 OR (SELECT COUNT(1) FROM %[1]sds_state) > 0 THEN
+    -- empty db OR ds_state is populated, assume no migration necessary
+    RETURN;
+  END IF;
+
+  -- DS STATE
+
+  -- set seg and idx
+  ALTER TABLE %[1]sds ADD COLUMN seg INT NOT NULL DEFAULT 0;
+  ALTER TABLE %[1]sds ADD COLUMN idx INT NOT NULL DEFAULT 0;
+  UPDATE %[1]sds SET seg = (id - 1) / %[2]d;
+  UPDATE %[1]sds SET idx = mod(id - 1, %[2]d) + 1;
+  ALTER TABLE %[1]sds ALTER COLUMN seg SET DEFAULT (lastval()-1) / %[2]d;
+  ALTER TABLE %[1]sds ALTER COLUMN idx SET DEFAULT mod(lastval()-1, %[2]d)+1;
+
+  -- good to have
+  ALTER TABLE %[1]sds ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+  -- populate the data in ds_state
+  INSERT INTO %[1]sds_state(seg) SELECT DISTINCT(seg) AS seg FROM %[1]sds;
+
+  FOR r IN SELECT id, seg, idx, lastupdate, duration_ms, value FROM %[1]sds ORDER BY id
+  LOOP
+    q := 'UPDATE %[1]sds_state SET'
+         || ' lastupdate[' || r.idx || '] = ' || quote_nullable(r.lastupdate)
+         || ',duration_ms[' || r.idx || '] = ' || r.duration_ms
+         || ',value[' || r.idx || '] = ' || quote_nullable(r.value::TEXT) || '::DOUBLE PRECISION'
+         || ' WHERE seg = ' || r.seg;
+    EXECUTE q;
+  END LOOP;
+
+  -- drop the columns
+  ALTER TABLE %[1]sds DROP COLUMN lastupdate;
+  ALTER TABLE %[1]sds DROP COLUMN duration_ms;
+  ALTER TABLE %[1]sds DROP COLUMN value;
+
+  -- RRA STATE
+
+  -- drop the newly-created rra_state and use the already existing rra_latest
+  DROP TABLE IF EXISTS %[1]srra_state;
+  ALTER TABLE %[1]srra_latest RENAME TO %[1]srra_state;
+  ALTER INDEX %[1]sidx_rra_latest_bundle_id_seg RENAME TO %[1]sidx_rra_state_bundle_id_seg;
+  ALTER TABLE %[1]srra_state RENAME CONSTRAINT %[1]srra_latest_rra_bundle_id_fkey TO %[1]srra_state_rra_bundle_id_fkey;
+
+  -- add columns for duration and value
+  ALTER TABLE %[1]srra_state ADD COLUMN duration_ms BIGINT[] NOT NULL DEFAULT '{}';
+  ALTER TABLE %[1]srra_state ADD COLUMN value DOUBLE PRECISION[] NOT NULL DEFAULT '{}';
+
+  -- populate duration and value in rra_state
+  FOR r IN SELECT id, rra_bundle_id, seg, idx, duration_ms, value FROM %[1]srra WHERE duration_ms > 0 ORDER BY id
+  LOOP
+    q := 'UPDATE %[1]srra_state SET'
+         || ' duration_ms[' || r.idx || '] = ' || r.duration_ms
+         || ',value[' || r.idx || '] = ' || quote_nullable(r.value::TEXT) || '::DOUBLE PRECISION'
+         || ' WHERE rra_bundle_id = ' || r.rra_bundle_id || ' AND seg = ' || r.seg;
+    EXECUTE q;
+  END LOOP;
+
+  -- drop the columns
+  ALTER TABLE %[1]srra DROP COLUMN duration_ms;
+  ALTER TABLE %[1]srra DROP COLUMN value;
+
+END
+$$;
+`
+	if _, err := p.dbConn.Exec(fmt.Sprintf(migrate_sql, p.prefix, PgSegmentWidth)); err != nil {
+		log.Printf("ERROR: migrate failed: %v", err)
+		return err
+	}
+
 	// NB: BEGIN > DROP > CREATE > COMMIT is the equivalent of CREATE OR REPLACE
 	// See https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis
 
@@ -297,7 +387,7 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
   -- sub-queries are for clarity, they do not affect performance here
   -- (as best i can tell explains are identical between this and non-nested)
 BEGIN;
-DROP VIEW %[1]stv;
+DROP VIEW IF EXISTS %[1]stv;
 CREATE VIEW %[1]stv AS
     SELECT ds_id, rra_id, step_ms, t, r
       FROM (
@@ -314,15 +404,15 @@ CREATE VIEW %[1]stv AS
           SELECT rra.ds_id AS ds_id
                , rra.id AS rra_id
                , rra_bundle.step_ms AS step_ms
-               , date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 AS latest_ms
-               , rra_latest.latest[rra.idx] AS latest
+               , date_part('epoch'::text, rra_state.latest[rra.idx])::bigint * 1000 AS latest_ms
+               , rra_state.latest[rra.idx] AS latest
                , rra_bundle.size AS size
                , ts.i AS i
                , dp[rra.idx] AS r
                , ver[rra.idx] AS ver
             FROM %[1]srra AS rra
             JOIN %[1]srra_bundle AS rra_bundle ON rra_bundle.id = rra.rra_bundle_id
-            JOIN %[1]srra_latest AS rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
+            JOIN %[1]srra_state AS rra_state ON rra_state.rra_bundle_id = rra_bundle.id AND rra_state.seg = rra.seg
             JOIN %[1]sts AS ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
           ) a
         ) b
@@ -331,7 +421,7 @@ WHERE expected_version = coalesce(ver, expected_version);
 
 -- debug view
 -- TODO add version stuff to it
-DROP VIEW %[1]stvd;
+DROP VIEW IF EXISTS %[1]stvd;
 CREATE VIEW %[1]stvd AS
   SELECT
       ds_id
@@ -350,22 +440,22 @@ CREATE VIEW %[1]stvd AS
      SELECT
         rra.ds_id AS ds_id
        ,rra.id AS rra_id
-       ,rra_latest.latest[rra.idx] - '00:00:00.001'::interval * rra_bundle.step_ms::double precision *
-          mod(rra_bundle.size + mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
+       ,rra_state.latest[rra.idx] - '00:00:00.001'::interval * rra_bundle.step_ms::double precision *
+          mod(rra_bundle.size + mod(date_part('epoch'::text, rra_state.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
           ts.i, rra_bundle.size::bigint)::double precision AS t
        ,ts.dp[rra.idx] AS r
        ,'00:00:00.001'::interval * rra_bundle.step_ms::double precision AS step
        ,i AS i
-       ,mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) AS last_i
-       ,date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 AS last_t
-       ,mod(rra_bundle.size + mod(date_part('epoch'::text, rra_latest.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
+       ,mod(date_part('epoch'::text, rra_state.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) AS last_i
+       ,date_part('epoch'::text, rra_state.latest[rra.idx])::bigint * 1000 AS last_t
+       ,mod(rra_bundle.size + mod(date_part('epoch'::text, rra_state.latest[rra.idx])::bigint * 1000 / rra_bundle.step_ms, rra_bundle.size::bigint) -
                    ts.i, rra_bundle.size::bigint)::double precision AS slot_distance
        ,rra.seg AS seg
        ,rra.idx AS idx
        ,rra.pos AS pos
      FROM %[1]srra rra
      JOIN %[1]srra_bundle rra_bundle ON rra_bundle.id = rra.rra_bundle_id
-     JOIN %[1]srra_latest rra_latest ON rra_latest.rra_bundle_id = rra_bundle.id AND rra_latest.seg = rra.seg
+     JOIN %[1]srra_state rra_state ON rra_state.rra_bundle_id = rra_bundle.id AND rra_state.seg = rra.seg
      JOIN %[1]sts ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
   ) foo;
 COMMIT;
@@ -418,7 +508,7 @@ func rraBundleRecordFromRow(rows *sql.Rows) (*rraBundleRecord, error) {
 func rraRecordFromRow(rows *sql.Rows) (*rraRecord, error) {
 
 	var rra rraRecord
-	err := rows.Scan(&rra.id, &rra.dsId, &rra.bundleId, &rra.pos, &rra.seg, &rra.idx, &rra.cf, &rra.xff, &rra.value, &rra.durationMs)
+	err := rows.Scan(&rra.id, &rra.dsId, &rra.bundleId, &rra.pos, &rra.seg, &rra.idx, &rra.cf, &rra.xff)
 	if err != nil {
 		log.Printf("rraRecordFromRow(): error scanning row: %v", err)
 		return nil, err
@@ -427,15 +517,28 @@ func rraRecordFromRow(rows *sql.Rows) (*rraRecord, error) {
 	return &rra, nil
 }
 
-func rraFromRRARecordAndBundle(rraRec *rraRecord, bundle *rraBundleRecord, latest time.Time) (*DbRoundRobinArchive, error) {
+func rraFromRRARecordStateAndBundle(rraRec *rraRecord, stateRec *rraStateRecord, bundle *rraBundleRecord) (*DbRoundRobinArchive, error) {
+
+	if stateRec == nil {
+		stateRec = &rraStateRecord{}
+	}
+	if stateRec.latest == nil {
+		stateRec.latest = &time.Time{}
+	}
+	if stateRec.value == nil {
+		stateRec.value = new(float64)
+	}
+	if stateRec.durationMs == nil {
+		stateRec.durationMs = new(int64)
+	}
 
 	spec := rrd.RRASpec{
 		Step:     time.Duration(bundle.stepMs) * time.Millisecond,
 		Span:     time.Duration(bundle.stepMs*bundle.size) * time.Millisecond,
 		Xff:      rraRec.xff,
-		Latest:   latest,
-		Value:    rraRec.value,
-		Duration: time.Duration(rraRec.durationMs) * time.Millisecond,
+		Latest:   *stateRec.latest,
+		Value:    *stateRec.value,
+		Duration: time.Duration(*stateRec.durationMs) * time.Millisecond,
 	}
 
 	switch strings.ToUpper(rraRec.cf) {
@@ -485,13 +588,20 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
 	const sql = `
-	SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.lastupdate, ds.value, ds.duration_ms,
-	       rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff, rra.value, rra.duration_ms,
-	       b.id, b.step_ms, b.size, b.width, rl.latest[rra.idx] AS latest
+	SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
+           dsst.lastupdate[ds.idx] AS lastupdate,
+           dsst.value[ds.idx] AS value,
+           dsst.duration_ms[ds.idx] AS duration_ms,
+	       rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
+	       b.id, b.step_ms, b.size, b.width,
+           rs.latest[rra.idx] AS latest,
+           rs.value[rra.idx] AS value,
+           rs.duration_ms[rra.idx] AS duration_ms
 	FROM %[1]sds ds
+    JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
 	JOIN %[1]srra rra ON rra.ds_id = ds.id
 	JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-	JOIN %[1]srra_latest AS rl ON rl.rra_bundle_id = b.id AND rl.seg = rra.seg
+	JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
     ORDER BY ds.id, rra.id`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
@@ -519,24 +629,24 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 			dsr    dsRecord
 			rrar   rraRecord
 			bundle rraBundleRecord
-			latest *time.Time
+			state  rraStateRecord
 		)
 
 		err = rows.Scan(
-			&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.lastupdate, &dsr.value, &dsr.durationMs, // DS
-			&rrar.id, &rrar.dsId, &rrar.bundleId, &rrar.pos, &rrar.seg, &rrar.idx, &rrar.cf, &rrar.xff, &rrar.value, &rrar.durationMs, // RRA
+			&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.seg, &dsr.idx, &dsr.lastupdate, &dsr.value, &dsr.durationMs, // DS
+			&rrar.id, &rrar.dsId, &rrar.bundleId, &rrar.pos, &rrar.seg, &rrar.idx, &rrar.cf, &rrar.xff, // RRA
 			&bundle.id, &bundle.stepMs, &bundle.size, &bundle.width, // Bundle
-			&latest) // latest
+			&state.latest, &state.value, &state.durationMs) // RRA State
 		if err != nil {
 			return nil, fmt.Errorf("error scanning: %v", err)
 		}
 
-		if latest == nil {
-			latest = &time.Time{}
+		if state.latest == nil {
+			state.latest = &time.Time{}
 		}
 
-		if maxCurrentLatest.Before(*latest) {
-			maxCurrentLatest = *latest
+		if maxCurrentLatest.Before(*state.latest) {
+			maxCurrentLatest = *state.latest
 		}
 
 		if lastDsr == nil || lastDsr.id != dsr.id {
@@ -571,7 +681,7 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 		}
 
 		var rra *DbRoundRobinArchive
-		rra, err = rraFromRRARecordAndBundle(&rrar, &bundle, *latest)
+		rra, err = rraFromRRARecordStateAndBundle(&rrar, &state, &bundle)
 		if err != nil {
 			return nil, err
 		}
@@ -645,25 +755,23 @@ func (p *pgvSerDe) fetchRRABundle(id int64) (*rraBundleRecord, error) {
 	return nil, nil // not found
 }
 
-func (p *pgvSerDe) fetchRRALatest(bundleId, seg, idx int64) (time.Time, error) {
-	rows, err := p.sqlSelectRRALatest.Query(bundleId, seg, idx)
+func (p *pgvSerDe) fetchRRAState(bundleId, seg, idx int64) (*rraStateRecord, error) {
+	rows, err := p.sqlSelectRRAState.Query(bundleId, seg, idx)
 	if err != nil {
-		log.Printf("fetchRRALatest(): error querying database: %v", err)
-		return time.Time{}, err
+		log.Printf("fetchRRAState(): error querying database: %v", err)
+		return nil, err
 	}
 	defer rows.Close()
 
 	if rows.Next() {
-		var latest *time.Time
-		if err := rows.Scan(&latest); err != nil {
-			log.Printf("fetchRRALatest(): error scanning: %v", err)
-			return time.Time{}, err
+		var state rraStateRecord
+		if err := rows.Scan(&state.latest, &state.value, &state.durationMs); err != nil {
+			log.Printf("fetchRRAState(): error scanning: %v", err)
+			return nil, err
 		}
-		if latest != nil {
-			return *latest, nil
-		}
+		return &state, nil
 	}
-	return time.Time{}, nil // not found
+	return nil, nil // not found
 }
 
 func (p *pgvSerDe) fetchRoundRobinArchives(ds *DbDataSource) ([]rrd.RoundRobinArchiver, error) {
@@ -691,16 +799,16 @@ func (p *pgvSerDe) fetchRoundRobinArchives(ds *DbDataSource) ([]rrd.RoundRobinAr
 			log.Printf("fetchRoundRobinArchives(): error2: %v", err)
 			return nil, err
 		}
-		// latest
-		var latest time.Time
-		latest, err = p.fetchRRALatest(bundle.id, rraRec.seg, rraRec.idx)
+		// state
+		var stateRec *rraStateRecord
+		stateRec, err = p.fetchRRAState(bundle.id, rraRec.seg, rraRec.idx)
 		if err != nil {
 			log.Printf("fetchRoundRobinArchives(): error3: %v", err)
 			return nil, err
 		}
 		// rra (finally)
 		var rra *DbRoundRobinArchive
-		rra, err = rraFromRRARecordAndBundle(rraRec, bundle, latest)
+		rra, err = rraFromRRARecordStateAndBundle(rraRec, stateRec, bundle)
 		if err != nil {
 			log.Printf("fetchRoundRobinArchives(): error4: %v", err)
 			return nil, err
@@ -711,38 +819,42 @@ func (p *pgvSerDe) fetchRoundRobinArchives(ds *DbDataSource) ([]rrd.RoundRobinAr
 	return rras, nil
 }
 
-func (p *pgvSerDe) FlushDataSource(ds rrd.DataSourcer) error {
-	dbds, ok := ds.(DbDataSourcer)
-	if !ok {
-		return fmt.Errorf("ds must be a DbDataSourcer to flush.")
-	}
-	if debug {
-		log.Printf("FlushDataSource(): Id %d: LastUpdate: %v, Value: %v, Duration: %v", dbds.Id(), ds.LastUpdate(), ds.Value(), ds.Duration())
-	}
-	durationMs := ds.Duration().Nanoseconds() / 1e6
-	if res, err := p.sqlUpdateDS.Exec(ds.LastUpdate(), ds.Value(), durationMs, dbds.Id()); err != nil {
-		// TODO Check number of rows updated - what if this DS does not exist in the DB?
-		log.Printf("FlushDataSource(): database error: %v flushing data source %#v", err, ds)
-		return err
-	} else if affected, _ := res.RowsAffected(); affected == 0 {
-		return fmt.Errorf("Unable to update DS row for id: %d", dbds.Id())
-	}
+func (p *pgvSerDe) FlushDSStates(seg int64, lastupdate, value, duration map[int64]interface{}) (sqlOps int, err error) {
 
-	for _, rra := range ds.RRAs() {
-		drra, ok := rra.(DbRoundRobinArchiver)
-		if !ok { // If this is not a DbRoundRobinArchive, we cannot flush
-			return fmt.Errorf("rra must be a DbRoundRobinArchiver to flush.")
+	luChunks := arrayUpdateChunks(lastupdate)
+	durChunks := arrayUpdateChunks(duration)
+	valChunks := arrayUpdateChunks(value)
+
+	offset := 2
+	dest1, args := singleStmtUpdateArgs(luChunks, "lastupdate", offset, []interface{}{seg})
+	offset += 3 * len(luChunks)
+	dest2, args := singleStmtUpdateArgs(valChunks, "value", offset, args)
+	offset += 3 * len(valChunks)
+	dest3, args := singleStmtUpdateArgs(durChunks, "duration_ms", offset, args)
+
+	stmt := fmt.Sprintf("UPDATE %[1]sds_state AS dss SET %s, %s, %s WHERE seg = $1", p.prefix, dest1, dest2, dest3)
+	res, err := p.dbConn.Exec(stmt, args...)
+	if err != nil {
+		return 0, err
+	}
+	sqlOps++
+
+	if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
+		insert := fmt.Sprintf("INSERT INTO %[1]sds_state AS dss (seg) VALUES ($1) ON CONFLICT(seg) DO NOTHING", p.prefix)
+		if _, err = p.dbConn.Exec(insert, seg); err != nil {
+			return 0, err
 		}
-
-		if _, err := p.sqlUpdateRRA.Exec(rra.Value(), rra.Duration().Nanoseconds()/1e6, drra.Id()); err != nil {
-			return err
+		if res, err := p.dbConn.Exec(stmt, args...); err != nil {
+			return 0, err
+		} else if affected, _ := res.RowsAffected(); affected == 0 {
+			return 0, fmt.Errorf("Unable to update row?")
 		}
+		sqlOps++
 	}
-
-	return nil
+	return sqlOps, nil
 }
 
-func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps, vers map[int64]interface{}) (sqlOps int, err error) {
+func (p *pgvSerDe) FlushDataPoints(bundle_id, seg, i int64, dps, vers map[int64]interface{}) (sqlOps int, err error) {
 	// Due to the way PG array syntax works, we use two different
 	// methods of updating data points. When the data points updated
 	// are *one* contiguous chunk, we can use the form array[a:b] =
@@ -790,6 +902,7 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps, vers map[int64
 			} else if affected, _ := res.RowsAffected(); affected == 0 {
 				return 0, fmt.Errorf("Unable to update row?")
 			}
+			sqlOps++
 		}
 		return sqlOps, nil
 	} else {
@@ -829,17 +942,20 @@ func (p *pgvSerDe) VerticalFlushDPs(bundle_id, seg, i int64, dps, vers map[int64
 	}
 }
 
-func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) (sqlOps int, err error) {
+func (p *pgvSerDe) FlushRRAStates(bundle_id, seg int64, latests, value, duration map[int64]interface{}) (sqlOps int, err error) {
 
-	ilatests := make(map[int64]interface{})
-	for k, v := range latests {
-		ilatests[k] = v
-	}
-	chunks := arrayUpdateChunks(ilatests)
+	latChunks := arrayUpdateChunks(latests)
+	valChunks := arrayUpdateChunks(value)
+	durChunks := arrayUpdateChunks(duration)
 
-	dest, args := singleStmtUpdateArgs(chunks, "latest", 3, []interface{}{bundle_id, seg})
-	stmt := fmt.Sprintf("UPDATE %[1]srra_latest AS rra_latest SET %s WHERE rra_bundle_id = $1 AND seg = $2", p.prefix, dest)
+	offset := 3
+	dest1, args := singleStmtUpdateArgs(latChunks, "latest", offset, []interface{}{bundle_id, seg})
+	offset += 3 * len(latChunks)
+	dest2, args := singleStmtUpdateArgs(valChunks, "value", offset, args)
+	offset += 3 * len(valChunks)
+	dest3, args := singleStmtUpdateArgs(durChunks, "duration_ms", offset, args)
 
+	stmt := fmt.Sprintf("UPDATE %[1]srra_state AS rra_state SET %s, %s, %s WHERE rra_bundle_id = $1 AND seg = $2", p.prefix, dest1, dest2, dest3)
 	res, err := p.dbConn.Exec(stmt, args...)
 	if err != nil {
 		return 0, err
@@ -847,7 +963,7 @@ func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]
 	sqlOps++
 
 	if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
-		if _, err = p.sqlInsertRRALatest.Exec(bundle_id, seg); err != nil {
+		if _, err = p.sqlInsertRRAState.Exec(bundle_id, seg); err != nil {
 			return 0, err
 		}
 		if res, err := p.dbConn.Exec(stmt, args...); err != nil {
@@ -855,6 +971,7 @@ func (p *pgvSerDe) VerticalFlushLatests(bundle_id, seg int64, latests map[int64]
 		} else if affected, _ := res.RowsAffected(); affected == 0 {
 			return 0, fmt.Errorf("Unable to update row?")
 		}
+		sqlOps++
 	}
 	return sqlOps, nil
 }
@@ -978,10 +1095,15 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 			return nil, err
 		}
 
-		latest := rraSpec.Latest
+		dur := rraSpec.Duration.Nanoseconds() / 1e6
+		rraState := &rraStateRecord{
+			latest:     &rraSpec.Latest,
+			durationMs: &dur,
+			value:      &rraSpec.Value,
+		}
 
 		var rra *DbRoundRobinArchive
-		rra, err = rraFromRRARecordAndBundle(rraRec, bundle, latest)
+		rra, err = rraFromRRARecordStateAndBundle(rraRec, rraState, bundle)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error3: %v", err)
 			return nil, err

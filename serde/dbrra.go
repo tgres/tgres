@@ -131,14 +131,20 @@ type rraBundleRecord struct {
 // Representation of a row in the rra table - there is not enough
 // information here to create a proper DbRoundRobinArchive in it.
 type rraRecord struct {
-	id         int64
-	dsId       int64
+	id       int64
+	dsId     int64
+	bundleId int64
+	pos      int64
+	seg      int64
+	idx      int64
+	cf       string
+	xff      float32
+}
+
+type rraStateRecord struct {
 	bundleId   int64
-	pos        int64
 	seg        int64
-	idx        int64
-	cf         string
-	xff        float32
-	value      float64
-	durationMs int64
+	latest     *time.Time
+	durationMs *int64
+	value      *float64
 }

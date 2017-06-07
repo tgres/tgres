@@ -71,18 +71,14 @@ type EventListener interface {
 }
 
 type Flusher interface {
-	FlushDataSource(ds rrd.DataSourcer) error
-}
-
-type VerticalFlusher interface {
-	VerticalFlushDPs(bunlde_id, seg, i int64, dps, vers map[int64]interface{}) (int, error)
-	VerticalFlushLatests(bundle_id, seg int64, latests map[int64]time.Time) (int, error)
+	FlushDataPoints(bunlde_id, seg, i int64, dps, vers map[int64]interface{}) (int, error)
+	FlushDSStates(seg int64, lastupdate, value, duration map[int64]interface{}) (int, error)
+	FlushRRAStates(bundle_id, seg int64, latests, value, duration map[int64]interface{}) (int, error)
 }
 
 type SerDe interface {
 	Fetcher() Fetcher
 	Flusher() Flusher
-	VerticalFlusher() VerticalFlusher
 	EventListener() EventListener
 }
 
