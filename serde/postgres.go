@@ -388,10 +388,37 @@ $$;
 	// See https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis
 
 	create_sql = `
+BEGIN;
+
+-- a view do simplify looking at DSs
+DROP VIEW IF EXISTS %[1]sdsv;
+CREATE VIEW %[1]sdsv AS
+  SELECT id, ident, step_ms, heartbeat_ms, created_at,
+         dss.lastupdate[ds.idx] AS lastupdate,
+         dss.value[ds.idx] AS value,
+         dss.duration_ms[ds.idx] AS duration_ms,
+         ds.seg, idx
+    FROM ds AS ds
+    JOIN %[1]sds_state AS dss
+      ON ds.seg = dss.seg;
+
+-- a view to simplify looking at RRAs
+DROP VIEW IF EXISTS %[1]srrav;
+CREATE VIEW %[1]srrav AS
+  SELECT rra.id, ds_id, cf, xff, size,
+         '00:00:00.001'::interval * step_ms AS step,
+         '00:00:00.001'::interval * step_ms * size AS span,
+         rs.latest[rra.idx] AS latest,
+         rs.duration_ms[rra.idx] AS duration_ms,
+         rs.value[rra.idx] AS value,
+         rra.seg, idx, rra.rra_bundle_id
+    FROM %[1]srra AS rra
+    JOIN %[1]srra_bundle AS rb ON rra.rra_bundle_id = rb.id
+    JOIN %[1]srra_state AS rs ON rb.id = rs.rra_bundle_id AND rra.seg = rs.seg;
+
 -- normal view
   -- sub-queries are for clarity, they do not affect performance here
   -- (as best i can tell explains are identical between this and non-nested)
-BEGIN;
 DROP VIEW IF EXISTS %[1]stv;
 CREATE VIEW %[1]stv AS
     SELECT ds_id, rra_id, step_ms, t, r
