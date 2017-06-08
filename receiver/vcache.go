@@ -39,21 +39,23 @@ type verticalCacheSegment struct {
 	// step/size.
 	rows map[int64]crossRRAPoints
 	// The latest timestamp for RRAs, keyed by RRA.pos.
-	latests     map[int64]time.Time // rra.latest
-	value       map[int64]float64
-	duration    map[int64]int64
-	maxLatest   time.Time
-	latestIndex int64
-	lastFlushRT time.Time
-	step        time.Duration
-	size        int64
+	latests      map[int64]time.Time // rra.latest
+	value        map[int64]float64
+	duration     map[int64]int64
+	maxLatest    time.Time
+	latestIndex  int64
+	lastFlushRT  time.Time
+	lastSFlushRT time.Time // state flush
+	step         time.Duration
+	size         int64
 }
 
 type dsStateSegment struct {
 	*sync.Mutex
-	lastupdate map[int64]time.Time
-	value      map[int64]float64
-	duration   map[int64]int64
+	lastFlushRT time.Time
+	lastupdate  map[int64]time.Time
+	value       map[int64]float64
+	duration    map[int64]int64
 }
 
 // The top level key for this cache is the combination of bundleId,
@@ -88,14 +90,15 @@ func (vc *verticalCache) updateDps(rra serde.DbRoundRobinArchiver) {
 	segment := vc.dps[key]
 	if segment == nil {
 		segment = &verticalCacheSegment{
-			Mutex:       &sync.Mutex{},
-			rows:        make(map[int64]crossRRAPoints),
-			latests:     make(map[int64]time.Time),
-			value:       make(map[int64]float64),
-			duration:    make(map[int64]int64),
-			step:        rra.Step(),
-			size:        rra.Size(),
-			lastFlushRT: time.Now(), // Or else it will get sent to the flusher right away!
+			Mutex:        &sync.Mutex{},
+			rows:         make(map[int64]crossRRAPoints),
+			latests:      make(map[int64]time.Time),
+			value:        make(map[int64]float64),
+			duration:     make(map[int64]int64),
+			step:         rra.Step(),
+			size:         rra.Size(),
+			lastFlushRT:  time.Now(), // Or else it will get sent to the flusher right away!
+			lastSFlushRT: time.Now(), // Or else it will get sent to the flusher right away!
 		}
 		vc.dps[key] = segment
 	}
@@ -134,10 +137,11 @@ func (vc *verticalCache) updateDss(ds serde.DbDataSourcer) {
 	segment := vc.dss[seg]
 	if segment == nil {
 		segment = &dsStateSegment{
-			Mutex:      &sync.Mutex{},
-			lastupdate: make(map[int64]time.Time),
-			duration:   make(map[int64]int64), // milliseconds
-			value:      make(map[int64]float64),
+			Mutex:       &sync.Mutex{},
+			lastFlushRT: time.Now(),
+			lastupdate:  make(map[int64]time.Time),
+			duration:    make(map[int64]int64), // milliseconds
+			value:       make(map[int64]float64),
 		}
 		vc.dss[seg] = segment
 	}
@@ -151,55 +155,58 @@ func (vc *verticalCache) updateDss(ds serde.DbDataSourcer) {
 }
 
 type vcStats struct {
-	points         int
-	segments       int
-	rows           int // sum of all segments
-	flushes        int
-	flushedPoints  int
-	flushedLatests int
-	flushBlocked   int
+	// Currently in Vcache
+	dpSegments int
+	dpRows     int // sum of all dp segments
+	dpPoints   int
+	dsSegments int
+	// Flush stats
+	dpFlushes       int
+	dpFlushedPoints int
+	dpFlushBlocked  int
+	rsFlushes       int
+	dsFlushes       int
 }
 
-func (bc *verticalCache) stats() *vcStats {
-	bc.Lock()
-	defer bc.Unlock()
+func (vc *verticalCache) stats() *vcStats {
+	vc.Lock()
+	defer vc.Unlock()
 
 	var st vcStats
 
-	st.segments = len(bc.dps)
-	for _, segment := range bc.dps {
+	st.dpSegments = len(vc.dps)
+	for _, segment := range vc.dps {
 		segment.Lock()
-		st.rows += len(segment.rows)
+		st.dpRows += len(segment.rows)
 		for _, row := range segment.rows {
-			st.points += len(row)
+			st.dpPoints += len(row)
 		}
 		segment.Unlock()
 	}
+	st.dsSegments = len(vc.dss)
 
 	return &st
 }
 
 // When full is false (most of the time), all this does is queue up
 // a bunch of flush requests. No actual DB requests happen here.
-func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
-	count, lcount, flushCount, blocked := 0, 0, 0, 0
+func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 
-	toFlush := make(map[bundleKey]*verticalCacheSegment, len(bc.dps))
+	dpFlushes, dpFlushedPoints, dpFlushBlocked, dsFlushes, rsFlushes := 0, 0, 0, 0, 0
+	toFlush := make(map[bundleKey]*verticalCacheSegment, len(vc.dps))
 
-	bc.Lock()
-	for key, segment := range bc.dps {
+	vc.Lock()
+	for key, segment := range vc.dps {
 		if len(segment.rows) == 0 {
 			continue
 		}
-
 		now := time.Now()
-		if !full && (now.Sub(segment.lastFlushRT) < bc.minStep) {
+		if !full && (now.Sub(segment.lastFlushRT) < vc.minStep) {
 			continue
 		}
-
 		toFlush[key] = segment
 	}
-	bc.Unlock()
+	vc.Unlock()
 
 	// Now we have our own separate copy
 	for key, segment := range toFlush {
@@ -216,7 +223,7 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 		// flushDelay ensures that we do not flush entries that are
 		// incomplete because enough time has not passed for them to
 		// become "saturated" with points.
-		flushDelay := bc.minStep * 2
+		flushDelay := vc.minStep * 2
 		if flushDelay > time.Minute {
 			flushDelay = time.Minute
 		}
@@ -263,17 +270,16 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				select {
 				default:
 					// we're blocked, we'll try again next time
-					blocked++
+					dpFlushBlocked++
 					continue
 				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, idps, vers, nil, nil, nil, nil}:
 				}
 			}
+			dpFlushedPoints += len(dps)
+			dpFlushes += 1 // how many chunks get pushed to the channel => one or more SQL
 
 			// delete the flushed segment row
 			delete(segment.rows, i)
-
-			count += len(dps)
-			flushCount += 1 // how many chunks get pushed to the channel => one or more SQL
 		}
 
 		// RRA State
@@ -295,24 +301,27 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 			}
 
 			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, nil, lat, nil, dur, val}
-			lcount += len(flushLatests)
-			flushCount += 1
+			rsFlushes += 1
+			segment.lastSFlushRT = time.Now()
 		}
 
 		segment.lastFlushRT = time.Now()
-
 		segment.Unlock()
 	}
 
 	// DS States
 
-	dssToFlush := make(map[int64]*dsStateSegment, len(bc.dss))
+	dssToFlush := make(map[int64]*dsStateSegment, len(vc.dss))
 
-	bc.Lock()
-	for seg, dssSeg := range bc.dss {
-		dssToFlush[seg] = dssSeg
+	vc.Lock()
+	for seg, segment := range vc.dss {
+		now := time.Now()
+		if !full && (now.Sub(segment.lastFlushRT) < (vc.minStep * 2)) {
+			continue
+		}
+		dssToFlush[seg] = segment
 	}
-	bc.Unlock()
+	vc.Unlock()
 
 	for seg, segment := range dssToFlush {
 		segment.Lock()
@@ -333,22 +342,25 @@ func (bc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				val[k] = interface{}(v)
 			}
 			ch <- &vDpFlushRequest{0, seg, 0, nil, nil, nil, lu, dur, val}
+			dsFlushes += 1
 
 			// Clear out the segment
 			segment.lastupdate = make(map[int64]time.Time)
 			segment.duration = make(map[int64]int64)
 			segment.value = make(map[int64]float64)
-
-			flushCount += 1
 		}
+
+		// even if there was nothing to flush consider it a flush
+		segment.lastFlushRT = time.Now()
 		segment.Unlock()
 	}
 
-	st := bc.stats()
-	st.flushes = flushCount
-	st.flushedPoints = count
-	st.flushedLatests = lcount
-	st.flushBlocked = blocked
+	st := vc.stats()
+	st.dpFlushes = dpFlushes
+	st.dpFlushedPoints = dpFlushedPoints
+	st.dpFlushBlocked = dpFlushBlocked
+	st.rsFlushes = rsFlushes
+	st.dsFlushes = dsFlushes
 
 	return st
 }

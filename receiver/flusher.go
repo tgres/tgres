@@ -224,12 +224,16 @@ var vcacheFlusher = func(vcache *verticalCache, dbCh chan *vDpFlushRequest, nap 
 		// NB: All this does is create flush requests, no DB I/O happens here.
 		st := vcache.flush(dbCh, false)
 
-		sr.reportStatCount("receiver.vcache.points_flushed", float64(st.flushedPoints))
-		sr.reportStatGauge("receiver.vcache.points", float64(st.points))
-		sr.reportStatGauge("receiver.vcache.segments", float64(st.segments))
-		sr.reportStatGauge("receiver.vcache.segment_rows", float64(st.rows))
-		sr.reportStatCount("serde.flush_channel.pushes", float64(st.flushes))
-		sr.reportStatCount("serde.flush_channel.blocked", float64(st.flushBlocked))
+		sr.reportStatGauge("receiver.vcache.segments", float64(st.dpSegments))
+		sr.reportStatGauge("receiver.vcache.segment_rows", float64(st.dpRows))
+		sr.reportStatGauge("receiver.vcache.points", float64(st.dpPoints))
+		sr.reportStatGauge("receiver.vcache.ds_segments", float64(st.dsSegments))
+
+		sr.reportStatCount("serde.flush_channel.dp_pushes", float64(st.dpFlushes))
+		sr.reportStatCount("serde.flush_channel.rs_pushes", float64(st.rsFlushes))
+		sr.reportStatCount("serde.flush_channel.ds_pushes", float64(st.dsFlushes))
+		sr.reportStatCount("serde.flush_channel.points", float64(st.dpFlushedPoints))
+		sr.reportStatCount("serde.flush_channel.blocked", float64(st.dpFlushBlocked))
 	}
 }
 

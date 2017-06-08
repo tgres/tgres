@@ -47,9 +47,10 @@ import (
 )
 
 type pgvSerDe struct {
-	dbConn *sql.DB
-	prefix string
-	listen *pq.Listener
+	dbConn  *sql.DB
+	dbQConn *sql.DB // a separate connection for querying
+	prefix  string
+	listen  *pq.Listener
 
 	sqlSelectSeries              *sql.Stmt
 	sqlSelectDSByIdent           *sql.Stmt
@@ -70,8 +71,14 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 	if dbConn, err := sql.Open("postgres", connect_string); err != nil {
 		return nil, err
 	} else {
+		// NB: disabling materialization (enable_material=off) speeds up
+		// sqlSelectSeries.
+		dbQConn, err := sql.Open("postgres", connect_string+" enable_material=off")
+		if err != nil {
+			return nil, err
+		}
 		l := pq.NewListener(connect_string, time.Second, 8*time.Second, nil)
-		p := &pgvSerDe{dbConn: dbConn, listen: l, prefix: prefix}
+		p := &pgvSerDe{dbConn: dbConn, dbQConn: dbQConn, listen: l, prefix: prefix}
 		if err := p.dbConn.Ping(); err != nil {
 			return nil, err
 		}
@@ -160,13 +167,11 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 		p.prefix)); err != nil {
 		return err
 	}
-
-	// if p.sqlUpdateRRA, err = p.dbConn.Prepare(fmt.Sprintf("UPDATE %[1]srra rra SET value = $1, duration_ms = $2 WHERE id = $3", p.prefix)); err != nil {
-	// 	return err
-	// }
-	if p.sqlSelectSeries, err = p.dbConn.Prepare(fmt.Sprintf("SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
-		"LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = $4 AND rra_id = $5 "+
-		" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt",
+	// NB: dbQConn used here
+	if p.sqlSelectSeries, err = p.dbQConn.Prepare(fmt.Sprintf(
+		"SELECT max(tg) mt, avg(r) ar FROM generate_series($1, $2, ($3)::interval) AS tg "+
+			"LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = $4 AND rra_id = $5 "+
+			" AND t >= $6 AND t <= $7) s ON tg = s.t GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/$8 ORDER BY mt",
 		p.prefix)); err != nil {
 		return err
 	}
