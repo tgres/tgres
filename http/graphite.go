@@ -33,6 +33,7 @@ import (
 
 func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		fmt.Fprintf(w, "[\n")
 		nodes := rcache.FsFind(r.FormValue("query"))
 		for n, node := range nodes {
@@ -47,6 +48,7 @@ func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 			}
 		}
 		fmt.Fprintf(w, "\n]\n")
+		log.Printf("GraphiteMetricsFindHandler: finished in %v", time.Now().Sub(start))
 	}
 }
 
@@ -54,6 +56,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
+		start := time.Now()
 		from, err := parseTime(r.FormValue("from"))
 		if err != nil {
 			log.Printf("RenderHandler(): (from) %v", err)
@@ -89,6 +92,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 			nn := 0
 			for _, name := range seriesMap.SortedKeys() {
+
 				series := seriesMap[name]
 
 				alias := series.Alias()
@@ -124,6 +128,8 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 			}
 		}
 		fmt.Fprintf(w, "]\n")
+
+		log.Printf("GraphiteRenderHandler: finished in %v", time.Now().Sub(start))
 	}
 }
 

@@ -231,13 +231,13 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	// We had to wait until after graceful, so that the new cluster can bind to sockets
 	var c *cluster.Cluster
 	const (
-		clusterPause = 5 * time.Second
-		attempts     = 10
+		clusterPause = time.Second
+		attempts     = 30
 	)
 	for i := 0; i < attempts; i++ {
 		c, err = initCluster(bindAddr, advAddr, joinIps)
 		if err != nil {
-			log.Printf("Error initializing cluster, will try again (up to %v times) in %v: %v", attempts, clusterPause, err)
+			log.Printf("Error initializing cluster, will try again in %v (up to %v times): %v", clusterPause, attempts, err)
 			time.Sleep(clusterPause)
 			continue
 		}

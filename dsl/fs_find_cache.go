@@ -62,7 +62,11 @@ func (dsns *fsFindCache) addPrefixes(name string) {
 	prefix := name
 	for ext := filepath.Ext(prefix); ext != ""; {
 		prefix = name[0 : len(prefix)-len(ext)]
-		dsns.prefixes[prefix] = true
+		if prefix != "" {
+			// Do not allow blank prefixes (malformed names like '.org.apache'), Grafana doesn't like blanks
+			// TODO: Is there a better solution, e.g. not allowing datapoints from those?
+			dsns.prefixes[prefix] = true
+		}
 		ext = filepath.Ext(prefix)
 	}
 }

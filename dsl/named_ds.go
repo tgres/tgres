@@ -16,6 +16,7 @@
 package dsl
 
 import (
+	"sync"
 	"time"
 
 	"github.com/tgres/tgres/rrd"
@@ -51,15 +52,18 @@ type ctxDSFetcher interface {
 }
 
 type namedDsFetcher struct {
+	*sync.Mutex
 	dsFetcher
-	dsns *fsFindCache
+	dsns       *fsFindCache
+	lastReload time.Time
+	minAge     time.Duration
 }
 
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
 func NewNamedDSFetcher(db dsFetcher) *namedDsFetcher {
-	return &namedDsFetcher{dsFetcher: db, dsns: &fsFindCache{key: "name"}}
+	return &namedDsFetcher{dsFetcher: db, dsns: &fsFindCache{key: "name"}, Mutex: &sync.Mutex{}, minAge: 30 * time.Second}
 }
 
 func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident {
@@ -75,11 +79,12 @@ func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident 
 // rules as filepath.Match, as well as comma-separated values in curly
 // braces such as "foo.{bar,baz}".
 func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
-	// TODO: With a large number of series, reload() can be a
-	// problem. Granted, FsFind is only called when we are looking for
-	// a series name (e.g. when generating the Grafana pull-down),
-	// still, rate-limiting this to once per 10-seconds might be
-	// better?
-	r.dsns.reload(r)
+	r.Lock()
+	if r.lastReload.Before(time.Now().Add(-r.minAge)) {
+		// TODO: This is better done with NOTIFY trigger on ds table changes
+		r.dsns.reload(r)
+		r.lastReload = time.Now()
+	}
+	r.Unlock()
 	return r.dsns.fsFind(pattern)
 }
