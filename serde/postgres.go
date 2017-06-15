@@ -398,7 +398,7 @@ CREATE VIEW %[1]sdsv AS
          dss.value[ds.idx] AS value,
          dss.duration_ms[ds.idx] AS duration_ms,
          ds.seg, idx
-    FROM %[1]ds AS ds
+    FROM %[1]sds AS ds
     JOIN %[1]sds_state AS dss
       ON ds.seg = dss.seg;
 

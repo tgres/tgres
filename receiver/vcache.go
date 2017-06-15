@@ -256,6 +256,7 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 		flushIVers := latestIVers(flushLatests, segment.step, segment.size)
 
 		// Second iteration: datapoints and versions
+		thisSegmentFlushes := 0
 		for i, dps := range segment.rows {
 
 			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < flushDelay {
@@ -276,14 +277,15 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				}
 			}
 			dpFlushedPoints += len(dps)
-			dpFlushes += 1 // how many chunks get pushed to the channel => one or more SQL
+			dpFlushes++ // how many chunks get pushed to the channel => one or more SQL
+			thisSegmentFlushes++
 
 			// delete the flushed segment row
 			delete(segment.rows, i)
 		}
 
 		// RRA State
-		if len(flushLatests) > 0 {
+		if len(flushLatests) > 0 && thisSegmentFlushes > 0 {
 
 			lat := make(map[int64]interface{}, len(flushLatests))
 			for k, v := range flushLatests {
@@ -300,6 +302,7 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				val[k] = interface{}(v)
 			}
 
+			// unlike dps, insist on a blocking operation
 			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, nil, lat, nil, dur, val}
 			rsFlushes += 1
 			segment.lastSFlushRT = time.Now()
