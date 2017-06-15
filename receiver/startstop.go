@@ -126,7 +126,7 @@ var startFlushers = func(r *Receiver, startWg *sync.WaitGroup) {
 	// }
 
 	log.Printf("Starting flusher(s)...")
-	r.flusher.start(&r.flusherWg, startWg, r.MinStep, r.NWorkers)
+	r.flusher.start(&r.flusherWg, startWg, r.MinStep, r.NWorkers*2)
 }
 
 var startAggWorker = func(r *Receiver, startWg *sync.WaitGroup) {

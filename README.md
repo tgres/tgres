@@ -23,6 +23,13 @@ how Tgres stores data see this
 
 ### Current Status
 
+Jun 15 2017: Many big changes since March, most notably data point
+versioning and instoduction of ds_state and rra_state tables which
+contain frequently changed attributes as arrays, similar to the way
+data points are stored eliminating the need to update ds and rra
+tables, these are now essentially immutable. Ability to delete series
+with NOTIFY to Tgres to purge it from the cache.
+
 Mar 22 2017: Version 0.10.0b was tagged. This is our first beta (which
 is more stable than alpha). Please try it out, and take a minute to
 open an issue or even a PR if you see/fix any problems. Your feedback

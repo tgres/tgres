@@ -37,6 +37,7 @@ type Config struct { // Needs to be exported for TOML to work
 	LogPath                  string   `toml:"log-file"`
 	LogCycle                 duration `toml:"log-cycle-interval"`
 	DbConnectString          string   `toml:"db-connect-string"`
+	PgSegmentWidth           int      `toml:"pg-segment-width"`
 	MinStep                  duration `toml:"min-step"`
 	MaxReceiverQueueSize     int      `toml:"max-receiver-queue-size"`
 	MaxMemoryBytes           int      `toml:"max-memory-bytes"`
@@ -229,6 +230,18 @@ func (c *Config) processMaxMemoryBytes() error {
 		log.Printf("Max Memory (heap allocation bytes) is unlimited (%d) (max-memory-bytes).", c.MaxMemoryBytes)
 	} else {
 		log.Printf("Max Memory (heap allocation bytes) is limited to %d (max-memory-bytes).", c.MaxMemoryBytes)
+	}
+	return nil
+}
+
+func (c *Config) processPgSegmentWidth() error {
+	if c.PgSegmentWidth == 0 {
+		// do nothing and keep quiet about it since this is an "advanced" setting
+	} else if c.PgSegmentWidth <= 0 {
+		return fmt.Errorf("Invalid pg-segment-width: %d", c.PgSegmentWidth)
+	} else {
+		log.Printf("PG Segment Width is %d (pg-segment-width).", c.PgSegmentWidth)
+		serde.PgSegmentWidth = c.PgSegmentWidth
 	}
 	return nil
 }

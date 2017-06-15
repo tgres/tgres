@@ -82,7 +82,7 @@ func (d *dsCache) delete(ident serde.Ident) {
 }
 
 func (d *dsCache) preLoad() error {
-	dss, err := d.db.FetchDataSources()
+	dss, err := d.db.FetchDataSources(time.Hour * 3 * 24) // TODO: Make me configurable
 	if err != nil {
 		return err
 	}

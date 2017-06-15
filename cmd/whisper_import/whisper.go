@@ -38,7 +38,7 @@ func (a archive) Less(i, j int) bool { return a[i].TimeStamp < a[j].TimeStamp }
 
 type whisper struct {
 	*header
-	file io.ReadWriteSeeker
+	file *os.File
 }
 
 func readHeader(buf io.ReadSeeker) (*header, error) {
@@ -88,4 +88,8 @@ func (w *whisper) readPoints(offset uint32, points []point) error {
 		return err
 	}
 	return binary.Read(w.file, binary.BigEndian, points)
+}
+
+func (w *whisper) Close() error {
+	return w.file.Close()
 }

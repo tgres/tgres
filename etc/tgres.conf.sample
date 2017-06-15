@@ -8,7 +8,10 @@ min-step                = "10s"
 # 0 - unlimited (default). this is very inexact, can be off by gigs.
 #max-memory-bytes         = 8000000000
 
-# number of flushers == number of workers
+# Segment Width (only matter during initial table creation), default: 200
+#pg-segment-width         = 200
+
+# number of flushers == number of workers * 2
 workers                 = 4
 
 pid-file =                 "tgres.pid"

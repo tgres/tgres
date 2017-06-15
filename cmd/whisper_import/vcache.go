@@ -22,6 +22,8 @@ type verticalCacheSegment struct {
 }
 
 type verticalCache struct {
+	ts  int   // just some number for identification
+	seg int64 // which segment this was for
 	dps map[bundleKey]*verticalCacheSegment
 	dss map[int64]map[int64]interface{}
 }
@@ -88,91 +90,110 @@ func (vc *verticalCache) updateDss(ds serde.DbDataSourcer) {
 	segment[idx] = ds.LastUpdate()
 }
 
-type stats struct {
-	m                  *sync.Mutex
+type vstats struct {
+	*sync.Mutex
 	pointCount, sqlOps int
 }
 
 func (vc verticalCache) flush(db serde.Flusher) error {
-	var wg sync.WaitGroup
-	fmt.Printf("[db] Starting vcache flush (%d segments)...\n", len(vc.dps))
+	var (
+		wg sync.WaitGroup
+		st = vstats{Mutex: &sync.Mutex{}}
+	)
 
-	st := stats{m: &sync.Mutex{}}
+	if len(vc.dps) > 0 {
+		fmt.Printf("[db] [%v] Starting vcache flush (%d segments)...\n", vc.ts, len(vc.dps))
 
-	n, MAX, vl := 0, 64, len(vc.dps)
-	for k, segment := range vc.dps {
+		n, MAX, vl := 0, 64, len(vc.dps)
+		for k, segment := range vc.dps {
 
-		wg.Add(1)
-		go flushSegment(db, &wg, &st, k, segment)
-		delete(vc.dps, k)
-		n++
+			wg.Add(1)
+			go flushSegment(db, &wg, &st, k, segment, vc.ts)
+			delete(vc.dps, k)
+			n++
 
-		if n >= MAX {
-			fmt.Printf("[db] ... ... waiting on %d of %d segment flushes ...\n", n, vl)
-			wg.Wait()
-			n = 0
+			if n >= MAX {
+				fmt.Printf("[db] [%v] ... ... waiting on %d of %d segment flushes ...\n", vc.ts, n, vl)
+				wg.Wait()
+				n = 0
+			}
+
 		}
-
+		fmt.Printf("[db] [%v] ... ... waiting on remaining %d segment flushes ...\n", vc.ts, n)
+		wg.Wait() // final wait
 	}
-	fmt.Printf("[db] ... ... waiting on %d segment flushes (final) ...\n", n)
-	wg.Wait() // final wait
 
-	fmt.Printf("[db] Flushing %d DS states ...\n", len(vc.dss))
+	fmt.Printf("[db] [%v] Flushing %d DS states ...\n", vc.ts, len(vc.dss))
 	for k, lu := range vc.dss {
 		ops, err := db.FlushDSStates(k, lu, nil, nil)
 		if err != nil {
-			fmt.Printf("[db] EROR flushing DS state: %v\n", err)
+			fmt.Printf("[db] [%v] EROR flushing DS state: %v\n", vc.ts, err)
 		}
 		st.sqlOps += ops
 	}
-	fmt.Printf("[db] Flushed %d DS states.\n", len(vc.dss))
+	fmt.Printf("[db] [%v] Flushed %d DS states.\n", vc.ts, len(vc.dss))
 
-	fmt.Printf("[db] Vcache flush complete, %d points in %d SQL ops.\n", st.pointCount, st.sqlOps)
-	totalPoints += st.pointCount
-	totalSqlOps += st.sqlOps
+	fmt.Printf("[db] [%v] Vcache flush complete, %d points in %d SQL ops.\n", vc.ts, st.pointCount, st.sqlOps)
+	stats.Lock()
+	st.Lock()
+	stats.totalPoints += st.pointCount
+	stats.totalSqlOps += st.sqlOps
+	st.Unlock()
+	stats.Unlock()
 	return nil
 }
 
-func flushSegment(db serde.Flusher, wg *sync.WaitGroup, st *stats, k bundleKey, segment *verticalCacheSegment) {
+func flushSegment(db serde.Flusher, wg *sync.WaitGroup, st *vstats, k bundleKey, segment *verticalCacheSegment, ts int) {
 	defer wg.Done()
 
 	if len(segment.rows) == 0 {
 		return
 	}
 
-	fmt.Printf("[db]  flushing %d rows (%d wide) for segment %v:%v...\n", len(segment.rows), len(segment.latests), k.bundleId, k.seg)
+	fmt.Printf("[db] [%v] flushing %d rows for segment %v:%v...\n", ts, len(segment.rows), k.bundleId, k.seg)
 
 	// Build a map of latest i and version according to flushLatests
 	ivers := latestIVers(segment.latests, segment.step, segment.size)
+
+	maxWidth, maxIdx := 0, 0
 
 	for i, row := range segment.rows {
 		idps, vers := dataPointsWithVersions(row, i, ivers)
 		so, err := db.FlushDataPoints(k.bundleId, k.seg, i, idps, vers)
 		if err != nil {
-			fmt.Printf("[db] Error flushing DP segment %v:%v: %v\n", k.bundleId, k.seg, err)
+			fmt.Printf("[db] [%v] Error flushing DP segment %v:%v: %v\n", ts, k.bundleId, k.seg, err)
 			return
 		}
-		st.m.Lock()
+		st.Lock()
 		st.sqlOps += so
 		st.pointCount += len(row)
-		st.m.Unlock()
+		st.Unlock()
+
+		for j, _ := range row {
+			if int(j) > maxIdx {
+				maxIdx = int(j)
+			}
+		}
+		if len(row) > maxWidth {
+			maxWidth = len(row)
+		}
 	}
 
 	if len(segment.latests) > 0 {
-		fmt.Printf("[db]  flushing RRA state for segment %v:%v...\n", k.bundleId, k.seg)
+		fmt.Printf("[db] [%v] flushing RRA state for segment %v:%v...\n", ts, k.bundleId, k.seg)
 		so, err := db.FlushRRAStates(k.bundleId, k.seg, segment.latests, nil, nil)
 		if err != nil {
-			fmt.Printf("[db] Error flushing RRA segment %v:%v: %v\n", k.bundleId, k.seg, err)
+			fmt.Printf("[db] [%v] Error flushing RRA segment %v:%v: %v\n", ts, k.bundleId, k.seg, err)
 			return
 		}
-		st.m.Lock()
+		st.Lock()
 		st.sqlOps += so
-		st.m.Unlock()
+		st.Unlock()
 	} else {
-		fmt.Printf("[db]  no latests to flush for segment %v:%v...\n", k.bundleId, k.seg)
+		fmt.Printf("[db] [%v] no latests to flush for segment %v:%v...\n", ts, k.bundleId, k.seg)
 	}
 
-	fmt.Printf("[db]  DONE     %d rows (%d wide) for segment %v:%v...\n", len(segment.rows), len(segment.latests), k.bundleId, k.seg)
+	fmt.Printf("[db] [%v] DONE     %d rows (%d wide, max idx: %d) for segment %v:%v...\n", ts, len(segment.rows), maxWidth, maxIdx, k.bundleId, k.seg)
 }
 
 type iVer struct {

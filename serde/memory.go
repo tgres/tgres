@@ -72,7 +72,7 @@ func (*memSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints i
 	return series.NewRRASeries(ds.RRAs()[0]), nil
 }
 
-func (m *memSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
+func (m *memSerDe) FetchDataSources(_ time.Duration) ([]rrd.DataSourcer, error) {
 	m.RLock()
 	defer m.RUnlock()
 	result := []rrd.DataSourcer{}

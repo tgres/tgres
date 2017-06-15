@@ -119,7 +119,7 @@ func (f *fakeSerde) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoint
 func (*fakeSerde) ListDbClientIps() ([]string, error) { return nil, nil }
 func (*fakeSerde) MyDbAddr() (*string, error)         { return nil, nil }
 
-func (f *fakeSerde) FetchDataSources() ([]rrd.DataSourcer, error) {
+func (f *fakeSerde) FetchDataSources(_ time.Duration) ([]rrd.DataSourcer, error) {
 	f.fetchCalled++
 	if f.fakeErr {
 		return nil, fmt.Errorf("some error")

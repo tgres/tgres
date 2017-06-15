@@ -238,7 +238,7 @@ func (p *pgvSerDe) prepareSqlStatements() error {
 	return nil
 }
 
-const PgSegmentWidth = 200 // TODO Make me configurable
+var PgSegmentWidth int = 200
 
 func (p *pgvSerDe) createTablesIfNotExist() error {
 	create_sql := `
@@ -314,8 +314,8 @@ DO $$
   DECLARE r RECORD;
   DECLARE q TEXT;
 BEGIN
-  IF (SELECT COUNT(1) FROM %[1]sds) = 0 OR (SELECT COUNT(1) FROM %[1]sds_state) > 0 THEN
-    -- empty db OR ds_state is populated, assume no migration necessary
+  IF (SELECT COUNT(1) FROM information_schema.columns WHERE table_name='%[1]sds' and column_name='created_at') > 0 THEN
+    -- migration done already, nothing to do
     RETURN;
   END IF;
 
@@ -617,7 +617,7 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 	return &pgSearchResult{rows: rows}, nil
 }
 
-func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
+func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, error) {
 
 	const sql = `
 	SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
@@ -630,10 +630,10 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
            rs.value[rra.idx] AS value,
            rs.duration_ms[rra.idx] AS duration_ms
 	FROM %[1]sds ds
-    JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
+    LEFT OUTER JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
 	JOIN %[1]srra rra ON rra.ds_id = ds.id
 	JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-	JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
+	LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
     ORDER BY ds.id, rra.id`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
@@ -725,7 +725,10 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	// TODO: max idle time should be configurable?
 	skipped := 0
 	result := make([]rrd.DataSourcer, 0, len(dss))
-	limit := maxLastUpdate.Add(-time.Hour * 24 * 3)
+	var limit time.Time
+	if window != 0 {
+		limit = maxLastUpdate.Add(-window)
+	}
 	for i := 0; i < len(dss); i++ {
 		if limit.Before(*dss[i].dsr.lastupdate) {
 			ds, err := dataSourceFromDsRec(dss[i].dsr)
@@ -744,14 +747,14 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 	return result, nil
 }
 
-func (p *pgvSerDe) fetchOrCreateRRABundle(stepMs, size int64) (*rraBundleRecord, error) {
-	rows, err := p.sqlSelectRRABundleByStepSize.Query(stepMs, size)
+func (p *pgvSerDe) fetchOrCreateRRABundle(tx *sql.Tx, stepMs, size int64) (*rraBundleRecord, error) {
+	rows, err := tx.Stmt(p.sqlSelectRRABundleByStepSize).Query(stepMs, size)
 	if err != nil {
 		log.Printf("fetchOrCreateRRABundle(): error querying database: %v", err)
 		return nil, err
 	}
 	if !rows.Next() { // Needs to be created
-		rows, err = p.sqlInsertRRABundle.Query(stepMs, size)
+		rows, err = tx.Stmt(p.sqlInsertRRABundle).Query(stepMs, size)
 		if err != nil {
 			log.Printf("fetchOrCreateRRABundle(): error inserting: %v", err)
 			return nil, err
@@ -949,25 +952,29 @@ func (p *pgvSerDe) FlushDataPoints(bundle_id, seg, i int64, dps, vers map[int64]
 				if err != nil {
 					return 0, err
 				}
-				defer tx.Commit() // TODO is this actually faster?
 
 				res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...)
 				if err != nil {
+					tx.Rollback()
 					return 0, err
 				}
 				sqlOps++
 
 				if affected, _ := res.RowsAffected(); affected == 0 { // Insert and try again.
 					if _, err = tx.Stmt(p.sqlInsertTs).Exec(bundle_id, seg, i); err != nil {
+						tx.Rollback()
 						return 0, err
 					}
 					if res, err := tx.Stmt(p.sqlUpdateTs).Exec(args...); err != nil {
+						tx.Rollback()
 						return 0, err
 					} else if affected, _ := res.RowsAffected(); affected == 0 {
+						tx.Rollback()
 						return 0, fmt.Errorf("Unable to update row?")
 					}
 					sqlOps++
 				}
+				tx.Commit()
 			}
 		}
 		return sqlOps, nil
@@ -1073,6 +1080,22 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		log.Printf("FetchOrCreateDataSource(): error 1: %v", err)
 		return nil, err
 	}
+	if !ds.Created() { // UPSERT did not INSERT, nothing more to do here
+		return ds, nil
+	}
+
+	// To avoid a condition where a DS is spread across segments when this is
+	// executed in parallel, do this in a transaction.
+	tx, err := p.dbConn.Begin()
+	if err != nil {
+		return nil, err
+	}
+
+	// Create DS State
+	if _, err = tx.Stmt(p.sqlInsertDSState).Exec(ds.Seg()); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 
 	// RRAs
 	var rras []rrd.RoundRobinArchiver
@@ -1093,9 +1116,10 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 
 		// rra_bundle
 		var bundle *rraBundleRecord
-		bundle, err = p.fetchOrCreateRRABundle(stepMs, size)
+		bundle, err = p.fetchOrCreateRRABundle(tx, stepMs, size)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error creating RRA bundle: %v", err)
+			tx.Rollback()
 			return nil, err
 		}
 
@@ -1103,18 +1127,20 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		// not created (upsert), there is a possibity that we're
 		// incrementing this in vain, the position will be wasted if
 		// the rra already exists.
-		pos, err := p.rraBundleIncrPos(bundle.id)
+		pos, err := p.rraBundleIncrPos(tx, bundle.id)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error incrementing last_pos in RRA bundle: %v", err)
+			tx.Rollback()
 			return nil, err
 		}
 
 		// rra
 		var rraRows *sql.Rows
 		seg, idx := segIdxFromPosWidth(pos, bundle.width)
-		rraRows, err = p.sqlInsertRRA.Query(ds.Id(), bundle.id, pos, seg, idx, cf, rraSpec.Xff)
+		rraRows, err = tx.Stmt(p.sqlInsertRRA).Query(ds.Id(), bundle.id, pos, seg, idx, cf, rraSpec.Xff)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error creating RRAs: %v", err)
+			tx.Rollback()
 			return nil, err
 		}
 		rraRows.Next()
@@ -1124,6 +1150,7 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		rraRows.Close()
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error2: %v", err)
+			tx.Rollback()
 			return nil, err
 		}
 
@@ -1138,6 +1165,7 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 		rra, err = rraFromRRARecordStateAndBundle(rraRec, rraState, bundle)
 		if err != nil {
 			log.Printf("FetchOrCreateDataSource(): error3: %v", err)
+			tx.Rollback()
 			return nil, err
 		}
 
@@ -1148,6 +1176,8 @@ func (p *pgvSerDe) FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd
 	if debug {
 		log.Printf("FetchOrCreateDataSource(): returning ds.id %d: LastUpdate: %v, %#v", ds.Id(), ds.LastUpdate(), ds)
 	}
+
+	tx.Commit()
 	return ds, nil
 }
 
@@ -1204,9 +1234,9 @@ func (p *pgvSerDe) TsTableSize() (size, count int64, err error) {
 	return 0, 0, nil
 }
 
-func (p *pgvSerDe) rraBundleIncrPos(id int64) (int64, error) {
+func (p *pgvSerDe) rraBundleIncrPos(tx *sql.Tx, id int64) (int64, error) {
 	stmt := fmt.Sprintf("UPDATE %[1]srra_bundle SET last_pos = last_pos + 1 WHERE id = $1 RETURNING last_pos", p.prefix)
-	rows, err := p.dbConn.Query(stmt, id)
+	rows, err := tx.Query(stmt, id)
 	if err != nil {
 		log.Printf("rraBundleIncrPos(): error querying database: %v", err)
 		return 0, err

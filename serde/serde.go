@@ -55,7 +55,7 @@ type DataSourceSearcher interface {
 type Fetcher interface {
 	DataSourceSearcher
 	// Fetch all the data sources (used to populate the cache on start)
-	FetchDataSources() ([]rrd.DataSourcer, error)
+	FetchDataSources(time.Duration) ([]rrd.DataSourcer, error)
 	// Fetch or create a single DS. Passing a nil dsSpec disables creation.
 	FetchOrCreateDataSource(ident Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 	// FetchSeries is responsible for presenting a DS as a

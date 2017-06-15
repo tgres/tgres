@@ -37,7 +37,8 @@ type dsFlusher struct {
 // 3. DS State (DSS), requires seg, lastupdate, duration, value
 type vDpFlushRequest struct {
 	bundleId, seg, i            int64
-	dps, vers                   map[int64]interface{} // DPS
+	dps                         crossRRAPoints        // DPS
+	ivers                       map[int64]*iVer       // DPS (versions)
 	latests                     map[int64]interface{} // Latests
 	lastupdate, duration, value map[int64]interface{} // DSS
 }
@@ -161,8 +162,9 @@ var dbFlusher = func(wc wController, db serde.Flusher, ch chan *vDpFlushRequest,
 
 		} else if len(dpr.dps) > 0 {
 			// Datapoints flush
+			idps, vers := dataPointsWithVersions(dpr.dps, dpr.i, dpr.ivers)
 			start := time.Now()
-			sqlOps, err := db.FlushDataPoints(dpr.bundleId, dpr.seg, dpr.i, dpr.dps, dpr.vers)
+			sqlOps, err := db.FlushDataPoints(dpr.bundleId, dpr.seg, dpr.i, idps, vers)
 			if err != nil {
 				log.Printf("vdbflusher: ERROR in VerticalFlushDps: %v", err)
 			}

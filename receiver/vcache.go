@@ -262,17 +262,17 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 				continue
 			}
 
-			idps, vers := dataPointsWithVersions(dps, i, flushIVers)
+			dfr := &vDpFlushRequest{key.bundleId, key.seg, i, dps, flushIVers, nil, nil, nil, nil}
 
 			if full { // insist, even if we block
-				ch <- &vDpFlushRequest{key.bundleId, key.seg, i, idps, vers, nil, nil, nil, nil}
+				ch <- dfr
 			} else { // just skip over if channel full
 				select {
+				case ch <- dfr:
 				default:
 					// we're blocked, we'll try again next time
 					dpFlushBlocked++
 					continue
-				case ch <- &vDpFlushRequest{key.bundleId, key.seg, i, idps, vers, nil, nil, nil, nil}:
 				}
 			}
 			dpFlushedPoints += len(dps)
@@ -365,6 +365,10 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 	return st
 }
 
+// This structure stores the slot index for the latest slot along with
+// its version. With this information we can then compute the version
+// for any slot index in the current iteration of the round-robin,
+// which is generally just the version itself or version--.
 type iVer struct {
 	i   int64
 	ver int
