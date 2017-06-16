@@ -308,6 +308,8 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 			segment.lastSFlushRT = time.Now()
 		}
 
+		// update lastFlushRT even if nothing was flushed above, we will only try
+		// again in minStep time.
 		segment.lastFlushRT = time.Now()
 		segment.Unlock()
 	}

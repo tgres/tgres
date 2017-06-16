@@ -62,7 +62,8 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, minStep time.Durat
 		startWg.Add(1)
 		go dbFlusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: fmt.Sprintf("vdbflusher_%d", i)}, f.db, f.dbCh, f.sr)
 	}
-	go vcacheFlusher(f.vcache, f.dbCh, minStep, f.sr)
+	// TODO Make this name time configurable? If minStep is < 1s, this will become a bottleneck.
+	go vcacheFlusher(f.vcache, f.dbCh, time.Second, f.sr)
 
 	if tdb, ok := f.db.(tsTableSizer); ok {
 		log.Printf(" -- ts table size reporter")
@@ -220,8 +221,8 @@ var dbFlusher = func(wc wController, db serde.Flusher, ch chan *vDpFlushRequest,
 }
 
 var vcacheFlusher = func(vcache *verticalCache, dbCh chan *vDpFlushRequest, nap time.Duration, sr statReporter) {
-	for {
-		time.Sleep(nap)
+
+	for range time.NewTicker(nap).C {
 
 		// NB: All this does is create flush requests, no DB I/O happens here.
 		st := vcache.flush(dbCh, false)
