@@ -246,6 +246,8 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	if err != nil {
 		log.Printf("Error initializing cluster, giving up and exiting: %v", err)
 		return
+	} else {
+		log.Printf("Cluster initialized")
 	}
 	rcvr.SetCluster(c)
 

@@ -62,8 +62,8 @@ func (f *dsFlusher) start(flusherWg, startWg *sync.WaitGroup, minStep time.Durat
 		startWg.Add(1)
 		go dbFlusher(&wrkCtl{wg: flusherWg, startWg: startWg, id: fmt.Sprintf("vdbflusher_%d", i)}, f.db, f.dbCh, f.sr)
 	}
-	// TODO Make this name time configurable? If minStep is < 1s, this will become a bottleneck.
-	go vcacheFlusher(f.vcache, f.dbCh, time.Second, f.sr)
+	// TODO Consider making this nap time configurable?
+	go vcacheFlusher(f.vcache, f.dbCh, 100*time.Millisecond, f.sr)
 
 	if tdb, ok := f.db.(tsTableSizer); ok {
 		log.Printf(" -- ts table size reporter")
