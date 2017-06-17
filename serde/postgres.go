@@ -89,16 +89,6 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 			return nil, fmt.Errorf("prepareSqlStatements: %v", err)
 		}
 
-		// Refresh materialized view periodically
-		go func() {
-			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-			for {
-				mins := rnd.Intn(15-10) + 10
-				time.Sleep(time.Duration(mins) * time.Minute)
-				p.refreshDSCacheView()
-			}
-		}()
-
 		return p, nil
 	}
 }
@@ -501,27 +491,6 @@ CREATE VIEW %[1]stvd AS
      JOIN %[1]sts ts ON ts.rra_bundle_id = rra_bundle.id AND ts.seg = rra.seg
   ) foo;
 
-  -- for FetchDataSources
-  CREATE MATERIALIZED VIEW IF NOT EXISTS %[1]sdscache AS
-    SELECT ds.id, ds.ident, ds.step_ms AS ds_step_ms, ds.heartbeat_ms,
-             ds.seg AS ds_deg, ds.idx AS ds_idx,
-           dsst.lastupdate[ds.idx] AS lastupdate,
-           dsst.value[ds.idx] AS ds_value,
-           dsst.duration_ms[ds.idx] AS ds_duration_ms,
-           rra.id AS rra_id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
-           b.id AS b_id, b.step_ms, b.size, b.width,
-           rs.latest[rra.idx] AS latest,
-           rs.value[rra.idx] AS value,
-           rs.duration_ms[rra.idx] AS duration_ms
-	FROM %[1]sds ds
-	LEFT OUTER JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
-	JOIN %[1]srra rra ON rra.ds_id = ds.id
-	JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-	LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg;
-
-  -- this index is required for REFRESH MATERIALIZED VIEW CONCURRENTLY
-  CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_dscache_ds_id_rra_id ON %[1]sdscache (id, rra_id);
-
 COMMIT;
 `
 	if _, err := p.dbConn.Exec(fmt.Sprintf(create_sql, p.prefix)); err != nil {
@@ -649,36 +618,31 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 	return &pgSearchResult{rows: rows}, nil
 }
 
-func (p *pgvSerDe) refreshDSCacheView() {
-	// TODO: What happens in a cluster situation when many nodes do
-	// this? It is not the end of the world for now, but should be
-	// fixed. TODO: What if a DS is renamed?
-	const sql = `
-DO $$
-BEGIN
-  -- only refresh the view if there are changes (we examine id only)
-  IF (
-    SELECT COUNT(1) FROM %[1]sds ds
-      FULL JOIN %[1]sdscache dsc ON dsc.id = ds.id
-      WHERE ds.id IS NULL OR dsc.id IS NULL
-   ) > 0 THEN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY %[1]sdscache;
-  END IF;
-END
-$$;
-`
-	_, err := p.dbConn.Exec(fmt.Sprintf(sql, p.prefix))
-	if err != nil {
-		log.Printf("refreshDSCacheView(): error refreshing dscache materialized view: %v", err)
-	}
-}
-
 func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, error) {
 
-	// Join with ds to skip over deleted DSs, if any. There is no need
-	// to worry about the new DSs created after the view was built, those
-	// we will get by way of FetchOrCreate.
-	const sql = `SELECT dsc.* FROM %[1]sdscache dsc JOIN %[1]sds ON dsc.id = ds.id ORDER BY dsc.id, dsc.rra_id`
+	const sql = `
+ WITH dss AS (
+  SELECT seg, s.lu, s.value, s.duration_ms, s.idx
+    FROM %[1]sds_state,
+         UNNEST(lastupdate, value, duration_ms) WITH ORDINALITY AS s(lu, value, duration_ms, idx)
+ ), rrs AS (
+  SELECT rra_bundle_id, seg, s.latest, s.value, s.duration_ms, s.idx
+    FROM %[1]srra_state,
+         UNNEST(latest, value, duration_ms) WITH ORDINALITY AS s(latest, value, duration_ms, idx)
+ )
+ SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
+           dss.lu,
+           dss.value,
+           dss.duration_ms,
+           rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
+           b.id, b.step_ms, b.size, b.width,
+           rrs.latest, rrs.value, rrs.duration_ms
+       FROM %[1]sds ds
+       JOIN dss ON ds.seg = dss.seg AND ds.idx = dss.idx
+       JOIN %[1]srra rra ON rra.ds_id = ds.id
+       JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
+       JOIN rrs ON rra.rra_bundle_id = rrs.rra_bundle_id AND rra.seg = rrs.seg AND rra.idx = rrs.idx
+    ORDER BY ds.id`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {

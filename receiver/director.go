@@ -89,7 +89,9 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 		}
 	}
 
-	if cds.PointCount() > 0 && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
+	// Flush even if point count is 0 because only
+	// lastupdate/value/dur of the DS may have changed.
+	if cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
 	}
@@ -281,7 +283,7 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 			case *cachedDs:
 				cds = x
 			case nil:
-				// close signal
+				log.Printf("director(): chanel close signal (nil) received")
 			default:
 				log.Printf("director(): unknown type: %T", x)
 			}
