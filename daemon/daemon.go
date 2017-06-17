@@ -190,12 +190,17 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		return
 	}
 
-	// Create Receiver (with nil cluster, because if graceful, then we must wait for parent to shutdown)
+	// Create Receiver (with nil cluster, because if graceful, then we
+	// must wait for parent to shutdown) This receiver can accept
+	// incoming data points, they will be just queued in the elastic
+	// queue for now since the receiver wouldn't know how to process
+	// those and director is not running.
 	rcvr := createReceiver(cfg, nil, db)
 
 	// Is there a blaster?
 	if os.Getenv("TGRES_BLASTER") != "" {
 		log.Printf("Creating a blaster instance.")
+		// As created the blaster is idle, it sends no points.
 		rcvr.Blaster = blaster.New(rcvr)
 	}
 
@@ -353,19 +358,28 @@ func gracefulExit(rcvr *receiver.Receiver, serviceMgr *serviceManager) {
 
 	log.Printf("Gracefully exiting...")
 
+	// TODO We need to rethink how this works in a clustered
+	// setup. After closeListeners TCP connections are not accepted,
+	// but other nodes do not yet know we're leaving and will continue
+	// forwarding to us.
+
 	log.Printf("Closing TCP Listeners...")
-	serviceMgr.closeListeners(false)
+	serviceMgr.closeListeners(true) // TODO: do we really need this flag?
 	log.Printf("TCP listeners closed.")
 
-	rcvr.ClusterReady(false) // triggers a transition
+	// Wait for receiver to be drained.
+	log.Printf("Draining receiver channel...")
+	rcvr.Drain()
+	log.Printf("Receiver channel drained.")
+
+	// Triggers a transition and flush to vcache
+	rcvr.ClusterReady(false)
 	// Allow enough time for a transition to start
 	time.Sleep(500 * time.Millisecond) // TODO This is a hack
 
-	log.Printf("Waiting for all TCP connections to finish...")
-	serviceMgr.closeListeners(true)
-	log.Printf("TCP connections finished.")
-
-	// Stop the receiver
+	// Stop the receiver, this flushes data to the database, it
+	// will wait for transition to finish since it happens in the
+	// director loop.
 	rcvr.Stop()
 
 	if gracefulChildPid != 0 {

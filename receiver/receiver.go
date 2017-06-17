@@ -170,6 +170,14 @@ func (r *Receiver) Start() {
 	doStart(r)
 }
 
+// Marks the receiver as stopped and waits for the channel to empty
+func (r *Receiver) Drain() {
+	r.stopped = true
+	for len(r.dpChIn) > 0 || len(r.dpChOut) > 0 || r.queue.size() > 0 {
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // Stops processing, waits for everything to finish and shuts down all
 // workers/flushers.
 func (r *Receiver) Stop() {
