@@ -131,7 +131,9 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 	// 13:        +-------------+        10, 30, 10 => {2:50,3:50},      NaN, 0
 	// 14:      +---------------+         4, 30, 10 => {1:50,2:50,3:50}, NaN, 0
 	// 15:      +------------+            4, 24, 4  => {1:50,2:50},       50, 1s
-	// 16:                      +---UU-+ 30, 40, 6  => {0:NaN},          NaN, 0s // XFF 0.7
+	// 16:                      +---UU-+ 30, 40, 6  => {0:NaN},          NaN, 0s
+	// 17:               +-----+  v: NaN 20, 30, 9  => {0:0},            NaN, 0s // partial NaN == NOOP
+	// 18:               +------+ v: NaN 20, 30, 10 => {0:NaN},          NaN, 0s // full NaN == NaN
 	//     |------|------|------|------|
 
 	step := 10 * time.Second
@@ -182,7 +184,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			rraDps: map[int64]float64{0: 50},
 			rraVal: 0,
 			rraDur: 0},
-		4: { // WMEAN
+		4: {
 			begin:  time.Unix(20, 0),
 			end:    time.Unix(24, 0),
 			dsVal:  5,
@@ -292,6 +294,22 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsDur:  6 * time.Second,
 			xff:    0.7,
 			rraDps: map[int64]float64{0: math.NaN()},
+			rraVal: 0,
+			rraDur: 0},
+		17: { // partial step NaN
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  math.NaN(),
+			dsDur:  9 * time.Second,
+			rraDps: map[int64]float64{3: 0},
+			rraVal: 0,
+			rraDur: 0},
+		18: { // whole step NaN
+			begin:  time.Unix(20, 0),
+			end:    time.Unix(30, 0),
+			dsVal:  math.NaN(),
+			dsDur:  10 * time.Second,
+			rraDps: map[int64]float64{3: math.NaN()},
 			rraVal: 0,
 			rraDur: 0},
 	}

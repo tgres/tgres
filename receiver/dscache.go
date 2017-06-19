@@ -271,7 +271,17 @@ func (ds *distDs) Relinquish() error {
 	// vcache is flushed, but this does not need synchronization.
 	//
 	// vcache is fully flushed in flusher.stop()
-	if !ds.LastUpdate().IsZero() {
+	if ds.PointCount() == 0 {
+		// Look it up in the cache and double check that it needs not
+		// be flushed by chance.
+		if cds := ds.dsc.getByIdent(newCachedIdent(ds.Ident())); cds != nil {
+			cds.mu.Lock()
+			if !cds.lastFlush.IsZero() && cds.lastFlush.Before(cds.lastProcess) {
+				ds.dsc.dsf.flushToVCache(ds.DbDataSourcer)
+			}
+			cds.mu.Unlock()
+		}
+	} else {
 		ds.dsc.dsf.flushToVCache(ds.DbDataSourcer)
 	}
 	ds.dsc.delete(ds.Ident())

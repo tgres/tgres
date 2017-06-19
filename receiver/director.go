@@ -75,23 +75,10 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 	}
 
 	cds.mu.Lock()
-	if cds.PointCount() > 100 {
-		// TODO: Does this still apply?
-		// This can happen if there was a gap in sending data. There is
-		// a great chance that there are many more series in a similar
-		// situation. When this is the case, we should apply a higher
-		// delay so that they can end up in vcache together.
-		if cds.lastFlush.IsZero() {
-			cds.lastFlush = time.Now() // We're done for now
-		} else if cds.lastFlush.After(time.Now().Add(-3 * cds.Step())) {
-			cds.mu.Unlock()
-			return 0
-		}
-	}
-
-	// Flush even if point count is 0 because only
+	// Flush only if there are points. Note that cnt is an accepted
+	// datapoint, it can still result in ds.PointCount() of 0, but
 	// lastupdate/value/dur of the DS may have changed.
-	if cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
+	if (cnt > 0 || cds.PointCount() > 0) && cds.lastFlush.Before(time.Now().Add(-cds.Step())) {
 		dsf.flushToVCache(cds.DbDataSourcer)
 		cds.lastFlush = time.Now()
 	}

@@ -213,7 +213,14 @@ func (rra *RoundRobinArchive) update(periodBegin, periodEnd time.Time, value flo
 
 		switch rra.cf {
 		case WMEAN:
-			rra.AddValue(value, duration)
+			if duration == rra.step && math.IsNaN(value) {
+				// Special case, a whole NaN gets recorded as NaN. This
+				// happens when a period is filled with NaNs due to HB
+				// exceed, for example.
+				rra.SetValue(value, 0)
+			} else {
+				rra.AddValue(value, duration)
+			}
 		case MAX:
 			rra.AddValueMax(value, duration)
 		case MIN:
