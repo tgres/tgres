@@ -214,6 +214,18 @@ func Test_dsl_sumSeries(t *testing.T) {
 	}
 }
 
+// multiplySeries
+func Test_dsl_multiplySeries(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "multiplySeries(group(constantLine(10), constantLine(20), constantLine(30)))", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 6000); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
 // absolute
 func Test_dsl_absolute(t *testing.T) {
 	td := setupTestData()

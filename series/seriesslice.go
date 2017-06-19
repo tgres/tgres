@@ -180,6 +180,19 @@ func (sl SeriesSlice) Sum() (result float64) {
 	return
 }
 
+// Returns the product of all the current values in the series in the
+// slice.
+func (sl SeriesSlice) Prod() (result float64) {
+	for n, series := range sl {
+		if n == 0 {
+			result = series.CurrentValue()
+		} else {
+			result *= series.CurrentValue()
+		}
+	}
+	return
+}
+
 // Returns the simple average of all the current values in the series
 // in the slice.
 func (sl SeriesSlice) Avg() float64 {

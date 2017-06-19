@@ -86,6 +86,8 @@ var preprocessArgFuncs = funcMap{
 		argDef{"seriesList", argSeries, nil}}},
 	"sum": dslFuncType{dslSumSeries, true, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
+	"multiplySeries": dslFuncType{dslMultiplySeries, true, []argDef{
+		argDef{"seriesList", argSeries, nil}}},
 	"percentileOfSeries": dslFuncType{dslPercentileOfSeries, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"n", argNumber, nil},
@@ -232,6 +234,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ sumSeries
 	// ++ sumSeriesWithWildcards
 	// ++ averageSeriesWithWildcards
+	// ++ multiplySeries
 
 	// TRANSFORM
 	// ++ absolute()
@@ -574,6 +577,22 @@ func dslSumSeries(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
 	return SeriesMap{name: &seriesSumSeries{series}}, nil
+}
+
+// multiplySeries()
+
+type seriesMultiplySeries struct {
+	*aliasSeriesSlice
+}
+
+func (sl *seriesMultiplySeries) CurrentValue() float64 {
+	return sl.Prod()
+}
+
+func dslMultiplySeries(args map[string]interface{}) (SeriesMap, error) {
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
+	name := args["_legend_"].(string)
+	return SeriesMap{name: &seriesMultiplySeries{series}}, nil
 }
 
 // diffSeries()
