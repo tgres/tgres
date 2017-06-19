@@ -638,10 +638,10 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
            b.id, b.step_ms, b.size, b.width,
            rrs.latest, rrs.value, rrs.duration_ms
        FROM %[1]sds ds
-       JOIN dss ON ds.seg = dss.seg AND ds.idx = dss.idx
+       LEFT OUTER JOIN dss ON ds.seg = dss.seg AND ds.idx = dss.idx
        JOIN %[1]srra rra ON rra.ds_id = ds.id
        JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-       JOIN rrs ON rra.rra_bundle_id = rrs.rra_bundle_id AND rra.seg = rrs.seg AND rra.idx = rrs.idx
+       LEFT OUTER JOIN rrs ON rra.rra_bundle_id = rrs.rra_bundle_id AND rra.seg = rrs.seg AND rra.idx = rrs.idx
     ORDER BY ds.id`
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
@@ -658,10 +658,9 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 
 	dss := make([]*dsRecWithRRAs, 0)
 	var (
-		lastDsr          *dsRecord
-		maxCurrentLatest time.Time
-		maxLastUpdate    time.Time
-		rras             []rrd.RoundRobinArchiver
+		lastDsr       *dsRecord
+		maxLastUpdate time.Time
+		rras          []rrd.RoundRobinArchiver
 	)
 	for rows.Next() {
 		var (
@@ -685,28 +684,12 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 			state.latest = &time.Time{}
 		}
 
-		if maxCurrentLatest.Before(*state.latest) {
-			maxCurrentLatest = *state.latest
-		}
-
 		if lastDsr == nil || lastDsr.id != dsr.id {
 
 			if lastDsr != nil && len(rras) > 0 { // this is fully baked, output it
 
-				// We are using the latest of all the latests
-				// (maxCurrentLatest) as lastUpdate value. This is a bit of a
-				// hack, but it helps with a situation when tgres may
-				// have been killed without having a chance to save
-				// the DS record. TODO: lastupdate should be an array
-				// in a separate table. NOTE FetchOrCreateDataSource()
-				// does NOT do this (it just makes code complicated).
-
 				if lastDsr.lastupdate == nil {
 					lastDsr.lastupdate = &time.Time{}
-				}
-
-				if lastDsr.lastupdate.Before(maxCurrentLatest) {
-					lastDsr.lastupdate = &maxCurrentLatest
 				}
 
 				dss = append(dss, &dsRecWithRRAs{lastDsr, rras})
@@ -717,7 +700,7 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 				}
 			}
 
-			rras, maxCurrentLatest, lastDsr = nil, time.Time{}, &dsr
+			rras, lastDsr = nil, &dsr
 		}
 
 		var rra *DbRoundRobinArchive
@@ -738,7 +721,9 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 		limit = maxLastUpdate.Add(-window)
 	}
 	for i := 0; i < len(dss); i++ {
-		if limit.Before(*dss[i].dsr.lastupdate) {
+		// Always include DS with null lastupdate. TODO: perhaps rely
+		// on created_at when lastupdate is null instead?
+		if (*dss[i].dsr.lastupdate).IsZero() || limit.Before(*dss[i].dsr.lastupdate) {
 			ds, err := dataSourceFromDsRec(dss[i].dsr)
 			if err != nil {
 				return nil, fmt.Errorf("error scanning: %v", err)

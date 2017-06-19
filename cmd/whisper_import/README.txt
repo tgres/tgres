@@ -7,7 +7,7 @@ communicates directly with the database.
 To migrate your graphite data to tgres, the process is approximately
 as follows:
 
-1. Stand up an instanc of Tgres. We do not have any kind of a formula
+1. Stand up an instance of Tgres. We do not have any kind of a formula
    on what hardware specs should Tgres have relative to what is used
    by Graphite. We know it can be lesser hardware. In our largest
    migration we went from a 24CPU 64GB RAM SSD machine to two AWS

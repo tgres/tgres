@@ -328,6 +328,7 @@ type configer interface {
 	processMinStep() error
 	processMaxReceiverQueueSize() error
 	processMaxMemoryBytes() error
+	processPgSegmentWidth() error
 	processStatFlushInterval() error
 	processStatsNamePrefix() error
 	processWorkers() error
@@ -355,6 +356,9 @@ var processConfig = func(c configer, wd string) error {
 		return err
 	}
 	if err := c.processMaxMemoryBytes(); err != nil {
+		return err
+	}
+	if err := c.processPgSegmentWidth(); err != nil {
 		return err
 	}
 	if err := c.processStatFlushInterval(); err != nil {

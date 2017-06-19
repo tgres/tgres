@@ -53,7 +53,7 @@ func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl
 	server := &http.Server{
 		Addr:           addr,
 		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		WriteTimeout:   30 * time.Second,
 		MaxHeaderBytes: 1 << 16}
 	server.Serve(l)
 }

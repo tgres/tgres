@@ -18,18 +18,23 @@
 package http
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/misc"
 )
+
+const BATCH_LIMIT = 64
 
 func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -54,83 +59,90 @@ func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
-	return func(w http.ResponseWriter, r *http.Request) {
+	return makeGzipHandler(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 
-		start := time.Now()
-		from, err := parseTime(r.FormValue("from"))
-		if err != nil {
-			log.Printf("RenderHandler(): (from) %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		to, err := parseTime(r.FormValue("until"))
-		if err != nil {
-			log.Printf("RenderHandler(): (unitl) %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		} else if to == nil {
-			tmp := time.Now()
-			to = &tmp
-		}
-		points, err := strconv.Atoi(r.FormValue("maxDataPoints"))
-		if err != nil {
-			log.Printf("RenderHandler(): (maxDataPoints) %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		fmt.Fprintf(w, "[")
-
-		for tn, target := range r.Form["target"] {
-
-			seriesMap, err := processTarget(rcache, target, from.Unix(), to.Unix(), int64(points))
-
+			start := time.Now()
+			from, err := parseTime(r.FormValue("from"))
 			if err != nil {
-				log.Printf("RenderHandler(): %v", err)
-				break // Graphite behaviour is empty list
+				log.Printf("RenderHandler(): (from) %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			to, err := parseTime(r.FormValue("until"))
+			if err != nil {
+				log.Printf("RenderHandler(): (unitl) %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			} else if to == nil {
+				tmp := time.Now()
+				to = &tmp
+			}
+			points, err := strconv.Atoi(r.FormValue("maxDataPoints"))
+			if err != nil {
+				log.Printf("RenderHandler(): (maxDataPoints) %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
 			}
 
-			nn := 0
-			for _, name := range seriesMap.SortedKeys() {
+			var wg sync.WaitGroup
 
-				series := seriesMap[name]
-
-				alias := series.Alias()
-				if alias != "" {
-					name = alias
-				}
-
-				fmt.Fprintf(w, "\n"+`{"target": "%s", "datapoints": [`+"\n", name)
-
-				n := 0
-				for series.Next() {
-					if n > 0 {
-						fmt.Fprintf(w, ",")
+			targets := make([][]*graphiteSeries, len(r.Form["target"]))
+			batchSize := 0
+			for n, target := range r.Form["target"] {
+				wg.Add(1)
+				batchSize++
+				go func(wg *sync.WaitGroup, target string, targets [][]*graphiteSeries, n int) {
+					if sm, err := processTarget(rcache, target, from.Unix(), to.Unix(), int64(points)); err == nil {
+						targets[n] = readDataPoints(sm)
+					} else {
+						log.Printf("RenderHandler(): %v", err)
 					}
-					value := series.CurrentValue()
-					ts := series.CurrentTime().Unix()
-					if ts > 0 {
-						if math.IsNaN(value) || math.IsInf(value, 0) {
-							fmt.Fprintf(w, "[null, %v]", ts)
-						} else {
-							fmt.Fprintf(w, "[%v, %v]", value, ts)
+					wg.Done()
+				}(&wg, target, targets, n)
+				if batchSize > BATCH_LIMIT { // limit concurrent processing
+					wg.Wait()
+					batchSize = 0
+				}
+			}
+			wg.Wait()
+
+			fmt.Fprintf(w, "[")
+
+			for tn, target := range targets {
+
+				nn := 0
+				for _, series := range target {
+					fmt.Fprintf(w, "\n"+`{"target": "%s", "datapoints": [`+"\n", series.name)
+					n := 0
+					for _, dp := range series.dps {
+						if n > 0 {
+							fmt.Fprintf(w, ",")
 						}
-						n++
+						if dp.t > 0 {
+							if math.IsNaN(dp.v) || math.IsInf(dp.v, 0) {
+								fmt.Fprintf(w, "[null, %v]", dp.t)
+							} else {
+								fmt.Fprintf(w, "[%v, %v]", dp.v, dp.t)
+							}
+							n++
+						}
 					}
-				}
-				if nn < len(seriesMap)-1 || tn < len(r.Form["target"])-1 {
-					fmt.Fprintf(w, "]},\n")
-				} else {
-					fmt.Fprintf(w, "]}")
-				}
-				series.Close()
-				nn++
-			}
-		}
-		fmt.Fprintf(w, "]\n")
 
-		log.Printf("GraphiteRenderHandler: finished in %v", time.Now().Sub(start))
-	}
+					if nn < len(target)-1 || tn < len(r.Form["target"])-1 {
+						fmt.Fprintf(w, "]},\n")
+					} else {
+						fmt.Fprintf(w, "]}")
+					}
+					nn++
+				}
+			}
+			fmt.Fprintf(w, "]\n")
+
+			log.Printf("GraphiteRenderHandler: finished in %v", time.Now().Sub(start))
+		},
+	)
 }
 
 func parseTime(s string) (*time.Time, error) {
@@ -181,4 +193,71 @@ func processTarget(rcache dsl.NamedDSFetcher, target string, from, to, maxPoints
 	// In our DSL everything must be a function call, so we wrap everything in group()
 	query := fmt.Sprintf("group(%s)", target)
 	return dsl.ParseDsl(rcache, query, time.Unix(from, 0), time.Unix(to, 0), maxPoints)
+}
+
+// Graphite data points
+type dataPoint struct {
+	t int64
+	v float64
+}
+type graphiteSeries struct {
+	dps  []*dataPoint
+	name string
+}
+
+func readDataPoints(sm dsl.SeriesMap) []*graphiteSeries {
+	names := sm.SortedKeys()
+	result := make([]*graphiteSeries, len(names))
+	var (
+		wg        sync.WaitGroup
+		batchSize int
+	)
+	for n, name := range sm.SortedKeys() {
+		series := sm[name]
+		alias := series.Alias()
+		if alias != "" {
+			name = alias
+		}
+		wg.Add(1)
+		batchSize++
+		go func(wg *sync.WaitGroup, result []*graphiteSeries, n int, name string) {
+			gs := &graphiteSeries{make([]*dataPoint, 0), name}
+			for series.Next() {
+				gs.dps = append(gs.dps, &dataPoint{series.CurrentTime().Unix(), series.CurrentValue()})
+			}
+			result[n] = gs
+			series.Close()
+			wg.Done()
+		}(&wg, result, n, name)
+		if batchSize > BATCH_LIMIT {
+			wg.Wait()
+			batchSize = 0
+		}
+	}
+	wg.Wait()
+	return result
+}
+
+// Gzip Compression
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
+
+func (w gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
+func makeGzipHandler(fn http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			fn(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		gzr := gzipResponseWriter{Writer: gz, ResponseWriter: w}
+		fn(gzr, r)
+	}
 }
