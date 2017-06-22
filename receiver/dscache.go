@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/tgres/tgres/cluster"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
@@ -29,18 +30,21 @@ import (
 // A collection of data sources kept by name (string).
 type dsCache struct {
 	sync.RWMutex
-	byIdent  map[string]*cachedDs
-	db       serde.Fetcher
-	dsf      dsFlusherBlocking
-	finder   MatchingDSSpecFinder
-	clstr    clusterer
-	rraCount int
-	evicted  int
-	maxInact time.Duration
+	byIdent    map[string]*cachedDs
+	db         serde.Fetcher
+	dsf        dsFlusherBlocking
+	finder     MatchingDSSpecFinder
+	clstr      clusterer
+	rraCount   int
+	evicted    int
+	lruEvicted int
+	maxInact   time.Duration
+	watchLRU   *lru.Cache
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
+	const LRU_SIZE = 512 // TODO make me configurable?
 	d := &dsCache{
 		byIdent:  make(map[string]*cachedDs),
 		db:       db,
@@ -48,6 +52,8 @@ func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBloc
 		dsf:      dsf,
 		maxInact: time.Hour, // TODO: Make configurable?
 	}
+
+	d.watchLRU, _ = lru.NewWithEvict(LRU_SIZE, d.unwatch)
 	return d
 }
 
@@ -139,12 +145,23 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 	}
 }
 
-func (d *dsCache) stats() (int, int, int) {
+type dscStats struct {
+	dsCount, rraCount, evicted, lruSize, lruEvicted int
+}
+
+func (d *dsCache) stats() dscStats {
 	d.RLock()
 	defer d.RUnlock()
-	evicted := d.evicted
-	d.evicted = 0
-	return len(d.byIdent), d.rraCount, evicted
+	st := dscStats{
+		dsCount:    len(d.byIdent),
+		rraCount:   d.rraCount,
+		evicted:    d.evicted,
+		lruSize:    d.watchLRU.Len(),
+		lruEvicted: d.lruEvicted,
+	}
+
+	d.evicted, d.lruEvicted = 0, 0
+	return st
 }
 
 func (d *dsCache) evictInact() {
@@ -161,6 +178,78 @@ func (d *dsCache) evictInact() {
 		cds.mu.Unlock()
 	}
 	return
+}
+
+// Watch checks the cache for presence of ident, if found, it
+// populates all the RRAs with data from the database and marks this
+// DS as watched, then returns it. A watched DS receives all data
+// point updates and thus you can use a series.RRASeries to get a
+// Series out of it without ever hitting the database. The number of
+// watched series is subject to the LRU in the dscache.
+func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
+
+	cds := d.getByIdent(newCachedIdent(ident))
+
+	// nil means it has no recent data points, and loading it here is
+	// not appropriate.
+	if cds == nil {
+		return nil
+	}
+
+	cds.mu.Lock()
+	if cds.sentToLoader { // no partially loaded allowed
+		defer cds.mu.Unlock()
+		return nil
+	}
+	if cds.watched != nil {
+		defer cds.mu.Unlock()
+		return cds.watched // All good, return it
+	}
+	cds.mu.Unlock()
+
+	// At this point RRAs cannot change, we do not need the lock
+
+	// Turn it into an rraLoader
+	type rraLoader interface {
+		LoadRRAData(rra *serde.DbRoundRobinArchive) (*serde.DbRoundRobinArchive, error)
+	}
+
+	db, ok := d.db.(rraLoader)
+	if !ok {
+		return nil
+	}
+
+	rras := cds.RRAs()
+	newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
+	for i, rra := range rras {
+		dbrra, ok := rra.(*serde.DbRoundRobinArchive)
+		if !ok {
+			return nil // must be db rra
+		}
+		var err error
+		if newRRAs[i], err = db.LoadRRAData(dbrra); err != nil {
+			return nil
+		}
+	}
+
+	cds.mu.Lock()
+	ds := cds.Copy()
+	ds.SetRRAs(newRRAs)
+	cds.watched = ds
+	cds.mu.Unlock()
+
+	return ds
+}
+
+func (d *dsCache) unwatch(_, val interface{}) {
+	if cds := d.getByIdent(newCachedIdent(val.(serde.Ident))); cds != nil {
+		cds.mu.Lock()
+		cds.watched = nil
+		cds.mu.Unlock()
+		d.Lock()
+		d.lruEvicted++
+		d.Unlock()
+	}
 }
 
 func dsCachePeriodicCleanup(dsc *dsCache) {
@@ -186,6 +275,7 @@ type cachedDs struct {
 	sentToLoader bool
 	lastProcess  time.Time
 	lastFlush    time.Time
+	watched      rrd.DataSourcer // presence of this makes it "watched" (TODO document me)
 	mu           *sync.Mutex
 }
 
@@ -221,6 +311,11 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	for _, dp := range cds.incoming {
 		// continue on errors
 		err = cds.ProcessDataPoint(dp.value, dp.timeStamp)
+
+		if cds.watched != nil {
+			// ignore errors completely
+			cds.watched.ProcessDataPoint(dp.value, dp.timeStamp)
+		}
 	}
 
 	cds.lastProcess = time.Now()

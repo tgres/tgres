@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-type dbSeriesV2 struct {
+type dbSeries struct {
 	ds  DbDataSourcer
 	rra DbRoundRobinArchiver
 
@@ -50,11 +50,11 @@ type dbSeriesV2 struct {
 	alias string
 }
 
-func (dps *dbSeriesV2) Step() time.Duration {
+func (dps *dbSeries) Step() time.Duration {
 	return dps.rra.Step()
 }
 
-func (dps *dbSeriesV2) GroupBy(td ...time.Duration) time.Duration {
+func (dps *dbSeries) GroupBy(td ...time.Duration) time.Duration {
 	if len(td) > 0 {
 		defer func() { dps.groupBy = td[0] }()
 	}
@@ -64,7 +64,7 @@ func (dps *dbSeriesV2) GroupBy(td ...time.Duration) time.Duration {
 	return dps.groupBy
 }
 
-func (dps *dbSeriesV2) TimeRange(t ...time.Time) (time.Time, time.Time) {
+func (dps *dbSeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	if len(t) == 1 {
 		defer func() { dps.from = t[0] }()
 	} else if len(t) == 2 {
@@ -73,27 +73,27 @@ func (dps *dbSeriesV2) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	return dps.from, dps.to
 }
 
-func (dps *dbSeriesV2) Latest() time.Time {
+func (dps *dbSeries) Latest() time.Time {
 	return dps.rra.Latest()
 }
 
-func (dps *dbSeriesV2) MaxPoints(n ...int64) int64 {
+func (dps *dbSeries) MaxPoints(n ...int64) int64 {
 	if len(n) > 0 { // setter
 		defer func() { dps.maxPoints = n[0] }()
 	}
 	return dps.maxPoints // getter
 }
 
-func (dps *dbSeriesV2) Align() {}
+func (dps *dbSeries) Align() {}
 
-func (dps *dbSeriesV2) Alias(s ...string) string {
+func (dps *dbSeries) Alias(s ...string) string {
 	if len(s) > 0 {
 		dps.alias = s[0]
 	}
 	return dps.alias
 }
 
-func (dps *dbSeriesV2) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
+func (dps *dbSeries) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	var (
 		rows *sql.Rows
 		err  error
@@ -126,20 +126,21 @@ func (dps *dbSeriesV2) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 		dps.groupBy = time.Duration(finalGroupByMs) * time.Millisecond
 	}
 
-	// Ensure that we never return data beyond rra.latest (it would
-	// cause us to return bogus data because the RRD would wrap
-	// around). We do this *after* calculating groupBy because groupBy
-	// should be based on the screen resolution, not what we have in
-	// the db.
-	if dps.to.After(dps.Latest()) {
-		dps.to = dps.Latest()
-	}
-
 	aligned_from := dps.from.Truncate(time.Duration(finalGroupByMs) * time.Millisecond)
 
 	if debug {
-		log.Printf("seriesQuerySqlUsingViewAndSeries() sqlSelectSeries %v %v %v %v %v %v %v %v", aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs),
-			dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
+		dbFormat := "2006-01-02 15:04:05 -0700"
+		sqlStatement := fmt.Sprintf(
+			"\nSELECT max(tg) mt, avg(r) ar\n"+
+				"   FROM generate_series('%[2]s', '%[3]s', ('%[4]s')::interval) AS tg\n"+
+				"   LEFT OUTER JOIN (SELECT t, r FROM %[1]stv tv WHERE ds_id = %[5]d AND rra_id = %[6]d\n"+
+				"     AND t >= '%[7]s' AND t <= '%[8]s') s ON tg = s.t\n"+
+				"   GROUP BY trunc((extract(epoch from tg)*1000-1))::bigint/%[9]d ORDER BY mt",
+			dps.db.prefix,
+			aligned_from.Format(dbFormat), dps.to.Format(dbFormat), fmt.Sprintf("%d milliseconds", rraStepMs),
+			dps.ds.Id(), dps.rra.Id(), dps.from.Format(dbFormat), dps.to.Format(dbFormat),
+			finalGroupByMs)
+		log.Printf("seriesQuerySqlUsingViewAndSeries() sqlSelectSeries -- " + sqlStatement)
 	}
 	rows, err = dps.db.sqlSelectSeries.Query(aligned_from, dps.to, fmt.Sprintf("%d milliseconds", rraStepMs), dps.ds.Id(), dps.rra.Id(), dps.from, dps.to, finalGroupByMs)
 
@@ -151,21 +152,21 @@ func (dps *dbSeriesV2) seriesQuerySqlUsingViewAndSeries() (*sql.Rows, error) {
 	return rows, nil
 }
 
-func (dps *dbSeriesV2) Next() bool {
+func (dps *dbSeries) Next() bool {
 
 	if dps.rows == nil { // First Next()
 		rows, err := dps.seriesQuerySqlUsingViewAndSeries()
 		if err == nil {
 			dps.rows = rows
 		} else {
-			log.Printf("dbSeriesV2.Next(): database error: %v", err)
+			log.Printf("dbSeries.Next(): database error: %v", err)
 			return false
 		}
 	}
 
 	if dps.rows.Next() {
 		if ts, value, err := timeValueFromRow(dps.rows); err != nil {
-			log.Printf("dbSeriesV2.Next(): database error: %v", err)
+			log.Printf("dbSeries.Next(): database error: %v", err)
 			return false
 		} else {
 			dps.posBegin = dps.latest
@@ -178,17 +179,17 @@ func (dps *dbSeriesV2) Next() bool {
 	return false
 }
 
-func (dps *dbSeriesV2) CurrentValue() float64 {
+func (dps *dbSeries) CurrentValue() float64 {
 	return dps.value
 }
 
-func (dps *dbSeriesV2) CurrentTime() time.Time {
+func (dps *dbSeries) CurrentTime() time.Time {
 	return dps.posEnd
 }
 
-func (dps *dbSeriesV2) Close() error {
+func (dps *dbSeries) Close() error {
 	if dps.rows == nil {
-		return fmt.Errorf("Close() on dbSeriesV2 that isn not open.")
+		return fmt.Errorf("Close() on dbSeries that isn not open.")
 	}
 	result := dps.rows.Close()
 	dps.rows = nil // next Next() will re-open

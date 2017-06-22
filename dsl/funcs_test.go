@@ -48,7 +48,7 @@ func setupTestData() *testData {
 	from, to := when.Add(-time.Hour), when
 
 	db := serde.NewMemSerDe()
-	rcache := NewNamedDSFetcher(db.Fetcher())
+	rcache := NewNamedDSFetcher(db.Fetcher(), nil)
 
 	_td = &testData{
 		when:   when,

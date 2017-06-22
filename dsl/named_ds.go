@@ -16,6 +16,7 @@
 package dsl
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -57,13 +58,24 @@ type namedDsFetcher struct {
 	dsns       *fsFindCache
 	lastReload time.Time
 	minAge     time.Duration
+	cache      watcher
+}
+
+type watcher interface {
+	Watch(ident serde.Ident) rrd.DataSourcer
 }
 
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
-func NewNamedDSFetcher(db dsFetcher) *namedDsFetcher {
-	return &namedDsFetcher{dsFetcher: db, dsns: &fsFindCache{key: "name"}, Mutex: &sync.Mutex{}, minAge: 30 * time.Second}
+func NewNamedDSFetcher(db dsFetcher, dsc watcher) *namedDsFetcher {
+	return &namedDsFetcher{
+		dsFetcher: db,
+		dsns:      &fsFindCache{key: "name"},
+		Mutex:     &sync.Mutex{},
+		minAge:    30 * time.Second,
+		cache:     dsc,
+	}
 }
 
 func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident {
@@ -87,4 +99,52 @@ func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
 	}
 	r.Unlock()
 	return r.dsns.fsFind(pattern)
+}
+
+type watchedDs struct {
+	rrd.DataSourcer
+}
+
+// This version of FetchOrCreateDataSource checks the cache if present and
+// marks the series as watched. Otherwise it uses the "normal" behavior.
+func (r *namedDsFetcher) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.DataSourcer, error) {
+	if r.cache != nil {
+		if ds := r.cache.Watch(ident); ds != nil {
+			return &watchedDs{ds}, nil
+		}
+	}
+	// TODO: record LRU hits/misses?
+
+	// non-cache behavior
+	return r.dsFetcher.FetchOrCreateDataSource(ident, nil)
+}
+
+// This FetchSeries checks for the DS being a watchedDS, meaning it
+// came from the cache, otherwise it resorts to the old databse
+// behavior.
+func (r *namedDsFetcher) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
+
+	if r.cache == nil {
+		return r.dsFetcher.FetchSeries(ds, from, to, maxPoints)
+	}
+
+	if _, ok := ds.(*watchedDs); !ok {
+		return r.dsFetcher.FetchSeries(ds, from, to, maxPoints)
+	}
+
+	rra := ds.BestRRA(from, to, maxPoints)
+	if rra == nil {
+		return nil, fmt.Errorf("FetchSeries (named_ds.go): No adequate RRA found for DS from: %v to: maxPoints: %v", from, to, maxPoints)
+	}
+
+	rraLatest := rra.Latest()
+	rraEarliest := rra.Begins(rraLatest)
+
+	if from.IsZero() || rraEarliest.After(from) {
+		from = rraEarliest
+	}
+
+	s := series.NewRRASeriesCopyRange(rra, from, to)
+	s.MaxPoints(maxPoints)
+	return s, nil
 }

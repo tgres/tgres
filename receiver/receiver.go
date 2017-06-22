@@ -208,6 +208,11 @@ func (r *Receiver) SetCluster(c clusterer) {
 	}
 }
 
+// Return a pointer to dsCache
+func (r *Receiver) DsCache() *dsCache {
+	return r.dsc
+}
+
 // Sends a data point to the receiver channel. A Data Source PDP
 // always treats incoming data as a rate, it is the responsibility of
 // the caller to present non-rate values such as counters as a

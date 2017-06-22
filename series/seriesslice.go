@@ -175,7 +175,9 @@ func (sl SeriesSlice) Align() {
 // in the slice.
 func (sl SeriesSlice) Sum() (result float64) {
 	for _, series := range sl {
-		result += series.CurrentValue()
+		if val := series.CurrentValue(); !math.IsNaN(val) { // Graphite treats NaN like 0
+			result += series.CurrentValue()
+		}
 	}
 	return
 }

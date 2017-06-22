@@ -383,6 +383,9 @@ func (iv *iVer) version(i int64) int {
 	version := iv.ver
 	if i > iv.i {
 		version--
+		if version < 0 {
+			version = 32767
+		}
 	}
 	return version
 }

@@ -621,29 +621,22 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, error) {
 
 	const sql = `
- WITH dss AS (
-  SELECT seg, s.lu, s.value, s.duration_ms, s.idx
-    FROM %[1]sds_state,
-         UNNEST(lastupdate, value, duration_ms) WITH ORDINALITY AS s(lu, value, duration_ms, idx)
- ), rrs AS (
-  SELECT rra_bundle_id, seg, s.latest, s.value, s.duration_ms, s.idx
-    FROM %[1]srra_state,
-         UNNEST(latest, value, duration_ms) WITH ORDINALITY AS s(latest, value, duration_ms, idx)
- )
- SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
-           dss.lu,
-           dss.value,
-           dss.duration_ms,
+    SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
+           dsst.lastupdate[ds.idx] AS lastupdate,
+           dsst.value[ds.idx] AS value,
+           dsst.duration_ms[ds.idx] AS duration_ms,
            rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
            b.id, b.step_ms, b.size, b.width,
-           rrs.latest, rrs.value, rrs.duration_ms
-       FROM %[1]sds ds
-       LEFT OUTER JOIN dss ON ds.seg = dss.seg AND ds.idx = dss.idx
-       JOIN %[1]srra rra ON rra.ds_id = ds.id
-       JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-       LEFT OUTER JOIN rrs ON rra.rra_bundle_id = rrs.rra_bundle_id AND rra.seg = rrs.seg AND rra.idx = rrs.idx
-    ORDER BY ds.id`
-
+           rs.latest[rra.idx] AS latest,
+           rs.value[rra.idx] AS value,
+           rs.duration_ms[rra.idx] AS duration_ms
+    FROM %[1]sds ds
+    LEFT OUTER JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
+    JOIN %[1]srra rra ON rra.ds_id = ds.id
+    JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
+    LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
+    ORDER BY ds.id
+`
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
 		log.Printf("FetchDataSources(): error querying database: %v", err)
@@ -1198,10 +1191,62 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 		return nil, fmt.Errorf("FetchSeries: rra must be a DbRoundRobinArchive")
 	}
 
-	// Note that seriesQuerySqlUsingViewAndSeries() will modify "to"
-	// to be the earliest of "to" or "LastUpdate".
-	dps := &dbSeriesV2{db: p, ds: dbds, rra: dbrra, from: from, to: to, maxPoints: maxPoints}
+	dps := &dbSeries{db: p, ds: dbds, rra: dbrra, from: from, to: to, maxPoints: maxPoints}
 	return dps, nil
+}
+
+// Returns a *new* RRA based on the one passed in, containing all the data.
+// If the database is behind and data has not been saved yet, the version system
+// will correct for it, latest does not have to be spot on accurate.
+func (p *pgvSerDe) LoadRRAData(rra *DbRoundRobinArchive) (*DbRoundRobinArchive, error) {
+	stmt := "SELECT i, dp[$1] AS r FROM %[1]sts ts " +
+		"WHERE rra_bundle_id = $2 and seg = $3 " +
+		" AND (i <= $4) AND ver[$1] = $5 OR (i > $4) AND ver[$1] = $6 " +
+		" AND dp[$1] IS NOT NULL"
+
+	// TODO There should be a centralized place for version calculation
+	latest_i := rrd.SlotIndex(rra.Latest(), rra.Step(), rra.Size())
+	span_ms := (rra.Step().Nanoseconds() / 1e6) * rra.Size()
+	latest_ms := rra.Latest().UnixNano() / 1e6
+	latestVer := int((latest_ms / span_ms) % 32767)
+	prevVer := latestVer - 1
+	if prevVer == -1 {
+		prevVer = 32767
+	}
+
+	rows, err := p.dbConn.Query(fmt.Sprintf(stmt, p.prefix), rra.Idx(), rra.BundleId(), rra.Seg(), latest_i, latestVer, prevVer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	dps := make(map[int64]float64)
+	for rows.Next() {
+		var (
+			i   int64
+			val *float64
+		)
+		err = rows.Scan(&i, &val)
+		if err != nil {
+			return nil, err
+		}
+		if val != nil {
+			dps[i] = *val
+		}
+	}
+
+	spec := rra.Spec()
+	spec.Latest = rra.Latest()
+	spec.Value = rra.Value()
+	spec.Duration = rra.Duration()
+	spec.DPs = dps
+
+	dbrra, err := newDbRoundRobinArchive(rra.id, rra.width, rra.bundleId, rra.pos, spec)
+	if err != nil {
+		return nil, err
+	}
+
+	return dbrra, nil
 }
 
 func (p *pgvSerDe) TsTableSize() (size, count int64, err error) {

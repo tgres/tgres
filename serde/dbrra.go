@@ -16,9 +16,7 @@
 package serde
 
 import (
-	"bytes"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/tgres/tgres/rrd"
@@ -29,7 +27,7 @@ type DbRoundRobinArchiver interface {
 	Id() int64
 	Width() int64
 	SlotRow(slot int64) int64
-	DPsAsPGString(start, end int64) string
+	//DPsAsPGString(start, end int64) string
 	//Pos() int64
 	Seg() int64
 	Idx() int64
@@ -96,20 +94,20 @@ func (rra *DbRoundRobinArchive) SlotRow(slot int64) int64 {
 	}
 }
 
-// DPsAsPGString returns data points as a PostgreSQL-compatible array string
-func (rra *DbRoundRobinArchive) DPsAsPGString(start, end int64) string {
-	var b bytes.Buffer
-	b.WriteString("{")
-	dps := rra.DPs()
-	for i := start; i <= end; i++ {
-		b.WriteString(strconv.FormatFloat(dps[int64(i)], 'f', -1, 64))
-		if i != end {
-			b.WriteString(",")
-		}
-	}
-	b.WriteString("}")
-	return b.String()
-}
+// // DPsAsPGString returns data points as a PostgreSQL-compatible array string
+// func (rra *DbRoundRobinArchive) DPsAsPGString(start, end int64) string {
+// 	var b bytes.Buffer
+// 	b.WriteString("{")
+// 	dps := rra.DPs()
+// 	for i := start; i <= end; i++ {
+// 		b.WriteString(strconv.FormatFloat(dps[int64(i)], 'f', -1, 64))
+// 		if i != end {
+// 			b.WriteString(",")
+// 		}
+// 	}
+// 	b.WriteString("}")
+// 	return b.String()
+// }
 
 func (rra *DbRoundRobinArchive) Copy() rrd.RoundRobinArchiver {
 	return &DbRoundRobinArchive{

@@ -11,7 +11,7 @@ A. It is T (which probably stands for "time") and "gres", which is a
 Q. Are all Graphite functions supported?
 
 A. Not all of them, most of them. The ones that are very new, or hard
-   to implement or seem obscure were omited. The specific list is in
+   to implement or seem obscure were omitted. The specific list is in
    [dsl/funcs.go](https://github.com/tgres/tgres/blob/master/dsl/funcs.go#L220).
 
    Some functions may work sligtly differently (e.g. the Holt-Winters

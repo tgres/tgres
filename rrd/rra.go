@@ -118,6 +118,7 @@ func (rra *RoundRobinArchive) DPs() map[int64]float64 { return rra.dps }
 // Returns a new RRA in accordance with the provided RRASpec.
 func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
 	result := &RoundRobinArchive{
+		cf:     spec.Function,
 		step:   spec.Step,
 		size:   spec.Span.Nanoseconds() / spec.Step.Nanoseconds(),
 		xff:    spec.Xff,
@@ -130,7 +131,7 @@ func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
 	}
 	if len(spec.DPs) > 0 {
 		result.dps = spec.DPs
-		result.start, result.end = computeStartEnd(result.dps, result.latest, result.step, result.size)
+		result.start, result.end = ComputeStartEnd(result.dps, result.latest, result.step, result.size)
 	}
 	return result
 }
@@ -297,7 +298,7 @@ func SlotTime(n int64, latest time.Time, step time.Duration, size int64) time.Ti
 }
 
 // Given a bunch of DPs and RRA params, compute the correct start, end
-func computeStartEnd(DPs map[int64]float64, latest time.Time, step time.Duration, size int64) (int64, int64) {
+func ComputeStartEnd(DPs map[int64]float64, latest time.Time, step time.Duration, size int64) (int64, int64) {
 	end := SlotIndex(latest, step, size)
 	start := end
 	for i, _ := range DPs {
