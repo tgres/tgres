@@ -183,9 +183,11 @@ func Test_DataSource_updateRange(t *testing.T) {
 	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 10 * time.Second, size: 10},
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
+		&RoundRobinArchive{step: 50 * time.Second, size: 10},
+		&RoundRobinArchive{step: 100 * time.Second, size: 10},
 	})
 
-	begin, end := time.Unix(104, 0), time.Unix(156, 0)
+	begin, end := time.Unix(103, 0), time.Unix(156, 0)
 	ds.updateRange(begin, end, 100.0)
 
 	exp1 := map[int64]float64{1: 100, 2: 100, 3: 100, 4: 100, 5: 100}
@@ -198,10 +200,33 @@ func Test_DataSource_updateRange(t *testing.T) {
 
 	exp2 := map[int64]float64{6: 100, 7: 100}
 	if !reflect.DeepEqual(ds.rras[1].DPs(), exp2) {
-		t.Errorf("updateRange: expecting rra1.DPs(): %v, got %v", exp2, ds.rras[1].DPs())
+		t.Errorf("updateRange: expecting rra[1].DPs(): %v, got %v", exp2, ds.rras[1].DPs())
 	}
+	// duration 10 is correct, the remaining 6 are in the DS PDP
 	if ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second {
-		t.Errorf("updateRange: ds.rras[1].Value() != 100 || ds.rras[1].Duration() != 10*time.Second")
+		t.Errorf("updateRange: ds.rras[1].Value() %v != 100 || ds.rras[1].Duration() %v != 10*time.Second", ds.rras[1].Value(), ds.rras[1].Duration())
+	}
+
+	exp3 := map[int64]float64{3: 100}
+	if !reflect.DeepEqual(ds.rras[2].DPs(), exp3) {
+		t.Errorf("updateRange: expecting rra[2].DPs(): %v, got %v", exp3, ds.rras[2].DPs())
+	}
+	// Nothing in the 50, the 6 secs are in PDP
+	if !math.IsNaN(ds.rras[2].Value()) || ds.rras[2].Duration() != 0 {
+		t.Errorf("updateRange: !math.IsNaN(ds.rras[2].Value()) %v || ds.rras[2].Duration() %v != 0", ds.rras[2].Value(), ds.rras[2].Duration())
+	}
+
+	if len(ds.rras[3].DPs()) > 0 {
+		t.Errorf("rra[3].DPs() should be empty")
+	}
+	// here 6s are in ds.pdp, 3 skipped in the beginning, 47 is left
+	if ds.rras[3].Value() != 100 || ds.rras[3].Duration() != 47*time.Second {
+		t.Errorf("updateRange: ds.rras[3].Value() %v != 100 || ds.rras[3].Duration() %v != 47s", ds.rras[3].Value(), ds.rras[3].Duration())
+	}
+
+	// The remaining 6 seconds should be in the DS
+	if ds.Duration() != 6*time.Second || ds.Value() != 100 {
+		t.Errorf("updateRange: ds.Duration() != 6*time.Second || ds.Value() != 100")
 	}
 
 	// Now do this again with the end aligned on PDP
@@ -213,8 +238,8 @@ func Test_DataSource_updateRange(t *testing.T) {
 	begin, end = time.Unix(104, 0), time.Unix(160, 0)
 	ds.updateRange(begin, end, 100.0)
 
-	exp3 := map[int64]float64{6: 100, 7: 100, 8: 100}
-	if !reflect.DeepEqual(ds.rras[0].DPs(), exp3) {
+	exp4 := map[int64]float64{6: 100, 7: 100, 8: 100}
+	if !reflect.DeepEqual(ds.rras[0].DPs(), exp4) {
 		t.Errorf("updateRange: expecting rra[0].DPs(): %v, got %v", exp3, ds.rras[0].DPs())
 	}
 	if !math.IsNaN(ds.rras[0].Value()) || ds.rras[0].Duration() != 0 {

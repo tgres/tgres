@@ -217,8 +217,8 @@ func (ds *DataSource) updateRange(begin, end time.Time, value float64) {
 			// before the beginning of the range. periodEnd points at
 			// the end of the first PDP or end of the last PDP if (and
 			// only if) end == endPdpEnd.
-			periodBegin := begin.Truncate(ds.step)
-			periodEnd := periodBegin.Add(ds.step)
+			periodBegin := begin
+			periodEnd := begin.Truncate(ds.step).Add(ds.step)
 			offset := periodEnd.Sub(begin)
 			ds.AddValue(value, offset)
 
@@ -292,9 +292,15 @@ func (ds *DataSource) ProcessDataPoint(value float64, ts time.Time) error {
 }
 
 func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
-	// for each of this DS's RRAs
 	for _, rra := range ds.rras {
-		rra.update(periodBegin, periodEnd, ds.value, ds.duration)
+		// If the step of the RRA exceeds the interval here, we cheat and send a larger
+		// duration once instead of iterating and updating in ds.step increments.
+		duration := ds.duration
+		span := periodEnd.Sub(periodBegin)
+		if rra.Step() > span {
+			duration = span
+		}
+		rra.update(periodBegin, periodEnd, ds.value, duration)
 	}
 }
 

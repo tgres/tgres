@@ -174,7 +174,7 @@ var dbFlusher = func(wc wController, db serde.Flusher, ch chan *vDpFlushRequest,
 			st.dpsSqlOps += sqlOps
 			st.dpsFlushes++
 
-		} else if len(dpr.latests) > 0 {
+		} else if (len(dpr.latests) + len(dpr.value) + len(dpr.duration)) > 0 {
 			// RRA State flush
 			start := time.Now()
 			sqlOps, err := db.FlushRRAStates(dpr.bundleId, dpr.seg, dpr.latests, dpr.value, dpr.duration)

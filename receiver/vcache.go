@@ -39,15 +39,14 @@ type verticalCacheSegment struct {
 	// step/size.
 	rows map[int64]crossRRAPoints
 	// The latest timestamp for RRAs, keyed by RRA.pos.
-	latests      map[int64]time.Time // rra.latest
-	value        map[int64]float64
-	duration     map[int64]int64
-	maxLatest    time.Time
-	latestIndex  int64
-	lastFlushRT  time.Time
-	lastSFlushRT time.Time // state flush
-	step         time.Duration
-	size         int64
+	latests     map[int64]time.Time // rra.latest
+	value       map[int64]float64
+	duration    map[int64]int64
+	maxLatest   time.Time
+	latestIndex int64
+	lastFlushRT time.Time
+	step        time.Duration
+	size        int64
 }
 
 type dsStateSegment struct {
@@ -76,11 +75,6 @@ type verticalCache struct {
 
 // Insert new data into the cache
 func (vc *verticalCache) updateDps(rra serde.DbRoundRobinArchiver) {
-	if rra.PointCount() == 0 {
-		// Nothing for us to do. This can happen if other RRAs in the
-		// DS have points, thus its getting flushed.
-		return
-	}
 
 	seg, idx := rra.Seg(), rra.Idx()
 	key := bundleKey{rra.BundleId(), seg}
@@ -90,15 +84,14 @@ func (vc *verticalCache) updateDps(rra serde.DbRoundRobinArchiver) {
 	segment := vc.dps[key]
 	if segment == nil {
 		segment = &verticalCacheSegment{
-			Mutex:        &sync.Mutex{},
-			rows:         make(map[int64]crossRRAPoints),
-			latests:      make(map[int64]time.Time),
-			value:        make(map[int64]float64),
-			duration:     make(map[int64]int64),
-			step:         rra.Step(),
-			size:         rra.Size(),
-			lastFlushRT:  time.Now(), // Or else it will get sent to the flusher right away!
-			lastSFlushRT: time.Now(), // Or else it will get sent to the flusher right away!
+			Mutex:       &sync.Mutex{},
+			rows:        make(map[int64]crossRRAPoints),
+			latests:     make(map[int64]time.Time),
+			value:       make(map[int64]float64),
+			duration:    make(map[int64]int64),
+			step:        rra.Step(),
+			size:        rra.Size(),
+			lastFlushRT: time.Now(), // Or else it will get sent to the flusher right away!
 		}
 		vc.dps[key] = segment
 	}
@@ -197,9 +190,6 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 
 	vc.Lock()
 	for key, segment := range vc.dps {
-		if len(segment.rows) == 0 {
-			continue
-		}
 		now := time.Now()
 		if !full && (now.Sub(segment.lastFlushRT) < vc.minStep) {
 			continue
@@ -223,7 +213,7 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 		// flushDelay ensures that we do not flush entries that are
 		// incomplete because enough time has not passed for them to
 		// become "saturated" with points.
-		flushDelay := vc.minStep * 2
+		flushDelay := vc.minStep // * 2
 		if flushDelay > time.Minute {
 			flushDelay = time.Minute
 		}
@@ -256,7 +246,6 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 		flushIVers := latestIVers(flushLatests, segment.step, segment.size)
 
 		// Second iteration: datapoints and versions
-		thisSegmentFlushes := 0
 		for i, dps := range segment.rows {
 
 			if !full && !segment.maxLatest.IsZero() && i == segment.latestIndex && now.Sub(segment.maxLatest) < flushDelay {
@@ -278,34 +267,35 @@ func (vc *verticalCache) flush(ch chan *vDpFlushRequest, full bool) *vcStats {
 			}
 			dpFlushedPoints += len(dps)
 			dpFlushes++ // how many chunks get pushed to the channel => one or more SQL
-			thisSegmentFlushes++
 
 			// delete the flushed segment row
 			delete(segment.rows, i)
 		}
 
 		// RRA State
-		if len(flushLatests) > 0 && thisSegmentFlushes > 0 {
-
-			lat := make(map[int64]interface{}, len(flushLatests))
+		var lat, dur, val map[int64]interface{}
+		if len(flushLatests) > 0 {
+			lat = make(map[int64]interface{}, len(flushLatests))
 			for k, v := range flushLatests {
 				lat[k] = interface{}(v)
 			}
-
-			dur := make(map[int64]interface{}, len(segment.duration))
+		}
+		if len(segment.duration) > 0 {
+			dur = make(map[int64]interface{}, len(segment.duration))
 			for k, v := range segment.duration {
 				dur[k] = interface{}(v)
 			}
-
-			val := make(map[int64]interface{}, len(segment.value))
+		}
+		if len(segment.value) > 0 {
+			val = make(map[int64]interface{}, len(segment.value))
 			for k, v := range segment.value {
 				val[k] = interface{}(v)
 			}
-
+		}
+		if (len(flushLatests) + len(segment.duration) + len(segment.value)) > 0 {
 			// unlike dps, insist on a blocking operation
 			ch <- &vDpFlushRequest{key.bundleId, key.seg, 0, nil, nil, lat, nil, dur, val}
 			rsFlushes += 1
-			segment.lastSFlushRT = time.Now()
 		}
 
 		// update lastFlushRT even if nothing was flushed above, we will only try

@@ -31,6 +31,10 @@ const (
 
 // A Round Robin Archive and all its parameters.
 type RoundRobinArchive struct {
+	// Each RRA has its own PDP (duration and value). Note that
+	// whatever fits in the DS PDP step will reside there, but
+	// anything exceeding the time period that DS PDP can hold will
+	// trickle down to RRA PDPs, until they are add to DPs.
 	Pdp
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution

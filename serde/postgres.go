@@ -1199,10 +1199,14 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 // If the database is behind and data has not been saved yet, the version system
 // will correct for it, latest does not have to be spot on accurate.
 func (p *pgvSerDe) LoadRRAData(rra *DbRoundRobinArchive) (*DbRoundRobinArchive, error) {
-	stmt := "SELECT i, dp[$1] AS r FROM %[1]sts ts " +
-		"WHERE rra_bundle_id = $2 and seg = $3 " +
-		" AND (i <= $4) AND ver[$1] = $5 OR (i > $4) AND ver[$1] = $6 " +
-		" AND dp[$1] IS NOT NULL"
+
+	// the subselect apparently encourages index scan
+	stmt := `
+SELECT i, r
+  FROM (SELECT i, dp[$1] AS r, ver[$1] AS v FROM %[1]sts ts WHERE rra_bundle_id = $2 and seg = $3) x
+  WHERE (i <= $4) AND v = $5 OR (i > $4) AND v = $6
+    AND r IS NOT NULL;
+`
 
 	// TODO There should be a centralized place for version calculation
 	latest_i := rrd.SlotIndex(rra.Latest(), rra.Step(), rra.Size())
