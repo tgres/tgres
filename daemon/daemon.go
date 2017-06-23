@@ -213,9 +213,11 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	}
 
 	// Might as well populate the rcache here
-	log.Printf("Pre-populating Named DS Fetcher...")
-	rcache.Preload()
-	log.Printf("Pre-populating Named DS Fetcher DONE.")
+	if db.Fetcher() != nil {
+		log.Printf("Pre-populating Named DS Fetcher...")
+		rcache.Preload()
+		log.Printf("Pre-populating Named DS Fetcher DONE.")
+	}
 
 	// Handle graceful file descriptors
 	if gracefulProtos != "" {

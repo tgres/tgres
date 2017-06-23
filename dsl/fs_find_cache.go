@@ -73,10 +73,13 @@ func (dsns *fsFindCache) addPrefixes(name string) {
 
 func (dsns *fsFindCache) reload(db serde.DataSourceSearcher) error {
 	sr, err := db.Search(map[string]string{dsns.key: ".*"})
-	defer sr.Close()
 	if err != nil {
 		return err
 	}
+	if sr == nil {
+		return nil
+	}
+	defer sr.Close()
 
 	dsns.Lock()
 	defer dsns.Unlock()
