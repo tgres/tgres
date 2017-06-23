@@ -95,6 +95,10 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 				batchSize++
 				go func(wg *sync.WaitGroup, target string, targets [][]*graphiteSeries, n int) {
 					if sm, err := processTarget(rcache, target, from.Unix(), to.Unix(), int64(points)); err == nil {
+						// sm may contain locked watched RRAs,
+						// readDataPoints unlocks them in Close it's
+						// important to not do anything that could
+						// interrupt this, we MUST run readDataPoints
 						targets[n] = readDataPoints(sm)
 					} else {
 						log.Printf("RenderHandler(): %v", err)

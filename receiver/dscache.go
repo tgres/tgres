@@ -197,7 +197,7 @@ func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
 	}
 
 	cds.mu.Lock()
-	if cds.sentToLoader { // no partially loaded allowed
+	if cds.sentToLoader || cds.watchedLoading { // no partially loaded allowed
 		defer cds.mu.Unlock()
 		return nil
 	}
@@ -205,9 +205,12 @@ func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
 		defer cds.mu.Unlock()
 		return cds.watched // All good, return it
 	}
+	// if we got this far, there is no watched ds and we are going to load one
+	cds.watchedLoading = true
 	cds.mu.Unlock()
 
-	// At this point RRAs cannot change, we do not need the lock
+	// At this point RRAs slice should not change, we do not need the
+	// lock
 
 	// Turn it into an rraLoader
 	type rraLoader interface {
@@ -216,29 +219,36 @@ func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
 
 	db, ok := d.db.(rraLoader)
 	if !ok {
+		// NB: watchedLoading stays true, it's a negative cache of sorts
 		return nil
 	}
 
-	rras := cds.RRAs()
-	newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
-	for i, rra := range rras {
-		dbrra, ok := rra.(*serde.DbRoundRobinArchive)
-		if !ok {
-			return nil // must be db rra
+	// Submit the load job and return nil while it's loading - hitting
+	// the DB should be faster at this point.
+	go func(cds *cachedDs) {
+		rras := cds.RRAs()
+		newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
+		for i, rra := range rras {
+			dbrra, ok := rra.(*serde.DbRoundRobinArchive)
+			if !ok {
+				return // must be db rra
+			}
+			if r, err := db.LoadRRAData(dbrra); err == nil {
+				newRRAs[i] = newSyncRRA(r)
+			} else {
+				return // serde logs something here
+			}
 		}
-		var err error
-		if newRRAs[i], err = db.LoadRRAData(dbrra); err != nil {
-			return nil
-		}
-	}
 
-	cds.mu.Lock()
-	ds := cds.Copy()
-	ds.SetRRAs(newRRAs)
-	cds.watched = ds
-	cds.mu.Unlock()
+		cds.mu.Lock()
+		ds := newSyncDS(cds.Copy())
+		ds.SetRRAs(newRRAs)
+		cds.watched = ds
+		cds.watchedLoading = false
+		cds.mu.Unlock()
+	}(cds)
 
-	return ds
+	return nil
 }
 
 func (d *dsCache) unwatch(_, val interface{}) {
@@ -270,13 +280,14 @@ func (a sortableIncomingDPs) Less(i, j int) bool { return a[i].timeStamp.Before(
 // can all processed at once.
 type cachedDs struct {
 	serde.DbDataSourcer
-	incoming     sortableIncomingDPs
-	spec         *rrd.DSSpec // for when DS needs to be created
-	sentToLoader bool
-	lastProcess  time.Time
-	lastFlush    time.Time
-	watched      rrd.DataSourcer // presence of this makes it "watched" (TODO document me)
-	mu           *sync.Mutex
+	incoming       sortableIncomingDPs
+	spec           *rrd.DSSpec // for when DS needs to be created
+	sentToLoader   bool
+	lastProcess    time.Time
+	lastFlush      time.Time
+	watched        *syncDS // presence of this makes it "watched" (TODO document me)
+	watchedLoading bool
+	mu             *sync.Mutex
 }
 
 func (cds *cachedDs) appendIncoming(dp *incomingDP) {

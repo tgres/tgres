@@ -129,22 +129,39 @@ func (r *namedDsFetcher) FetchSeries(ds rrd.DataSourcer, from, to time.Time, max
 	}
 
 	if _, ok := ds.(*watchedDs); !ok {
+		// Not a watchedDs, revert to non-cache behavior
 		return r.dsFetcher.FetchSeries(ds, from, to, maxPoints)
 	}
 
+	type RLocker interface {
+		RLock()
+		RUnlock()
+	}
+
+	if sds, ok := ds.(RLocker); ok {
+		sds.RLock()
+	}
 	rra := ds.BestRRA(from, to, maxPoints)
 	if rra == nil {
 		return nil, fmt.Errorf("FetchSeries (named_ds.go): No adequate RRA found for DS from: %v to: maxPoints: %v", from, to, maxPoints)
 	}
+	if sds, ok := ds.(RLocker); ok {
+		sds.RUnlock()
+	}
+
+	if srra, ok := rra.(RLocker); ok {
+		// NB: RUnlock will happen in Series.Close(), see series/rra_series.go
+		srra.RLock()
+	}
 
 	rraLatest := rra.Latest()
 	rraEarliest := rra.Begins(rraLatest)
-
 	if from.IsZero() || rraEarliest.After(from) {
 		from = rraEarliest
 	}
 
-	s := series.NewRRASeriesCopyRange(rra, from, to)
+	s := series.NewRRASeries(rra)
+	s.TimeRange(from, to)
 	s.MaxPoints(maxPoints)
 	return s, nil
 }

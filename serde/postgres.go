@@ -1220,6 +1220,7 @@ SELECT i, r
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(stmt, p.prefix), rra.Idx(), rra.BundleId(), rra.Seg(), latest_i, latestVer, prevVer)
 	if err != nil {
+		log.Printf("LoadRRAData: error %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -1232,6 +1233,7 @@ SELECT i, r
 		)
 		err = rows.Scan(&i, &val)
 		if err != nil {
+			log.Printf("LoadRRAData: error scanning %v", err)
 			return nil, err
 		}
 		if val != nil {
@@ -1247,6 +1249,7 @@ SELECT i, r
 
 	dbrra, err := newDbRoundRobinArchive(rra.id, rra.width, rra.bundleId, rra.pos, spec)
 	if err != nil {
+		log.Printf("LoadRRAData: error creating rra %v", err)
 		return nil, err
 	}
 

@@ -22,9 +22,14 @@ import (
 	"github.com/tgres/tgres/rrd"
 )
 
+type RUnlocker interface {
+	RUnlock()
+}
+
 // RRASeries transforms a rrd.RoundRobinArchiver into a Series.
 type RRASeries struct {
 	data      map[int64]float64
+	rra       RUnlocker
 	start     int64
 	end       int64
 	size      int64
@@ -38,33 +43,8 @@ type RRASeries struct {
 	val       float64 // if there is a group by
 }
 
-func NewRRASeriesCopyRange(rra rrd.RoundRobinArchiver, from, to time.Time) *RRASeries {
-	dps := rra.DPs()
-	s := &RRASeries{
-		data:   make(map[int64]float64, len(dps)),
-		start:  rra.Start(),
-		size:   rra.Size(),
-		end:    rra.End(),
-		pos:    -1,
-		step:   rra.Step(),
-		latest: rra.Latest(),
-		from:   from,
-		to:     to,
-	}
-
-	for n, v := range rra.DPs() {
-		t := rrd.SlotTime(n, s.latest, s.step, s.size)
-		if !t.Before(from) && !t.After(to) {
-			s.data[n] = v
-		}
-	}
-
-	s.start, s.end = rrd.ComputeStartEnd(s.data, s.latest, s.step, s.size)
-	return s
-}
-
 func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
-	return &RRASeries{
+	result := &RRASeries{
 		data:   rra.DPs(),
 		start:  rra.Start(),
 		size:   rra.Size(),
@@ -73,6 +53,10 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 		step:   rra.Step(),
 		latest: rra.Latest(),
 	}
+	if srra, ok := rra.(RUnlocker); ok {
+		result.rra = srra
+	}
+	return result
 }
 
 func (s *RRASeries) posValid() bool {
@@ -175,6 +159,11 @@ func (s *RRASeries) CurrentTime() time.Time {
 
 func (s *RRASeries) Close() error {
 	s.pos = -1
+
+	if s.rra != nil {
+		s.rra.RUnlock()
+	}
+
 	return nil
 }
 
@@ -192,12 +181,40 @@ func (s *RRASeries) GroupBy(td ...time.Duration) time.Duration {
 	return s.groupBy
 }
 
+// This function resets start/end. We can only set start/end to be
+// within the previous range of start/end, so calling repetitevly can
+// only narrow this window, never widen it.
+func (s *RRASeries) setTimeRange(from, to time.Time) {
+	if to.IsZero() {
+		to = s.latest
+	}
+
+	from, to = from.Truncate(s.step), to.Truncate(s.step)
+
+	startTime := rrd.SlotTime(s.start, s.latest, s.step, s.size)
+	endTime := rrd.SlotTime(s.end, s.latest, s.step, s.size)
+
+	if from.Before(startTime) {
+		from = startTime
+	}
+	if to.After(endTime) {
+		to = endTime
+	}
+	if !from.Before(to) {
+		return // this shouldn't happen really
+	}
+
+	s.start = rrd.SlotIndex(from, s.step, s.size)
+	s.end = rrd.SlotIndex(to, s.step, s.size)
+	s.from, s.to = from, to
+}
+
 func (s *RRASeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 	// Not fully implemented TODO do we need it?
 	if len(t) == 1 {
-		defer func() { s.from = t[0] }()
+		defer func() { s.setTimeRange(t[0], time.Time{}) }()
 	} else if len(t) == 2 {
-		defer func() { s.from, s.to = t[0], t[1] }()
+		defer func() { s.setTimeRange(t[0], t[1]) }()
 	}
 	return s.from, s.to
 }
