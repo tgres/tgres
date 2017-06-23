@@ -73,7 +73,7 @@ func NewNamedDSFetcher(db dsFetcher, dsc watcher) *namedDsFetcher {
 		dsFetcher: db,
 		dsns:      &fsFindCache{key: "name"},
 		Mutex:     &sync.Mutex{},
-		minAge:    30 * time.Second,
+		minAge:    time.Minute,
 		cache:     dsc,
 	}
 }
@@ -87,18 +87,28 @@ func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident 
 	return result
 }
 
+func (r *namedDsFetcher) Preload() {
+	r.Lock()
+	r.dsns.reload(r)
+	r.lastReload = time.Now()
+	r.Unlock()
+}
+
 // FsFind provides a way of searching dot-separated names using same
 // rules as filepath.Match, as well as comma-separated values in curly
 // braces such as "foo.{bar,baz}".
 func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
-	r.Lock()
-	if r.lastReload.Before(time.Now().Add(-r.minAge)) {
-		// TODO: This is better done with NOTIFY trigger on ds table changes
-		r.dsns.reload(r)
-		r.lastReload = time.Now()
-	}
-	r.Unlock()
-	return r.dsns.fsFind(pattern)
+	result := r.dsns.fsFind(pattern)
+	go func() {
+		r.Lock()
+		if r.lastReload.Before(time.Now().Add(-r.minAge)) {
+			// TODO: This is better done with NOTIFY trigger on ds table changes
+			r.dsns.reload(r)
+			r.lastReload = time.Now()
+		}
+		r.Unlock()
+	}()
+	return result
 }
 
 type watchedDs struct {

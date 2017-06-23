@@ -38,6 +38,8 @@ const BATCH_LIMIT = 64
 
 func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// w.Header().Set("Access-Control-Allow-Origin", "*") // TODO Make me configurable
+
 		start := time.Now()
 		fmt.Fprintf(w, "[\n")
 		nodes := rcache.FsFind(r.FormValue("query"))
@@ -61,6 +63,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 	return makeGzipHandler(
 		func(w http.ResponseWriter, r *http.Request) {
+			// w.Header().Set("Access-Control-Allow-Origin", "*") // TODO Make me configurable
 			w.Header().Set("Content-Type", "application/json")
 
 			start := time.Now()
