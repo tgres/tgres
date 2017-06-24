@@ -52,6 +52,7 @@ func Test_pacedMetricFlush(t *testing.T) {
 	ident = serde.Ident{"name": "bar"}
 	gauges := make(map[string]*pacedMetricGauge)
 	gauges[ident.String()] = &pacedMetricGauge{ident: ident, ClockPdp: &rrd.ClockPdp{}}
+	gauges[ident.String()].SetValue(123, time.Second)
 
 	acq := &fakeAggregatorCommandQueuer{}
 	dpq := &fakeDataPointQueuer{}
