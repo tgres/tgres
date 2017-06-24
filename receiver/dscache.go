@@ -44,7 +44,7 @@ type dsCache struct {
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
-	const LRU_SIZE = 512 // TODO make me configurable?
+	const LRU_SIZE = 9276 // TODO make me configurable?
 	d := &dsCache{
 		byIdent:  make(map[string]*cachedDs),
 		db:       db,
@@ -225,7 +225,7 @@ func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
 
 	// Submit the load job and return nil while it's loading - hitting
 	// the DB should be faster at this point.
-	go func(cds *cachedDs) {
+	go func(cds *cachedDs, d *dsCache) {
 		rras := cds.RRAs()
 		newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
 		for i, rra := range rras {
@@ -245,8 +245,9 @@ func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
 		ds.SetRRAs(newRRAs)
 		cds.watched = ds
 		cds.watchedLoading = false
+		d.watchLRU.Add(cds.Ident().String(), cds.Ident())
 		cds.mu.Unlock()
-	}(cds)
+	}(cds, d)
 
 	return nil
 }

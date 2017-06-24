@@ -124,10 +124,10 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 					fmt.Fprintf(w, "\n"+`{"target": "%s", "datapoints": [`+"\n", series.name)
 					n := 0
 					for _, dp := range series.dps {
-						if n > 0 {
-							fmt.Fprintf(w, ",")
-						}
 						if dp.t > 0 {
+							if n > 0 {
+								fmt.Fprintf(w, ",")
+							}
 							if math.IsNaN(dp.v) || math.IsInf(dp.v, 0) {
 								fmt.Fprintf(w, "[null, %v]", dp.t)
 							} else {

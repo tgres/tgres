@@ -49,9 +49,12 @@ type Series interface {
 	// returns the previous value.
 	GroupBy(...time.Duration) time.Duration
 
-	// Restrict the series to a subset of its span.
-	// Without arguments returns the value, with arguments sets and
-	// returns the previous value.
+	// Restrict the series to (a subset of) its span. Without
+	// arguments returns the value, with arguments sets and returns
+	// the previous value. In the ideal case a series should be
+	// iterable over the set range regardless of whether underlying
+	// storage has data, i.e. when there is no data, we get a value of
+	// NaN, but Next returns true over the entire range.
 	TimeRange(...time.Time) (time.Time, time.Time)
 
 	// Timestamp of the last data point in the series.

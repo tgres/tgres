@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -637,6 +638,7 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
     LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
     ORDER BY ds.id
 `
+
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
 	if err != nil {
 		log.Printf("FetchDataSources(): error querying database: %v", err)
@@ -1195,19 +1197,15 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 	return dps, nil
 }
 
-// Returns a *new* RRA based on the one passed in, containing all the data.
-// If the database is behind and data has not been saved yet, the version system
-// will correct for it, latest does not have to be spot on accurate.
-func (p *pgvSerDe) LoadRRAData(rra *DbRoundRobinArchive) (*DbRoundRobinArchive, error) {
-
+func (p *pgvSerDe) loadRRADps(rra *DbRoundRobinArchive) (map[int64]float64, error) {
 	// the subselect apparently encourages index scan
 	stmt := `
-SELECT i, r
-  FROM (SELECT i, dp[$1] AS r, ver[$1] AS v FROM %[1]sts ts WHERE rra_bundle_id = $2 and seg = $3) x
-  WHERE (i <= $4) AND v = $5 OR (i > $4) AND v = $6
-    AND r IS NOT NULL;
+  SELECT i, r
+    FROM (SELECT i, dp[$1] AS r, ver[$1] AS v
+            FROM %[1]sts ts
+           WHERE rra_bundle_id = $2 AND seg = $3 AND dp[$1] IS NOT NULL AND dp[$1] <> 'NaN') x
+    WHERE (i <= $4) AND v = $5 OR (i > $4) AND v = $6
 `
-
 	// TODO There should be a centralized place for version calculation
 	latest_i := rrd.SlotIndex(rra.Latest(), rra.Step(), rra.Size())
 	span_ms := (rra.Step().Nanoseconds() / 1e6) * rra.Size()
@@ -1236,8 +1234,25 @@ SELECT i, r
 			log.Printf("LoadRRAData: error scanning %v", err)
 			return nil, err
 		}
-		if val != nil {
+		if val != nil && !math.IsNaN(*val) {
 			dps[i] = *val
+		}
+	}
+	return dps, nil
+}
+
+// Returns a *new* RRA based on the one passed in, containing all the data.
+// If the database is behind and data has not been saved yet, the version system
+// will correct for it, latest does not have to be spot on accurate.
+func (p *pgvSerDe) LoadRRAData(rra *DbRoundRobinArchive) (*DbRoundRobinArchive, error) {
+	var (
+		dps map[int64]float64
+		err error
+	)
+	if !rra.Latest().IsZero() {
+		if dps, err = p.loadRRADps(rra); err != nil {
+			log.Printf("LoadRRAData: error loading data points %v", err)
+			return nil, err
 		}
 	}
 
@@ -1245,7 +1260,7 @@ SELECT i, r
 	spec.Latest = rra.Latest()
 	spec.Value = rra.Value()
 	spec.Duration = rra.Duration()
-	spec.DPs = dps
+	spec.DPs = dps // could be nil if latest is zero
 
 	dbrra, err := newDbRoundRobinArchive(rra.id, rra.width, rra.bundleId, rra.pos, spec)
 	if err != nil {

@@ -17,6 +17,7 @@ package receiver
 
 import (
 	"log"
+	"math"
 	"time"
 
 	"github.com/tgres/tgres/aggregator"
@@ -52,7 +53,10 @@ var pacedMetricFlush = func(sums map[string]*pacedMetricSum, gauges map[string]*
 		acq.QueueAggregatorCommand(aggregator.NewCommand(aggregator.CmdAdd, sum.ident, sum.sum))
 	}
 	for _, gauge := range gauges {
-		dpq.QueueDataPoint(gauge.ident, gauge.End, gauge.Reset())
+		val := gauge.Reset()
+		if !math.IsNaN(val) {
+			dpq.QueueDataPoint(gauge.ident, gauge.End, val)
+		}
 	}
 	// NB: We do not reset the gauges map, it lives on
 	return make(map[string]*pacedMetricSum)

@@ -293,11 +293,13 @@ func (ds *DataSource) ProcessDataPoint(value float64, ts time.Time) error {
 
 func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
 	for _, rra := range ds.rras {
-		// If the step of the RRA exceeds the interval here, we cheat and send a larger
-		// duration once instead of iterating and updating in ds.step increments.
+		// If this is a multi ds.step update and the step of the RRA
+		// exceeds the interval, we cheat and send a larger duration
+		// once instead of iterating and updating in ds.step
+		// increments.
 		duration := ds.duration
 		span := periodEnd.Sub(periodBegin)
-		if rra.Step() > span {
+		if span > ds.step && rra.Step() > span {
 			duration = span
 		}
 		rra.update(periodBegin, periodEnd, ds.value, duration)

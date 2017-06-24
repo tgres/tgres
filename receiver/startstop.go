@@ -47,7 +47,7 @@ var startAllWorkers = func(r *Receiver, startWg *sync.WaitGroup) {
 }
 
 var doStart = func(r *Receiver) {
-	log.Printf("Receiver: Caching data sources...")
+	log.Printf("Receiver: Caching data source definitions...")
 	start := time.Now()
 	if err := r.dsc.preLoad(); err != nil {
 		log.Printf("Receiver: error caching data sources: %v", err)

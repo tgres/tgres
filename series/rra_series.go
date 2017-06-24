@@ -26,7 +26,9 @@ type RUnlocker interface {
 	RUnlock()
 }
 
-// RRASeries transforms a rrd.RoundRobinArchiver into a Series.
+// RRASeries transforms a rrd.RoundRobinArchiver into a Series. This
+// implementation does not provide restart, i.e. calling Next after it
+// returned false does not start from the beginning. TODO: should it?
 type RRASeries struct {
 	data      map[int64]float64
 	rra       RUnlocker
@@ -34,6 +36,7 @@ type RRASeries struct {
 	end       int64
 	size      int64
 	pos       int64
+	tim       time.Time // if timeRange was set
 	step      time.Duration
 	latest    time.Time
 	alias     string
@@ -60,7 +63,7 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 }
 
 func (s *RRASeries) posValid() bool {
-	if s.pos < 0 || s.pos >= s.size || len(s.data) == 0 || s.start == s.end {
+	if s.pos < 0 || s.pos >= s.size || len(s.data) == 0 || s.latest.IsZero() {
 		return false
 	}
 	if s.start < s.end {
@@ -75,10 +78,12 @@ func (s *RRASeries) Next() bool {
 	groupBy := s.groupBy
 
 	if groupBy == 0 && s.maxPoints > 0 {
-		if s.from.Before(s.to) { // time range set
+		if !s.from.IsZero() && !s.to.IsZero() { // time range set
 			groupBy = s.to.Sub(s.from) / time.Duration(s.maxPoints)
-		} else { // whole series
-			groupBy = time.Duration(s.size) * s.step / time.Duration(s.maxPoints)
+		} else if !s.latest.IsZero() { // rely on start / end
+			sTime := rrd.SlotTime(s.start, s.latest, s.step, s.size)
+			eTime := rrd.SlotTime(s.end, s.latest, s.step, s.size)
+			groupBy = eTime.Sub(sTime) / time.Duration(s.maxPoints)
 		}
 	}
 
@@ -89,6 +94,7 @@ func (s *RRASeries) Next() bool {
 		moves = int(groupBy.Seconds()/s.step.Seconds() + 0.5)
 	}
 
+	// Compute agerage
 	sum, cnt := float64(0), 0
 	for i := 0; i < moves; i++ {
 		if !s.advance() {
@@ -106,32 +112,73 @@ func (s *RRASeries) Next() bool {
 }
 
 func (s *RRASeries) advance() bool {
-	if len(s.data) == 0 {
+	var start, end int64
+
+	if !s.from.IsZero() && !s.to.IsZero() {
+		// Iteration controlled by TimeRange
+
+		if !s.from.Before(s.to) {
+			return false
+		}
+
+		if s.tim.IsZero() {
+			s.tim = s.from
+		} else if !s.tim.After(s.to) {
+			s.tim = s.tim.Add(s.step)
+		}
+
+		if s.tim.After(s.to) {
+			s.pos = -1
+			return false
+		} else {
+			// pos can be invalid if we are outside the series range
+			if s.latest.IsZero() || s.tim.After(s.latest) || s.tim.Before(s.latest.Add(-s.step*time.Duration(s.size))) {
+				s.pos = -1
+			} else {
+				s.pos = rrd.SlotIndex(s.tim, s.step, s.size)
+			}
+			// Even though the pos is invalid, we still return true,
+			// because the iteration happens even when we're outside
+			// the series data, as long as we're between to and from,
+			// just the value will be NaN.
+			return true
+		}
+
+	} else {
+		// We are iterating over what is in existence
+
+		if len(s.data) == 0 {
+			return false
+		}
+
+		if s.pos == -1 {
+			s.pos = s.start
+			return true
+		}
+		if s.pos == s.end {
+			s.pos = -1
+			return false
+		}
+		if s.start < s.end {
+			if s.pos < s.end {
+				s.pos++
+				return true
+			}
+		} else {
+			if s.pos == s.size-1 {
+				s.pos = 0
+				return true
+			}
+			if s.pos >= start {
+				s.pos++
+				return true
+			} else if s.pos < end {
+				s.pos++
+				return true
+			}
+		}
 		return false
 	}
-	if s.pos == -1 {
-		s.pos = s.start
-		return true
-	}
-	if s.start < s.end {
-		if s.pos < s.end {
-			s.pos++
-			return true
-		}
-	} else {
-		if s.pos == s.size-1 {
-			s.pos = 0
-			return true
-		}
-		if s.pos > s.end {
-			s.pos++
-			return true
-		} else {
-			s.pos++
-			return s.pos <= s.end
-		}
-	}
-	return false
 }
 
 func (s *RRASeries) CurrentValue() float64 {
@@ -151,6 +198,9 @@ func (s *RRASeries) curVal() float64 {
 }
 
 func (s *RRASeries) CurrentTime() time.Time {
+	if !s.from.IsZero() && !s.to.IsZero() && !s.tim.Before(s.from) && !s.tim.After(s.to) {
+		return s.tim
+	}
 	if s.posValid() {
 		return rrd.SlotTime(s.pos, s.latest, s.step, s.size)
 	}
@@ -181,36 +231,14 @@ func (s *RRASeries) GroupBy(td ...time.Duration) time.Duration {
 	return s.groupBy
 }
 
-// This function resets start/end. We can only set start/end to be
-// within the previous range of start/end, so calling repetitevly can
-// only narrow this window, never widen it.
 func (s *RRASeries) setTimeRange(from, to time.Time) {
 	if to.IsZero() {
-		to = s.latest
+		to = s.latest // which can be zero too
 	}
-
-	from, to = from.Truncate(s.step), to.Truncate(s.step)
-
-	startTime := rrd.SlotTime(s.start, s.latest, s.step, s.size)
-	endTime := rrd.SlotTime(s.end, s.latest, s.step, s.size)
-
-	if from.Before(startTime) {
-		from = startTime
-	}
-	if to.After(endTime) {
-		to = endTime
-	}
-	if !from.Before(to) {
-		return // this shouldn't happen really
-	}
-
-	s.start = rrd.SlotIndex(from, s.step, s.size)
-	s.end = rrd.SlotIndex(to, s.step, s.size)
-	s.from, s.to = from, to
+	s.from, s.to = from.Truncate(s.step), to.Truncate(s.step)
 }
 
 func (s *RRASeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
-	// Not fully implemented TODO do we need it?
 	if len(t) == 1 {
 		defer func() { s.setTimeRange(t[0], time.Time{}) }()
 	} else if len(t) == 2 {
