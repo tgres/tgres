@@ -16,7 +16,6 @@
 package receiver
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -40,14 +39,12 @@ func (ds *syncDS) ProcessDataPoint(value float64, ts time.Time) error {
 	rras := ds.RRAs()
 	for i := 0; i < len(rras); i++ {
 		if srra, ok := rras[i].(*syncRRA); ok {
-			fmt.Printf("ZZZ locking rra %d\n", i)
 			srra.Lock()
 		}
 	}
 	result := ds.DataSourcer.ProcessDataPoint(value, ts)
 	for i := len(rras) - 1; i >= 0; i-- {
 		if srra, ok := rras[i].(*syncRRA); ok {
-			fmt.Printf("ZZZ unlocking rra %d\n", i)
 			srra.Unlock()
 		}
 	}
