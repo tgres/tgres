@@ -46,25 +46,12 @@ func dataSourceFromDsRec(dsr *dsRecord) (*DbDataSource, error) {
 		return nil, err
 	}
 
-	// If LastUpdate was more than HeartBeat ago, to avoid wasting
-	// memory, simply set LU to now. This way everything inbetween
-	// will automatically become NaN because of timestamp
-	// versioning. This should be harmless so long as we do not end up
-	// flushing the DS to vcache, but that should only happen when an
-	// actual DP is received.
-	hb := time.Duration(dsr.hbMs) * time.Millisecond
-	lu := *dsr.lastupdate
-	now := time.Now()
-	if lu.Before(now.Add(-hb)) {
-		lu = now
-	}
-
 	ds := NewDbDataSource(dsr.id, ident, dsr.seg, dsr.idx,
 		rrd.NewDataSource(
 			rrd.DSSpec{
 				Step:       time.Duration(dsr.stepMs) * time.Millisecond,
-				Heartbeat:  hb,
-				LastUpdate: lu,
+				Heartbeat:  time.Duration(dsr.hbMs) * time.Millisecond,
+				LastUpdate: *dsr.lastupdate,
 				Value:      *dsr.value,
 				Duration:   time.Duration(*dsr.durationMs) * time.Millisecond,
 			},

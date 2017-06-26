@@ -259,7 +259,12 @@ func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
 
 	slotN := SlotIndex(endOfSlot, rra.step, rra.size)
 	rra.latest = endOfSlot
-	rra.dps[slotN] = rra.value
+	if math.IsNaN(rra.value) {
+		// No value is better than storing a NaN
+		delete(rra.dps, slotN)
+	} else {
+		rra.dps[slotN] = rra.value
+	}
 
 	if len(rra.dps) == 1 {
 		rra.start = slotN

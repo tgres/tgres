@@ -293,7 +293,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			dsVal:  50,
 			dsDur:  6 * time.Second,
 			xff:    0.7,
-			rraDps: map[int64]float64{0: math.NaN()},
+			rraDps: map[int64]float64{}, // {0: math.NaN()},
 			rraVal: 0,
 			rraDur: 0},
 		17: { // partial step NaN
@@ -309,7 +309,7 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 			end:    time.Unix(30, 0),
 			dsVal:  math.NaN(),
 			dsDur:  10 * time.Second,
-			rraDps: map[int64]float64{3: math.NaN()},
+			rraDps: map[int64]float64{}, //{3: math.NaN()},
 			rraVal: 0,
 			rraDur: 0},
 	}
@@ -324,7 +324,8 @@ func Test_RoundRobinArchive_update(t *testing.T) {
 
 		rra.update(vals.begin, vals.end, vals.dsVal, vals.dsDur)
 
-		// Stupid trick - replace NaNs with 999
+		// Stupid trick - replace NaNs with 999 (Since we do not store
+		// NaNs anymore, it is not really needed anymore)
 		for k, v := range rra.dps {
 			if math.IsNaN(v) {
 				rra.dps[k] = 999
