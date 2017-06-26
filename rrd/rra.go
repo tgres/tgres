@@ -68,14 +68,6 @@ type RoundRobinArchive struct {
 	// having to store it. Slot numbers are aligned on millisecond,
 	// therefore an RRA step cannot be less than a millisecond.
 	dps map[int64]float64
-
-	// Index of the first slot for which we have data. (Should be
-	// between 0 and Size-1)
-	start int64
-	// Index of the last slot for which we have data. Note that it's
-	// possible for end to be less than start, which means the RRD
-	// wraps around.
-	end int64
 }
 
 // RoundRobinArchive as an interface
@@ -84,8 +76,6 @@ type RoundRobinArchiver interface {
 	Latest() time.Time
 	Step() time.Duration
 	Size() int64
-	Start() int64
-	End() int64
 	PointCount() int
 	DPs() map[int64]float64
 	Copy() RoundRobinArchiver
@@ -108,13 +98,6 @@ func (rra *RoundRobinArchive) Step() time.Duration { return rra.step }
 // Number of data points in this RRA
 func (rra *RoundRobinArchive) Size() int64 { return rra.size }
 
-// Index of the first slot for which we have data (between 0 and Size-1).
-func (rra *RoundRobinArchive) Start() int64 { return rra.start }
-
-// Index of the last slot for which we have data. It's possible for
-// end to be less than start when the RRD wraps around.
-func (rra *RoundRobinArchive) End() int64 { return rra.end }
-
 // Dps returns data points as a map of floats. It's a map rather than
 // a slice to be more space-efficient for sparse series.
 func (rra *RoundRobinArchive) DPs() map[int64]float64 { return rra.dps }
@@ -135,7 +118,6 @@ func NewRoundRobinArchive(spec RRASpec) *RoundRobinArchive {
 	}
 	if len(spec.DPs) > 0 {
 		result.dps = spec.DPs
-		result.start, result.end = ComputeStartEnd(result.dps, result.latest, result.step, result.size)
 	}
 	return result
 }
@@ -149,8 +131,6 @@ func (rra *RoundRobinArchive) Copy() RoundRobinArchiver {
 		size:   rra.size,
 		latest: rra.latest,
 		xff:    rra.xff,
-		start:  rra.start,
-		end:    rra.end,
 		dps:    make(map[int64]float64, len(rra.dps)),
 	}
 	for k, v := range rra.dps {
@@ -266,13 +246,6 @@ func (rra *RoundRobinArchive) movePdpToDps(endOfSlot time.Time) {
 		rra.dps[slotN] = rra.value
 	}
 
-	if len(rra.dps) == 1 {
-		rra.start = slotN
-	} else if rra.start == slotN { // The RRA has gone full-cicrle
-		rra.start = (slotN + 1) % rra.size
-	}
-	rra.end = slotN
-
 	rra.Reset()
 }
 
@@ -281,7 +254,6 @@ func (rra *RoundRobinArchive) clear() {
 	if len(rra.dps) > 0 {
 		rra.dps = make(map[int64]float64)
 	}
-	rra.start, rra.end = 0, 0
 }
 
 // Given a slot timestamp, RRA step and size, return the slot's
@@ -304,21 +276,6 @@ func SlotTime(n int64, latest time.Time, step time.Duration, size int64) time.Ti
 	latestN := SlotIndex(latest, step, size)
 	distance := IndexDistance(n, latestN, size)
 	return latest.Add(time.Duration(distance*-1) * step)
-}
-
-// Given a bunch of DPs and RRA params, compute the correct start, end
-func ComputeStartEnd(DPs map[int64]float64, latest time.Time, step time.Duration, size int64) (int64, int64) {
-	end := SlotIndex(latest, step, size)
-	start := end
-	for i, _ := range DPs {
-		if (start == end && i != start) || (i > end && (i < start || start < end)) || (i < start && start < end) {
-			start = i
-			if start == (end+1)%size {
-				break // nothing more to do here
-			}
-		}
-	}
-	return start, end
 }
 
 // RRASpec is the RRA definition for NewRoundRobinArchive.

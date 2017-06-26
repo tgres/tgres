@@ -300,8 +300,8 @@ func Test_DataSource_ClearRRAs(t *testing.T) {
 	})
 	ds.lastUpdate = time.Now()
 	ds.ClearRRAs()
-	if len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0 {
-		t.Errorf("ClearRRAs: len(ds.rras[0].DPs()) != 0 || ds.rras[0].Start() != 0 || ds.rras[0].End() != 0")
+	if len(ds.rras[0].DPs()) != 0 {
+		t.Errorf("ClearRRAs: len(ds.rras[0].DPs()) != 0")
 	}
 	if ds.lastUpdate.IsZero() {
 		t.Errorf("ClearRRAs: with false: ds.lastUpdate.IsZero()")

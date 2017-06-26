@@ -53,12 +53,6 @@ func Test_RoundRobinArchive(t *testing.T) {
 	if rra.Size() != rra.size {
 		t.Errorf("rra.Size(): %v  != rra.size: %v", rra.Size(), rra.size)
 	}
-	if rra.Start() != rra.start {
-		t.Errorf("rra.Start(): %v  != rra.start: %v", rra.Start(), rra.start)
-	}
-	if rra.End() != rra.end {
-		t.Errorf("rra.End(): %v  != rra.end: %v", rra.End(), rra.end)
-	}
 	if rra.Step() != rra.step {
 		t.Errorf("rra.Step(): %v  != rra.step: %v", rra.Step(), rra.step)
 	}
