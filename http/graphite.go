@@ -153,6 +153,15 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 	)
 }
 
+func GraphiteAnnotationsHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// w.Header().Set("Access-Control-Allow-Origin", "*") // TODO Make me configurable
+
+		// Annotations not implemented
+		fmt.Fprintf(w, "[]\n")
+	}
+}
+
 func parseTime(s string) (*time.Time, error) {
 
 	if len(s) == 0 {

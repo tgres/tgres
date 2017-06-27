@@ -33,10 +33,14 @@ import (
 
 func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher) {
 
+	// Not sure why, but we need both trailing slash and not versions. It has
+	// something to do with whether you use Grafana direct or proxy modes.
 	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcache))
 	http.HandleFunc("/metrics/find/", h.GraphiteMetricsFindHandler(rcache))
 	http.HandleFunc("/render", h.GraphiteRenderHandler(rcache))
 	http.HandleFunc("/render/", h.GraphiteRenderHandler(rcache))
+	http.HandleFunc("/events/get_data", h.GraphiteAnnotationsHandler(rcache))
+	http.HandleFunc("/events/get_data/", h.GraphiteAnnotationsHandler(rcache))
 
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
 
