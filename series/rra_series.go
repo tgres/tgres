@@ -29,7 +29,7 @@ type RUnlocker interface {
 // RRASeries transforms a rrd.RoundRobinArchiver into a Series.
 type RRASeries struct {
 	data      map[int64]float64
-	rra       RUnlocker
+	lck       RUnlocker
 	size      int64
 	pos       int64
 	tim       time.Time // if timeRange was set
@@ -51,7 +51,7 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 		latest: rra.Latest(),
 	}
 	if srra, ok := rra.(RUnlocker); ok {
-		result.rra = srra
+		result.lck = srra
 	}
 	if !result.latest.IsZero() {
 		result.from = result.latest.Add(-result.step * time.Duration(result.size))
@@ -139,10 +139,9 @@ func (s *RRASeries) CurrentTime() time.Time {
 func (s *RRASeries) Close() error {
 	s.pos = -1
 
-	if s.rra != nil {
-		s.rra.RUnlock()
+	if s.lck != nil {
+		s.lck.RUnlock()
 	}
-
 	return nil
 }
 

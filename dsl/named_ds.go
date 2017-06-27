@@ -16,7 +16,6 @@
 package dsl
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -38,50 +37,61 @@ type fsFinder interface {
 	FsFind(pattern string) []*FsFindNode
 }
 
-// This is a subset of serde.Fetcher
 type dsFetcher interface {
-	serde.DataSourceSearcher
 	FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
 	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
 }
 
-// Methods necessary for a DSL context
+type rraDataLoader interface {
+	LoadRRAData(rra rrd.RoundRobinArchiver) (rrd.RoundRobinArchiver, error)
+}
+
+type dsFetcherSearcher interface {
+	dsFetcher
+	serde.DataSourceSearcher
+}
+
+type dsFetcherLoader interface {
+	dsFetcher
+	rraDataLoader
+}
+
+// Methods necessary for a DSL context and what namedDsFetch only needs to
+// expose.
 type ctxDSFetcher interface {
-	FetchOrCreateDataSource(ident serde.Ident, dsSpec *rrd.DSSpec) (rrd.DataSourcer, error)
-	FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error)
+	dsFetcher
 	identsFromPattern(pattern string) map[string]serde.Ident
 }
 
 type namedDsFetcher struct {
 	*sync.Mutex
-	dsFetcher
+	*dsLRU     // provides dsFetcher methods
 	dsns       *fsFindCache
 	lastReload time.Time
 	minAge     time.Duration
-	cache      watcher
 }
 
 type watcher interface {
-	Watch(ident serde.Ident) rrd.DataSourcer
+	Watch(ident serde.Ident, ch chan DataPoint) rrd.DataSourcer
+	Unwatch(ident serde.Ident)
 }
 
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
-func NewNamedDSFetcher(db dsFetcher, dsc watcher) *namedDsFetcher {
+func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher) *namedDsFetcher {
 	return &namedDsFetcher{
-		dsFetcher: db,
-		dsns:      &fsFindCache{key: "name"},
-		Mutex:     &sync.Mutex{},
-		minAge:    time.Minute,
-		cache:     dsc,
+		dsns:   &fsFindCache{key: "name", db: db.(serde.DataSourceSearcher)},
+		Mutex:  &sync.Mutex{},
+		minAge: time.Minute,
+		dsLRU:  newDsLRU(db.(dsFetcher), dsc),
 	}
 }
 
 func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident {
 	result := r.dsns.identsFromPattern(ident)
 	if len(result) == 0 {
-		r.dsns.reload(r)
+		r.dsns.reload()
 		result = r.dsns.identsFromPattern(ident)
 	}
 	return result
@@ -89,7 +99,7 @@ func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident 
 
 func (r *namedDsFetcher) Preload() {
 	r.Lock()
-	r.dsns.reload(r)
+	r.dsns.reload()
 	r.lastReload = time.Now()
 	r.Unlock()
 }
@@ -103,7 +113,7 @@ func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
 		r.Lock()
 		if r.lastReload.Before(time.Now().Add(-r.minAge)) {
 			// TODO: This is better done with NOTIFY trigger on ds table changes
-			r.dsns.reload(r)
+			r.dsns.reload()
 			r.lastReload = time.Now()
 		}
 		r.Unlock()
@@ -111,67 +121,24 @@ func (r *namedDsFetcher) FsFind(pattern string) []*FsFindNode {
 	return result
 }
 
-type watchedDs struct {
-	rrd.DataSourcer
+type NamedDsFetcherStats struct {
+	LruEvictions int
+	LruSize      int
+	LruHits      int
+	LruMisses    int
 }
 
-// This version of FetchOrCreateDataSource checks the cache if present and
-// marks the series as watched. Otherwise it uses the "normal" behavior.
-func (r *namedDsFetcher) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.DataSourcer, error) {
-	if r.cache != nil {
-		if ds := r.cache.Watch(ident); ds != nil {
-			return &watchedDs{ds}, nil
-		}
+func (r *namedDsFetcher) Stats() NamedDsFetcherStats {
+	r.dsLRU.Lock()
+	defer r.dsLRU.Unlock()
+	result := NamedDsFetcherStats{
+		LruEvictions: r.dsLRU.evictions,
+		LruSize:      r.dsLRU.Len(),
+		LruHits:      r.dsLRU.hits,
+		LruMisses:    r.dsLRU.misses,
 	}
-	// TODO: record LRU hits/misses?
-
-	// non-cache behavior
-	return r.dsFetcher.FetchOrCreateDataSource(ident, nil)
-}
-
-// This FetchSeries checks for the DS being a watchedDS, meaning it
-// came from the cache, otherwise it resorts to the old databse
-// behavior.
-func (r *namedDsFetcher) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
-
-	if r.cache == nil {
-		return r.dsFetcher.FetchSeries(ds, from, to, maxPoints)
-	}
-
-	if _, ok := ds.(*watchedDs); !ok {
-		// Not a watchedDs, revert to non-cache behavior
-		return r.dsFetcher.FetchSeries(ds, from, to, maxPoints)
-	}
-
-	type RLocker interface {
-		RLock()
-		RUnlock()
-	}
-
-	if sds, ok := ds.(RLocker); ok {
-		sds.RLock()
-	}
-	rra := ds.BestRRA(from, to, maxPoints)
-	if rra == nil {
-		return nil, fmt.Errorf("FetchSeries (named_ds.go): No adequate RRA found for DS from: %v to: maxPoints: %v", from, to, maxPoints)
-	}
-	if sds, ok := ds.(RLocker); ok {
-		sds.RUnlock()
-	}
-
-	if srra, ok := rra.(RLocker); ok {
-		// NB: RUnlock will happen in Series.Close(), see series/rra_series.go
-		srra.RLock()
-	}
-
-	rraLatest := rra.Latest()
-	rraEarliest := rra.Begins(rraLatest)
-	if from.IsZero() || rraEarliest.After(from) {
-		from = rraEarliest
-	}
-
-	s := series.NewRRASeries(rra)
-	s.TimeRange(from, to)
-	s.MaxPoints(maxPoints)
-	return s, nil
+	r.dsLRU.evictions = 0
+	r.dsLRU.hits = 0
+	r.dsLRU.misses = 0
+	return result
 }

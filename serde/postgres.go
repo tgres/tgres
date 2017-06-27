@@ -1244,31 +1244,37 @@ func (p *pgvSerDe) loadRRADps(rra *DbRoundRobinArchive) (map[int64]float64, erro
 // Returns a *new* RRA based on the one passed in, containing all the data.
 // If the database is behind and data has not been saved yet, the version system
 // will correct for it, latest does not have to be spot on accurate.
-func (p *pgvSerDe) LoadRRAData(rra *DbRoundRobinArchive) (*DbRoundRobinArchive, error) {
+func (p *pgvSerDe) LoadRRAData(rra rrd.RoundRobinArchiver) (rrd.RoundRobinArchiver, error) {
 	var (
 		dps map[int64]float64
 		err error
 	)
+
+	dbrra, ok := rra.(*DbRoundRobinArchive)
+	if !ok {
+		return nil, fmt.Errorf("LoadRRAData: Not a *DbRoundRobinArchive")
+	}
+
 	if !rra.Latest().IsZero() {
-		if dps, err = p.loadRRADps(rra); err != nil {
+		if dps, err = p.loadRRADps(dbrra); err != nil {
 			log.Printf("LoadRRAData: error loading data points %v", err)
 			return nil, err
 		}
 	}
 
-	spec := rra.Spec()
-	spec.Latest = rra.Latest()
-	spec.Value = rra.Value()
-	spec.Duration = rra.Duration()
+	spec := dbrra.Spec()
+	spec.Latest = dbrra.Latest()
+	spec.Value = dbrra.Value()
+	spec.Duration = dbrra.Duration()
 	spec.DPs = dps // could be nil if latest is zero
 
-	dbrra, err := newDbRoundRobinArchive(rra.id, rra.width, rra.bundleId, rra.pos, spec)
+	newrra, err := newDbRoundRobinArchive(dbrra.id, dbrra.width, dbrra.bundleId, dbrra.pos, spec)
 	if err != nil {
 		log.Printf("LoadRRAData: error creating rra %v", err)
 		return nil, err
 	}
 
-	return dbrra, nil
+	return newrra, nil
 }
 
 func (p *pgvSerDe) TsTableSize() (size, count int64, err error) {

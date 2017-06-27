@@ -31,6 +31,7 @@ import (
 // comma-separated values in curly braces such as "foo.{bar,baz}".
 type fsFindCache struct {
 	sync.RWMutex
+	db       serde.DataSourceSearcher
 	key      string // name of the ident key, required
 	names    map[string]serde.Ident
 	prefixes map[string]bool
@@ -71,8 +72,8 @@ func (dsns *fsFindCache) addPrefixes(name string) {
 	}
 }
 
-func (dsns *fsFindCache) reload(db serde.DataSourceSearcher) error {
-	sr, err := db.Search(map[string]string{dsns.key: ".*"})
+func (dsns *fsFindCache) reload() error {
+	sr, err := dsns.db.Search(map[string]string{dsns.key: ".*"})
 	if err != nil {
 		return err
 	}

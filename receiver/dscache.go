@@ -21,40 +21,34 @@ import (
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru"
 	"github.com/tgres/tgres/cluster"
+	"github.com/tgres/tgres/dsl"
 	"github.com/tgres/tgres/rrd"
 	"github.com/tgres/tgres/serde"
 )
 
-// A collection of data sources kept by name (string).
+// A collection of data sources kept by serde.Ident.
 type dsCache struct {
 	sync.RWMutex
-	byIdent    map[string]*cachedDs
-	db         serde.Fetcher
-	dsf        dsFlusherBlocking
-	finder     MatchingDSSpecFinder
-	clstr      clusterer
-	rraCount   int
-	evicted    int
-	lruEvicted int
-	maxInact   time.Duration
-	watchLRU   *lru.Cache
+	byIdent  map[string]*cachedDs
+	db       serde.Fetcher
+	dsf      dsFlusherBlocking
+	finder   MatchingDSSpecFinder
+	clstr    clusterer
+	rraCount int
+	evicted  int
+	maxInact time.Duration
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
-	const LRU_SIZE = 9276 // TODO make me configurable?
-	d := &dsCache{
+	return &dsCache{
 		byIdent:  make(map[string]*cachedDs),
 		db:       db,
 		finder:   finder,
 		dsf:      dsf,
 		maxInact: time.Hour, // TODO: Make configurable?
 	}
-
-	d.watchLRU, _ = lru.NewWithEvict(LRU_SIZE, d.unwatch)
-	return d
 }
 
 // getByName rlocks and gets a DS pointer.
@@ -146,21 +140,19 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 }
 
 type dscStats struct {
-	dsCount, rraCount, evicted, lruSize, lruEvicted int
+	dsCount, rraCount, evicted int
 }
 
 func (d *dsCache) stats() dscStats {
 	d.RLock()
 	defer d.RUnlock()
 	st := dscStats{
-		dsCount:    len(d.byIdent),
-		rraCount:   d.rraCount,
-		evicted:    d.evicted,
-		lruSize:    d.watchLRU.Len(),
-		lruEvicted: d.lruEvicted,
+		dsCount:  len(d.byIdent),
+		rraCount: d.rraCount,
+		evicted:  d.evicted,
 	}
 
-	d.evicted, d.lruEvicted = 0, 0
+	d.evicted = 0
 	return st
 }
 
@@ -180,86 +172,39 @@ func (d *dsCache) evictInact() {
 	return
 }
 
-// Watch checks the cache for presence of ident, if found, it
-// populates all the RRAs with data from the database and marks this
-// DS as watched, then returns it. A watched DS receives all data
-// point updates and thus you can use a series.RRASeries to get a
-// Series out of it without ever hitting the database. The number of
-// watched series is subject to the LRU in the dscache.
-func (d *dsCache) Watch(ident serde.Ident) rrd.DataSourcer {
+// Watch checks the cache for presence of ident, if found, it marks it
+// as watched by setting the watchCh and starts sending a copy of all
+// data points matching this ident to the provided channel, until
+// Unwatch() is called.
+func (d *dsCache) Watch(ident serde.Ident, ch chan dsl.DataPoint) rrd.DataSourcer {
 
 	cds := d.getByIdent(newCachedIdent(ident))
 
 	// nil means it has no recent data points, and loading it here is
-	// not appropriate.
+	// not appropriate, it cannot be watched.
 	if cds == nil {
 		return nil
 	}
 
 	cds.mu.Lock()
-	if cds.sentToLoader || cds.watchedLoading { // no partially loaded allowed
-		defer cds.mu.Unlock()
-		return nil
-	}
-	if cds.watched != nil {
-		defer cds.mu.Unlock()
-		return cds.watched // All good, return it
-	}
-	// if we got this far, there is no watched ds and we are going to load one
-	cds.watchedLoading = true
-	cds.mu.Unlock()
+	defer cds.mu.Unlock()
 
-	// At this point RRAs slice should not change, we do not need the
-	// lock
-
-	// Turn it into an rraLoader
-	type rraLoader interface {
-		LoadRRAData(rra *serde.DbRoundRobinArchive) (*serde.DbRoundRobinArchive, error)
-	}
-
-	db, ok := d.db.(rraLoader)
-	if !ok {
-		// NB: watchedLoading stays true, it's a negative cache of sorts
+	if cds.sentToLoader { // no partially loaded allowed
 		return nil
 	}
 
-	// Submit the load job and return nil while it's loading - hitting
-	// the DB should be faster at this point.
-	go func(cds *cachedDs, d *dsCache) {
-		rras := cds.RRAs()
-		newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
-		for i, rra := range rras {
-			dbrra, ok := rra.(*serde.DbRoundRobinArchive)
-			if !ok {
-				return // must be db rra
-			}
-			if r, err := db.LoadRRAData(dbrra); err == nil {
-				newRRAs[i] = newSyncRRA(r)
-			} else {
-				return // serde logs something here
-			}
-		}
+	if cds.watchCh == nil {
+		cds.watchCh = ch
+	}
 
-		cds.mu.Lock()
-		ds := newSyncDS(cds.Copy())
-		ds.SetRRAs(newRRAs)
-		cds.watched = ds
-		cds.watchedLoading = false
-		d.watchLRU.Add(cds.Ident().String(), cds.Ident())
-		cds.mu.Unlock()
-	}(cds, d)
-
-	return nil
+	return cds
 }
 
-func (d *dsCache) unwatch(_, val interface{}) {
-	if cds := d.getByIdent(newCachedIdent(val.(serde.Ident))); cds != nil {
+func (d *dsCache) Unwatch(ident serde.Ident) {
+	if cds := d.getByIdent(newCachedIdent(ident)); cds != nil {
 		cds.mu.Lock()
-		cds.watched = nil
-		cds.mu.Unlock()
-		d.Lock()
-		d.lruEvicted++
-		d.Unlock()
+		defer cds.mu.Unlock()
+		cds.watchCh = nil
 	}
 }
 
@@ -281,14 +226,13 @@ func (a sortableIncomingDPs) Less(i, j int) bool { return a[i].timeStamp.Before(
 // can all processed at once.
 type cachedDs struct {
 	serde.DbDataSourcer
-	incoming       sortableIncomingDPs
-	spec           *rrd.DSSpec // for when DS needs to be created
-	sentToLoader   bool
-	lastProcess    time.Time
-	lastFlush      time.Time
-	watched        *syncDS // presence of this makes it "watched" (TODO document me)
-	watchedLoading bool
-	mu             *sync.Mutex
+	incoming     sortableIncomingDPs
+	spec         *rrd.DSSpec // for when DS needs to be created
+	sentToLoader bool
+	lastProcess  time.Time
+	lastFlush    time.Time
+	watchCh      chan dsl.DataPoint
+	mu           *sync.Mutex
 }
 
 func (cds *cachedDs) appendIncoming(dp *incomingDP) {
@@ -297,7 +241,7 @@ func (cds *cachedDs) appendIncoming(dp *incomingDP) {
 	cds.incoming = append(cds.incoming, dp)
 }
 
-func (cds *cachedDs) processIncoming() (int, error) {
+func (cds *cachedDs) processIncoming() (int, int, error) {
 
 	const BIG = 32 // this number was chosen rather arbitrarily
 
@@ -307,7 +251,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 
 	count := len(cds.incoming)
 	if count == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	// delay processing by 1/10 of a step, in a clustered situation it
@@ -315,18 +259,22 @@ func (cds *cachedDs) processIncoming() (int, error) {
 	// this (along with the Sort() just below) addresses it.  Unless
 	// there are already a bunch of points queued up
 	if !(cds.lastProcess.Before(time.Now().Add(-cds.Step()/10)) || count > BIG) {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	sort.Sort(cds.incoming)
 
+	blocked := 0 // watched ch blocked
 	for _, dp := range cds.incoming {
 		// continue on errors
 		err = cds.ProcessDataPoint(dp.value, dp.timeStamp)
 
-		if cds.watched != nil {
-			// ignore errors completely
-			cds.watched.ProcessDataPoint(dp.value, dp.timeStamp)
+		if cds.watchCh != nil {
+			select {
+			case cds.watchCh <- dsl.DataPoint{Ident: cds.Ident(), T: dp.timeStamp, V: dp.value}:
+			default:
+				blocked++
+			}
 		}
 	}
 
@@ -339,7 +287,7 @@ func (cds *cachedDs) processIncoming() (int, error) {
 		cds.incoming = nil
 	}
 
-	return count, err
+	return count, blocked, err
 }
 
 // This is exported so as to be Gob-Encodable
@@ -406,3 +354,21 @@ func (ds *distDs) Type() string    { return "DataSource" }
 func (ds *distDs) GetName() string { return ds.DbDataSourcer.Ident().String() }
 
 // end cluster.DistDatum interface
+
+type statster interface {
+	Stats() dsl.NamedDsFetcherStats
+}
+
+// TODO: This is a hack, there should be a better way to report
+// stats from outside the receiver package.
+func ReportRcacheStats(ndsf dsl.NamedDSFetcher, sr statReporter) {
+	str := ndsf.(statster)
+	for {
+		time.Sleep(5 * time.Second)
+		st := str.Stats()
+		sr.reportStatCount("dsl.lru_evicted", float64(st.LruEvictions))
+		sr.reportStatCount("dsl.lru_hits", float64(st.LruHits))
+		sr.reportStatCount("dsl.lru_misses", float64(st.LruMisses))
+		sr.reportStatGauge("dsl.lru_size", float64(st.LruSize))
+	}
+}

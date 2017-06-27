@@ -65,9 +65,9 @@ var directorForwardDPToNode = func(dp *incomingDP, node *cluster.Node, snd chan 
 	return nil
 }
 
-var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
+var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) (int, int) {
 
-	cnt, err := cds.processIncoming()
+	cnt, blk, err := cds.processIncoming()
 	if err != nil {
 		if !strings.Contains(err.Error(), "not greater than data source") {
 			log.Printf("directorProcessDataPoint [%v] error: %v", cds.Ident(), err)
@@ -83,7 +83,7 @@ var directorProcessDataPoint = func(cds *cachedDs, dsf dsFlusherBlocking) int {
 		cds.lastFlush = time.Now()
 	}
 	cds.mu.Unlock()
-	return cnt
+	return cnt, blk
 }
 
 var directorProcessOrForward = func(dsc *dsCache, cds *cachedDs, workerCh chan *cachedDs, clstr clusterer, snd chan *cluster.Msg, stats *dpStats) {
@@ -340,8 +340,6 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 			sr.reportStatGauge("receiver.cache.ds_count", float64(st.dsCount))
 			sr.reportStatGauge("receiver.cache.rra_count", float64(st.rraCount))
 			sr.reportStatCount("receiver.cache.evicted", float64(st.evicted))
-			sr.reportStatCount("receiver.cache.lru_evicted", float64(st.lruEvicted))
-			sr.reportStatGauge("receiver.cache.lru_size", float64(st.lruSize))
 		}
 	}
 }
@@ -350,19 +348,22 @@ var worker = func(wg *sync.WaitGroup, workerCh chan *cachedDs, dsf dsFlusherBloc
 	log.Printf("worker %d: starting.", n)
 	defer wg.Done()
 	lastStat := time.Now()
-	accepted := 0
+	accepted, watchBlk := 0, 0
 	for {
 		cds, ok := <-workerCh
 		if !ok {
 			log.Printf("worker %d: exiting.", n)
 			return
 		}
-		accepted += directorProcessDataPoint(cds, dsf)
+		cnt, blk := directorProcessDataPoint(cds, dsf)
+		accepted += cnt
+		watchBlk += blk
 
 		if lastStat.Before(time.Now().Add(-time.Second)) {
 			sr.reportStatCount("receiver.datapoints.accepted", float64(accepted))
+			sr.reportStatCount("receiver.cache.watch_blocked", float64(watchBlk))
 			lastStat = time.Now()
-			accepted = 0
+			accepted, watchBlk = 0, 0
 		}
 	}
 }

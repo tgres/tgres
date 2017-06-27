@@ -212,6 +212,9 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 		return
 	}
 
+	// Report rcache stats
+	go receiver.ReportRcacheStats(rcache, rcvr)
+
 	// Might as well populate the rcache here
 	if db.Fetcher() != nil {
 		log.Printf("Pre-populating Named DS Fetcher...")
