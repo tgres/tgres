@@ -249,7 +249,7 @@ func Test_DataSource_updateRange(t *testing.T) {
 
 func Test_DataSource_ProcessDataPoint(t *testing.T) {
 
-	ds := &DataSource{step: 10 * time.Second}
+	ds := &DataSource{step: 10 * time.Second, heartbeat: 60 * time.Second}
 	ds.SetRRAs([]RoundRobinArchiver{
 		&RoundRobinArchive{step: 20 * time.Second, size: 10},
 	})
@@ -280,6 +280,107 @@ func Test_DataSource_ProcessDataPoint(t *testing.T) {
 	// Before last update
 	if err := ds.ProcessDataPoint(100, time.Unix(1, 0)); err == nil {
 		t.Errorf("ProcessDataPoint: no error on data point prior to last update")
+	}
+}
+
+func Test_DataSource_ProcessDataPoint_HB0(t *testing.T) {
+	// 0 heartbeat
+
+	ds := &DataSource{step: 10 * time.Second, heartbeat: 0}
+	ds.SetRRAs([]RoundRobinArchiver{
+		&RoundRobinArchive{step: 20 * time.Second, size: 10},
+	})
+
+	pdpEmpty := func(p Pdper) bool {
+		return p.Duration() == 0 && math.IsNaN(p.Value())
+	}
+
+	type valz struct {
+		// Given
+		t time.Time
+		v float64
+
+		// Expected
+		rraDps    map[int64]float64
+		rraPdpVal float64
+		rraPdpDur time.Duration
+	}
+
+	testVals := []valz{
+		0: {
+			t:         time.Unix(104, 0),
+			v:         100.0,
+			rraDps:    map[int64]float64{},
+			rraPdpVal: 100.0,
+			rraPdpDur: 10 * time.Second,
+		},
+		1: { // Same slot, another DP
+			t:         time.Unix(105, 0),
+			v:         120.0,
+			rraDps:    map[int64]float64{},
+			rraPdpVal: 110.0,
+			rraPdpDur: 20 * time.Second,
+		},
+		2: { // Same slot, third DP!
+			t:         time.Unix(106, 0),
+			v:         120.0,
+			rraDps:    map[int64]float64{},
+			rraPdpVal: 113.33333333333333,
+			rraPdpDur: 30 * time.Second, // Yep, it exceeds RRA step, so what
+		},
+		3: { // Next DS slot, same RRA slot, but we are at RRA slot end
+			t:         time.Unix(118, 0),
+			v:         90.0,
+			rraDps:    map[int64]float64{6: 107.5},
+			rraPdpVal: math.NaN(),
+			rraPdpDur: 0,
+		},
+		4: { // Same DS slot
+			t:         time.Unix(119, 0),
+			v:         80.0,
+			rraDps:    map[int64]float64{6: 80}, // overwritten
+			rraPdpVal: math.NaN(),
+			rraPdpDur: 0,
+		},
+		5: { // Skip a slot
+			t:         time.Unix(144, 0),
+			v:         100.0,
+			rraDps:    map[int64]float64{6: 80},
+			rraPdpVal: 100.0,
+			rraPdpDur: 10 * time.Second,
+		},
+		6: { // Next DS slot
+			t:         time.Unix(159, 0),
+			v:         100.0,
+			rraDps:    map[int64]float64{6: 80, 8: 100}, // 7: is NaN, we do not store NaNs
+			rraPdpVal: math.NaN(),
+			rraPdpDur: 0,
+		},
+	}
+
+	for i, tv := range testVals {
+		ds.ProcessDataPoint(tv.v, tv.t)
+		if !pdpEmpty(ds) {
+			t.Errorf("Test %d: PDP not empty.", i)
+		}
+
+		if reflect.DeepEqual(ds.rras[0].DPs, tv.rraDps) {
+			t.Errorf("Test %d: ds.rras[0].DPs != tv.rraDps", i)
+		}
+
+		if tv.rraPdpDur != ds.rras[0].Duration() {
+			t.Errorf("Test %d: tv.rraPdpDur != ds.rras[0].Duration()", i)
+		}
+
+		if math.IsNaN(tv.rraPdpVal) {
+			if !math.IsNaN(ds.rras[0].Value()) {
+				t.Errorf("Test %d: rra val no NaN", i)
+			}
+		} else {
+			if ds.rras[0].Value() != tv.rraPdpVal {
+				t.Errorf("Test %d: unexpected rra val: %v", i, ds.rras[0].Value())
+			}
+		}
 	}
 }
 

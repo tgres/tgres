@@ -38,7 +38,10 @@ type RoundRobinArchive struct {
 	Pdp
 	// Consolidation function (CF). How data points from a
 	// higher-resolution RRA are aggregated into a lower-resolution
-	// one. Must be WMEAN, MAX, MIN, LAST.
+	// one. Must be WMEAN, MAX, MIN, LAST. Note that since the DS PDP
+	// is always WMEAN, the RRA CF is limited to that value. E.g. MAX
+	// is not a true maximum, but the maximum of the DS PDPs, which in
+	// turn, are WMEAN.
 	cf Consolidation
 	// The RRA step
 	step time.Duration

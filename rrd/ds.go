@@ -21,8 +21,14 @@ import (
 	"time"
 )
 
-// DataSource describes a time series and its parameters, RRA and
-// intermediate state (PDP).
+// DataSource contains a time series and its parameters, RRAs and
+// intermediate state (PDP). The DS PDP is the smallest unit of
+// accumulation for this series, all RRAs should have PDPs that are a
+// multiple of the DS PDP. The DS PDP supports only weighted mean as
+// its consolidation function. The reason for not supporting
+// min/max/last/avg (at least initially) is that additional state is
+// required to maintain those, while it seems like that is better done
+// in other places, e.g. the Aggregator anyhow.
 type DataSource struct {
 	Pdp
 	step       time.Duration        // Step (PDP) size
@@ -72,8 +78,30 @@ func NewDataSource(spec DSSpec) *DataSource {
 // has must have steps that are a multiple of this Step.
 func (ds *DataSource) Step() time.Duration { return ds.step }
 
-// Heartbeat returns the interval size which if passed without any
-// data renders the data NaN.
+// Heartbeat is the time interval size which if passed without any
+// data renders the interval data NaN. Another way of looking at HB is
+// this is how far back we go to connect adjacent data points. If the
+// points are further apart than HB, the value in between becomes NaN.
+//
+// A special value of 0 changes the behavior to be closer to that of
+// Whisper files. Whisper logic assigns data points to slots and the
+// last data point to arrive overwrites any previous value in the
+// slot. The duration assigned to the data point is the PDP step,
+// which causes it to be immediately moved to the RRAs. Note that
+// multiple data points in the same PDP will cause multiple RRA
+// updates, and the resulting RRA value is subject to whatever
+// consolidation function the RRA uses. In the case of HB 0 MAX might
+// be more appropriate than WMEAN (default).
+//
+// Rationale for using HB 0 for this is that an HB of 0 doesn't make
+// much sense otherwise: if a gap larger than HB is filled with NaNs
+// (or just ignored, implementation detail), then HB of zero any
+// incoming value strictly speaking ought to become NaN. We could
+// treat 0 HB as "no limit to how far we go", but a "we just store the
+// value without going back" is a nice compromise and it is actually
+// useful when we want to mimic Whisper-like behavior. One example is
+// using data points to denote that something happened, i.e. "deploy
+// success".
 func (ds *DataSource) Heartbeat() time.Duration { return ds.heartbeat }
 
 // LastUpdate returns the timestamp of the last Data Point processed
@@ -277,13 +305,28 @@ func (ds *DataSource) ProcessDataPoint(value float64, ts time.Time) error {
 		return fmt.Errorf("Data point time stamp %v is not greater than data source last update time %v", ts, ds.lastUpdate)
 	}
 
-	// ds value is NaN if HB is exceeded
-	if ds.heartbeat > 0 && ts.Sub(ds.lastUpdate) > ds.heartbeat {
-		value = math.NaN()
-	}
+	if ds.heartbeat == 0 {
+		// With 0 HB, just set the step to the value. Do not attempt
+		// to back-fill anything. Subsequent data point in the same
+		// step will just overwrite this one.
+		if !ds.lastUpdate.IsZero() {
+			lastEnd := ds.lastUpdate.Truncate(ds.step).Add(ds.step)
+			if lastEnd.Before(ts.Truncate(ds.step)) {
+				ds.updateRange(lastEnd, ts.Truncate(ds.step), math.NaN())
+			}
+		}
 
-	if !ds.lastUpdate.IsZero() { // Do not update a never-before-updated DS
-		ds.updateRange(ds.lastUpdate, ts, value)
+		ds.updateRange(ts.Truncate(ds.step), ts.Add(ds.step).Truncate(ds.step), value)
+	} else {
+
+		// ds value is NaN if HB is exceeded
+		if ts.Sub(ds.lastUpdate) > ds.heartbeat {
+			value = math.NaN()
+		}
+
+		if !ds.lastUpdate.IsZero() { // Do not update a never-before-updated DS
+			ds.updateRange(ds.lastUpdate, ts, value)
+		}
 	}
 
 	ds.lastUpdate = ts
@@ -299,7 +342,7 @@ func (ds *DataSource) updateRRAs(periodBegin, periodEnd time.Time) {
 		// increments.
 		duration := ds.duration
 		span := periodEnd.Sub(periodBegin)
-		if span > ds.step && rra.Step() > span {
+		if span > ds.step && rra.Step() >= span {
 			duration = span
 		}
 		rra.update(periodBegin, periodEnd, ds.value, duration)
