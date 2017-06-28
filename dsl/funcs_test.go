@@ -878,3 +878,15 @@ func Test_dsl_countSeries(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
+
+// hitcount
+func Test_dsl_hitcount(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "hitcount(group(constantLine(10), constantLine(20), constantLine(30)), '1min')", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 3600); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}

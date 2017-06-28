@@ -203,6 +203,10 @@ var preprocessArgFuncs = funcMap{
 		argDef{"value", argNumber, nil}}},
 	"countSeries": dslFuncType{dslCountSeries, true, []argDef{
 		argDef{"seriesList", argSeries, nil}}},
+	"hitcount": dslFuncType{dslHitcount, true, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"intervalString", argString, nil},
+		argDef{"alignToInterval", argBool, "false"}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -1972,6 +1976,33 @@ func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
 	name := args["_legend_"].(string)
 	return SeriesMap{name: &seriesCountSeries{series, float64(len(series.SeriesSlice))}}, nil
+}
+
+// hitCount()
+// This really boils down to Sum(Scale())
+// alignToInterval is ignored because I think we sort of do that anyway
+
+type seriesHitcount struct {
+	*aliasSeriesSlice
+	factor float64
+}
+
+func (sl *seriesHitcount) CurrentValue() float64 {
+	return sl.Sum()*sl.factor
+}
+
+func dslHitcount(args map[string]interface{}) (SeriesMap, error) {
+	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
+	name := args["_legend_"].(string)
+	is := args["intervalString"].(string)
+
+	dur, err := misc.BetterParseDuration(is)
+	if err != nil {
+		return nil, err
+	}
+	factor := dur.Seconds()
+
+	return SeriesMap{name: &seriesHitcount{series, factor}}, nil
 }
 
 // holtWintersForecast
