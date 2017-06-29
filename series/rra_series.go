@@ -40,6 +40,7 @@ type RRASeries struct {
 	groupBy   time.Duration
 	maxPoints int64
 	grpVal    float64 // if there is a group by
+	rraLocked bool
 }
 
 func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
@@ -61,7 +62,8 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 func (s *RRASeries) Next() bool {
 
 	if s.pos == -1 {
-		if s.lck != nil {
+		if s.lck != nil && !s.rraLocked {
+			s.rraLocked = true
 			s.lck.RLock()
 		}
 
@@ -90,8 +92,9 @@ func (s *RRASeries) Next() bool {
 	for i := 0; i < moves; i++ {
 		if !s.advance() {
 			s.grpVal = math.NaN()
-			if s.lck != nil {
+			if s.lck != nil && s.rraLocked {
 				s.lck.RUnlock()
+				s.rraLocked = false
 			}
 			return false
 		}
@@ -152,8 +155,9 @@ func (s *RRASeries) CurrentTime() time.Time {
 
 func (s *RRASeries) Close() error {
 	if s.pos != -1 {
-		if s.lck != nil {
+		if s.lck != nil && s.rraLocked {
 			s.lck.RUnlock()
+			s.rraLocked = false
 		}
 	}
 	s.pos = -1

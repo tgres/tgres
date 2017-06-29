@@ -102,7 +102,6 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 			return d.db.FetchOrCreateDataSource(ident, nil)
 		}
 
-		// Warning, returning it RLocked!
 		d.Lock()
 		d.hits++
 		d.Unlock()
