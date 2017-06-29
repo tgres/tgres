@@ -58,6 +58,7 @@ type Series interface {
 	TimeRange(...time.Time) (time.Time, time.Time)
 
 	// Timestamp of the last data point in the series.
+	// TODO is series.Latest() necessary even?
 	Latest() time.Time
 
 	// Alternative to GroupBy(), with a similar effect but based on

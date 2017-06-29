@@ -22,19 +22,19 @@ import (
 	"github.com/tgres/tgres/rrd"
 )
 
-type RUnlocker interface {
+type RLocker interface {
+	RLock()
 	RUnlock()
 }
 
 // RRASeries transforms a rrd.RoundRobinArchiver into a Series.
 type RRASeries struct {
-	data      map[int64]float64
-	lck       RUnlocker
-	size      int64
+	rra       rrd.RoundRobinArchiver
+	lck       RLocker
+	latest    time.Time     // for Latest()
+	step      time.Duration // for Step()
 	pos       int64
 	tim       time.Time // if timeRange was set
-	step      time.Duration
-	latest    time.Time
 	alias     string
 	from, to  time.Time
 	groupBy   time.Duration
@@ -43,24 +43,34 @@ type RRASeries struct {
 }
 
 func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
+	// If the rra is an RLocker, it is the responsibility of the
+	// caller of this func to have it locked and unlocked (so that
+	// rra.Latest() and Step() are safe).
 	result := &RRASeries{
-		data:   rra.DPs(),
-		size:   rra.Size(),
+		rra:    rra,
 		pos:    -1,
-		step:   rra.Step(),
 		latest: rra.Latest(),
+		step:   rra.Step(),
 	}
-	if srra, ok := rra.(RUnlocker); ok {
+	if srra, ok := rra.(RLocker); ok {
 		result.lck = srra
-	}
-	if !result.latest.IsZero() {
-		result.from = result.latest.Add(-result.step * time.Duration(result.size))
-		result.to = result.latest
 	}
 	return result
 }
 
 func (s *RRASeries) Next() bool {
+
+	if s.pos == -1 {
+		if s.lck != nil {
+			s.lck.RLock()
+		}
+
+		// Set initial values to from/to if they were not set by TimeRange()
+		if s.from.IsZero() && s.to.IsZero() && !s.latest.IsZero() {
+			s.from = s.rra.Latest().Add(-s.rra.Step() * time.Duration(s.rra.Size()))
+			s.to = s.rra.Latest()
+		}
+	}
 
 	// groupBy trumps maxPoints, otherwise maxPoints sets groupBy
 	groupBy := s.groupBy
@@ -71,8 +81,8 @@ func (s *RRASeries) Next() bool {
 
 	// Approximate the number of advances a group by contains.
 	moves := 1
-	if groupBy > 0 && groupBy > s.step {
-		moves = int(groupBy.Seconds()/s.step.Seconds() + 0.5)
+	if groupBy > 0 && groupBy > s.rra.Step() {
+		moves = int(groupBy.Seconds()/s.rra.Step().Seconds() + 0.5)
 	}
 
 	// Compute agerage if we are grouping
@@ -80,6 +90,9 @@ func (s *RRASeries) Next() bool {
 	for i := 0; i < moves; i++ {
 		if !s.advance() {
 			s.grpVal = math.NaN()
+			if s.lck != nil {
+				s.lck.RUnlock()
+			}
 			return false
 		}
 		val := s.curVal()
@@ -102,18 +115,19 @@ func (s *RRASeries) advance() bool {
 	if s.tim.IsZero() {
 		s.tim = s.from
 	} else if s.tim.Before(s.to) {
-		s.tim = s.tim.Add(s.step)
+		s.tim = s.tim.Add(s.rra.Step())
 	} else {
 		s.tim = time.Time{}
 		s.pos = -1
 		return false
 	}
 
-	if s.latest.IsZero() || s.tim.After(s.latest) || s.tim.Before(s.latest.Add(-s.step*time.Duration(s.size))) {
+	latest, step, size := s.rra.Latest(), s.rra.Step(), s.rra.Size()
+	if latest.IsZero() || s.tim.After(latest) || s.tim.Before(latest.Add(-step*time.Duration(size))) {
 		// pos is invalid, but we're still returning true, because we can advance
 		s.pos = -1
 	} else {
-		s.pos = rrd.SlotIndex(s.tim, s.step, s.size)
+		s.pos = rrd.SlotIndex(s.tim, step, size)
 	}
 	return true
 }
@@ -126,7 +140,7 @@ func (s *RRASeries) CurrentValue() float64 {
 }
 
 func (s *RRASeries) curVal() float64 {
-	if result, ok := s.data[s.pos]; ok {
+	if result, ok := s.rra.DPs()[s.pos]; ok {
 		return result
 	}
 	return math.NaN()
@@ -137,11 +151,12 @@ func (s *RRASeries) CurrentTime() time.Time {
 }
 
 func (s *RRASeries) Close() error {
-	s.pos = -1
-
-	if s.lck != nil {
-		s.lck.RUnlock()
+	if s.pos != -1 {
+		if s.lck != nil {
+			s.lck.RUnlock()
+		}
 	}
+	s.pos = -1
 	return nil
 }
 
@@ -173,6 +188,9 @@ func (s *RRASeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
 }
 
 func (s *RRASeries) Latest() time.Time {
+	if !s.to.IsZero() {
+		return s.to
+	}
 	return s.latest
 }
 

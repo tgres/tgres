@@ -93,8 +93,8 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 	}
 	if wds != nil {
 		wds.RLock()
+		defer wds.RUnlock()
 		if wds.loading {
-			wds.RUnlock()
 			// non-cache behavior
 			d.Lock()
 			d.misses++
@@ -108,6 +108,8 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 		d.Unlock()
 		return wds, nil
 	}
+
+	// if we got this far wds == nil
 
 	if ds := d.dsc.Watch(ident, d.ch); ds != nil {
 
@@ -150,21 +152,26 @@ func (d *dsLRU) loadDs(wds *watchedDs) {
 func (d *dsLRU) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints int64) (series.Series, error) {
 	var wds *watchedDs
 	if wds, _ = ds.(*watchedDs); wds == nil {
+		// Not a watchedDs, fallback to non-cache behavior
 		return d.db.FetchSeries(ds, from, to, maxPoints)
 	}
 
-	// NOTE: It is already locked!
+	wds.RLock()
+	defer wds.RUnlock()
+
 	rra := wds.BestRRA(from, to, maxPoints)
 	if rra == nil {
-		wds.Unlock()
 		return nil, fmt.Errorf("FetchSeries (ds_lru.go): No adequate RRA found for DS from: %v to: maxPoints: %v", from, to, maxPoints)
 	}
 
+	// We pass the wds lock here, so that when whatever downstream locks the rra,
+	// it will actually end up locking the DS. Note that a locked DS cannot have
+	// data points added to it, so it is imperative that the lock isn't held for a long
+	// time in http handler and what not.
 	s := series.NewRRASeries(&watchedRRA{RoundRobinArchiver: rra, RWMutex: wds.RWMutex})
 	s.TimeRange(from, to)
 	s.MaxPoints(maxPoints)
 
-	// NOTE: returning a locked series, rra_series will unlock it
 	return s, nil
 }
 
