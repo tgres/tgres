@@ -890,3 +890,57 @@ func Test_dsl_hitcount(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
+
+// keepLastValue
+func Test_dsl_keepLastValue(t *testing.T) {
+	td := setupTestData()
+
+	rspec := rrd.RRASpec{
+		Function: rrd.WMEAN,
+		Step:     time.Minute,
+		Span:     10 * time.Minute,
+		Latest:   td.when,
+	}
+	size := rspec.Span.Nanoseconds() / rspec.Step.Nanoseconds()
+
+	spec := &rrd.DSSpec{
+		Step: time.Second,
+		RRAs: []rrd.RRASpec{rspec},
+	}
+
+	spec.RRAs[0].DPs = make(map[int64]float64)
+	for i := int64(0); i < size; i++ {
+		if i < 5 {
+			spec.RRAs[0].DPs[i] = 10
+		} else {
+			spec.RRAs[0].DPs[i] = math.NaN()
+		}
+	}
+
+	var err error
+	_, err = td.db.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar.keeplastvalue"}, spec)
+	if err != nil {
+		t.Error(err)
+	}
+
+	sm, err := ParseDsl(td.rcache, `keepLastValue("foo.bar.keeplastvalue", 3)`, td.from, td.to, 60)
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, s := range sm {
+		tens, nans := 0, 0
+		for s.Next() {
+			v := s.CurrentValue()
+			if v == 10 {
+				tens++
+			}
+			if math.IsNaN(v) {
+				nans++
+			}
+		}
+		if tens != 9 && nans != 2 {
+			t.Errorf("Unexpected value: tens %v nans %v (expected: 9 tens and 2 nans)", tens, nans)
+		}
+	}
+}

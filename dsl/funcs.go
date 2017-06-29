@@ -207,6 +207,9 @@ var preprocessArgFuncs = funcMap{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"intervalString", argString, nil},
 		argDef{"alignToInterval", argBool, "false"}}},
+	"keepLastValue": dslFuncType{dslKeepLastValue, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"limit", argNumber, 0.0}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -243,7 +246,7 @@ var preprocessArgFuncs = funcMap{
 	// TRANSFORM
 	// ++ absolute()
 	// ++ derivative()
-	// -- hitcount() // don't understand this one
+	// ++ hitcount()
 	// ++ integral()
 	// ++ log()
 	// ++ nonNegativeDerivative
@@ -307,7 +310,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ countSeries
 	// -- cumulative // == consolidateBy
 	// ?? groupByNode // similar to alias by metric
-	// ?? keepLastValue // don't really understand this one
+	// ++ keepLastValue
 	// ?? randomWalk // later?
 	// ?? sortByMaxima
 	// ?? sortByMinima
@@ -1988,7 +1991,7 @@ type seriesHitcount struct {
 }
 
 func (sl *seriesHitcount) CurrentValue() float64 {
-	return sl.Sum()*sl.factor
+	return sl.Sum() * sl.factor
 }
 
 func dslHitcount(args map[string]interface{}) (SeriesMap, error) {
@@ -2003,6 +2006,40 @@ func dslHitcount(args map[string]interface{}) (SeriesMap, error) {
 	factor := dur.Seconds()
 
 	return SeriesMap{name: &seriesHitcount{series, factor}}, nil
+}
+
+// keepLastValue()
+
+type seriesKeepLastValue struct {
+	AliasSeries
+	maxCnt int
+	last   float64
+	cnt    int
+}
+
+func (s *seriesKeepLastValue) CurrentValue() float64 {
+	value := s.AliasSeries.CurrentValue()
+	if math.IsNaN(value) {
+		if s.maxCnt > 0 && s.cnt < s.maxCnt {
+			// Incrementing counter in CV() is wrong, but it will do
+			s.cnt++
+			return s.last
+		}
+	} else {
+		s.last = value
+		s.cnt = 0
+	}
+	return value
+}
+
+func dslKeepLastValue(args map[string]interface{}) (SeriesMap, error) {
+	series := args["seriesList"].(SeriesMap)
+	maxCnt := args["limit"].(float64)
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("keepLastValue(%v,%v)", name, maxCnt))
+		series[name] = &seriesKeepLastValue{AliasSeries: s, maxCnt: int(maxCnt)}
+	}
+	return series, nil
 }
 
 // holtWintersForecast
