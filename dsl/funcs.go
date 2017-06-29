@@ -57,6 +57,7 @@ type dslCtxFuncMap map[string]dslCtxFuncType
 var dslCtxFuncs = dslCtxFuncMap{ // functions that require the dslCtx to do their stuff
 	"sumSeriesWithWildcards":     dslSumSeriesWithWildcards,
 	"averageSeriesWithWildcards": dslAverageSeriesWithWildcards,
+	"groupByNode":                dslGroupByNode,
 }
 
 var preprocessArgFuncs = funcMap{
@@ -475,58 +476,43 @@ func processArgs(dc *dslCtx, fn *dslFuncType, args []interface{}) (map[string]in
 	return result, asSlice, nil
 }
 
+func callPreprocessArgFunc(dc *dslCtx, name string, argFunc *dslFuncType,
+	args []interface{}, argMap map[string]interface{}, argSlice []interface{}) (SeriesMap, error) {
+
+	argMap["_legend_"] = fmt.Sprintf("%s(%s)", name, argsAsString(args)) // only a suggestion
+	argMap["_args_"] = argSlice
+	argMap["_from_"] = dc.from
+	argMap["_to_"] = dc.to
+	argMap["_maxPoints_"] = dc.maxPoints
+	if series, err := argFunc.call(argMap); err == nil {
+		return series, nil
+	} else {
+		return nil, fmt.Errorf("%v() reports an error: %v", name, err)
+	}
+}
+
 func seriesFromFunction(dc *dslCtx, name string, args []interface{}) (SeriesMap, error) {
 
 	argFunc, ok := preprocessArgFuncs[name]
-	if !ok {
+	if ok {
+		argMap, argSlice, err := processArgs(dc, &argFunc, args)
+		if err != nil {
+			return nil, fmt.Errorf("%v() reports an error: %v", name, err)
+		}
+		return callPreprocessArgFunc(dc, name, &argFunc, args, argMap, argSlice)
+	} else {
 		// Try a dslCtxFunc
 		if dslCtxFunc, ok := dslCtxFuncs[name]; !ok {
-			return nil, fmt.Errorf("seriesFromFunction(): No such function: %v", name)
+			return nil, fmt.Errorf("No such function: %v", name)
 		} else {
 			if series, err := dslCtxFunc(dc, args); err == nil {
 				return series, nil
 			} else {
-				return nil, fmt.Errorf("seriesFromFunction(): %v() reports an error: %v", name, err)
+				return nil, fmt.Errorf("%v() reports an error: %v", name, err)
 			}
 		}
-	} else {
-		argMap, argSlice, err := processArgs(dc, &argFunc, args)
-		if err != nil {
-			return nil, fmt.Errorf("seriesFromFunction(): %v() reports an error: %v", name, err)
-		}
-		argMap["_legend_"] = fmt.Sprintf("%s(%s)", name, argsAsString(args)) // only a suggestion
-		argMap["_args_"] = argSlice
-		argMap["_from_"] = dc.from
-		argMap["_to_"] = dc.to
-		argMap["_maxPoints_"] = dc.maxPoints
-		if series, err := argFunc.call(argMap); err == nil {
-			return series, nil
-		} else {
-			return nil, fmt.Errorf("seriesFromFunction(): %v() reports an error: %v", name, err)
-		}
 	}
-
 }
-
-// func NewSeriesSliceFromArgs(dc *dslCtx, args []interface{}) (series.SeriesSlice, error) {
-
-// 	if len(args) == 0 {
-// 		return nil, fmt.Errorf("NewSeriesSliceFromArgs(): at least 1 arg required, 0 given")
-// 	}
-
-// 	result := series.SeriesSlice{}
-// 	for _, arg := range args {
-// 		series, err := dc.seriesFromSeriesOrIdent(arg)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		for _, s := range series {
-// 			result = append(result, s)
-// 		}
-// 	}
-// 	result.Align()
-// 	return result, nil
-// }
 
 func argsAsString(args []interface{}) string {
 	sargs := make([]string, 0, len(args))
@@ -729,9 +715,18 @@ func processSeriesWithWildcards(dc *dslCtx, args []interface{}) (map[string]stri
 		return nil, fmt.Errorf("Expecting at least 2 arguments, got %d", len(args))
 	}
 
+	var (
+		smap SeriesMap
+		err  error
+	)
+
 	sspec, ok := args[0].(string)
 	if !ok {
-		return nil, fmt.Errorf("%v is not a string", args[0])
+		// but it could be a SeriesMap
+		smap, ok = args[0].(SeriesMap)
+		if !ok {
+			return nil, fmt.Errorf("%v is not a string or a SeriesMap", args[0])
+		}
 	}
 
 	var poss []int
@@ -743,10 +738,12 @@ func processSeriesWithWildcards(dc *dslCtx, args []interface{}) (map[string]stri
 		poss = append(poss, int(i))
 	}
 
-	// First we need a complete list of series
-	smap, err := dc.seriesFromSeriesOrIdent(sspec)
-	if err != nil {
-		return nil, err
+	// First we need a complete list of series (unless it was already given to use)
+	if len(smap) == 0 {
+		smap, err = dc.seriesFromSeriesOrIdent(sspec)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Then we group them by the new spec
@@ -775,6 +772,88 @@ func processSeriesWithWildcards(dc *dslCtx, args []interface{}) (map[string]stri
 	}
 
 	return specs, nil
+}
+
+// groupByNode
+func dslGroupByNode(dc *dslCtx, args []interface{}) (SeriesMap, error) {
+
+	if len(args) != 3 {
+		return nil, fmt.Errorf("Expecting 3 arguments, got %d", len(args))
+	}
+
+	var (
+		smap SeriesMap
+		err  error
+	)
+	sspec, ok := args[0].(string)
+	if !ok {
+		// but it could be a SeriesMap
+		smap, ok = args[0].(SeriesMap)
+		if !ok {
+			return nil, fmt.Errorf("first arg %v is not a string or a SeriesMap", args[0])
+		}
+	}
+
+	fnode, ok := args[1].(float64)
+	if !ok {
+		return nil, fmt.Errorf("second arg %v is not a number", args[1])
+	}
+	pos := int(fnode)
+
+	funcName, ok := args[2].(string)
+	if !ok {
+		return nil, fmt.Errorf("third arg %v is not a string", args[2])
+	}
+
+	// Check that the function is valid
+	fdef, ok := preprocessArgFuncs[funcName]
+	if !ok {
+		return nil, fmt.Errorf("%v is not a function we know", args[2])
+	}
+
+	// Check that the func is suitable
+	if len(fdef.args) != 1 || len(fdef.args) == 0 || fdef.args[0].tp != argSeries {
+		return nil, fmt.Errorf("%v is not suitable for callback", args[2])
+	}
+
+	// First we need a complete list of series
+	if len(smap) == 0 {
+		smap, err = dc.seriesFromSeriesOrIdent(sspec)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	groups := make(map[string]SeriesMap)
+	for name, s := range smap {
+		// a.b.c.d, 2 => c: a.b.c.d
+		parts := strings.Split(name, ".")
+		if pos >= len(parts) {
+			continue // ignore
+		}
+		group := parts[pos]
+
+		if groups[group] == nil {
+			groups[group] = make(SeriesMap)
+		}
+		groups[group][name] = s
+	}
+
+	result := make(SeriesMap)
+	for alias, group := range groups {
+		argsMap := map[string]interface{}{fdef.args[0].name: group}
+		smap, err := callPreprocessArgFunc(dc, funcName, &fdef, nil, argsMap, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error in callPreprocessArgFunc: %v", err)
+		}
+		for _, s := range smap {
+			// we're expecting the func to return a single thing, or else this
+			// probably wold not work...
+			result[alias] = s
+		}
+	}
+
+	return result, nil
 }
 
 // percentileOfSeries()

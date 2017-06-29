@@ -77,6 +77,7 @@ func Test_dsl_averageSeries(t *testing.T) {
 
 // averageSeriesWithWildcards
 // sumSeriesWithWildcards
+// groupByNode
 func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
 	td := setupTestData()
 
@@ -120,6 +121,15 @@ func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
 	}
 
 	sm, err = ParseDsl(td.rcache, `sumSeriesWithWildcards("foo.*.baz", 1)`, td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	sm, err = ParseDsl(td.rcache, `groupByNode("foo.*.baz", 0, sum)`, td.from, td.to, 100)
 	if err != nil {
 		t.Error(err)
 	}
