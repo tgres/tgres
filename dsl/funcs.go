@@ -672,82 +672,109 @@ func dslDivideSeries(args map[string]interface{}) (SeriesMap, error) {
 	return SeriesMap{name: &seriesDivideSeries{sl}}, nil
 }
 
-// averageSeriesWithWildcards()
-func dslAverageSeriesWithWildcards(dc *dslCtx, args []interface{}) (SeriesMap, error) {
-
-	if len(args) < 2 {
-		return nil, fmt.Errorf("Expecting at least 2 arguments, got %d", len(args))
-	}
-
-	name, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("%v is not a string", args[0])
-	}
-
-	var newName string = name
-	for _, arg := range args[1:] {
-		switch p := arg.(type) {
-		case float64: // our numbers are all float64
-			pos := int(p)
-			parts := strings.Split(newName, ".")
-			if len(parts) > pos {
-				parts[pos] = "*"
-				newName = strings.Join(parts, ".")
-			}
-		}
-	}
-
-	result := &aliasSeriesSlice{}
-	series, err := dc.seriesFromSeriesOrIdent(newName)
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range series {
-		result.SeriesSlice = append(result.SeriesSlice, s)
-	}
-	result.Align()
-
-	name = fmt.Sprintf("averageSeriesWithWildcards(%s)", argsAsString(args))
-	return SeriesMap{name: &seriesAverageSeries{result}}, nil
-}
-
 // sumSeriesWithWildcards()
+//
+// Seems inqdeuqtely documented (or I'm thick). What it does is
+// replace the part at pos (there can be multiple pos) with a '*' and
+// run Sum on that, and then it assigns it an alias where the element
+// at pos is removed entirely, so you actually get bogus series names
+// as aliases.
 func dslSumSeriesWithWildcards(dc *dslCtx, args []interface{}) (SeriesMap, error) {
 
+	specs, err := processSeriesWithWildcards(dc, args)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(SeriesMap, len(specs))
+	for spec, alias := range specs {
+		series, err := dc.seriesFromSeriesOrIdent(spec)
+		if err != nil {
+			return nil, err
+		}
+		ss := series.toAliasSeriesSlice()
+		ss.Align()
+		result[alias] = &seriesSumSeries{ss}
+	}
+
+	return result, nil
+}
+
+// averageSeriesWithWildcards
+// same as sum pretty much
+func dslAverageSeriesWithWildcards(dc *dslCtx, args []interface{}) (SeriesMap, error) {
+
+	specs, err := processSeriesWithWildcards(dc, args)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(SeriesMap, len(specs))
+	for spec, alias := range specs {
+		series, err := dc.seriesFromSeriesOrIdent(spec)
+		if err != nil {
+			return nil, err
+		}
+		ss := series.toAliasSeriesSlice()
+		ss.Align()
+		result[alias] = &seriesAverageSeries{ss}
+	}
+
+	return result, nil
+}
+
+// Return a map of new aliases by spec
+func processSeriesWithWildcards(dc *dslCtx, args []interface{}) (map[string]string, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("Expecting at least 2 arguments, got %d", len(args))
 	}
 
-	name, ok := args[0].(string)
+	sspec, ok := args[0].(string)
 	if !ok {
 		return nil, fmt.Errorf("%v is not a string", args[0])
 	}
 
-	var newName string = name
+	var poss []int
 	for _, arg := range args[1:] {
-		switch p := arg.(type) {
-		case float64: // our numbers are all float64
-			pos := int(p)
-			parts := strings.Split(newName, ".")
-			if len(parts) > pos {
-				parts[pos] = "*"
-				newName = strings.Join(parts, ".")
-			}
+		i, ok := arg.(float64)
+		if !ok {
+			return nil, fmt.Errorf("invalid position: %v", arg)
 		}
+		poss = append(poss, int(i))
 	}
 
-	result := &aliasSeriesSlice{}
-	series, err := dc.seriesFromSeriesOrIdent(newName)
+	// First we need a complete list of series
+	smap, err := dc.seriesFromSeriesOrIdent(sspec)
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range series {
-		result.SeriesSlice = append(result.SeriesSlice, s)
-	}
-	result.Align()
 
-	name = fmt.Sprintf("sumSeriesWithWildcards(%s)", argsAsString(args))
-	return SeriesMap{name: &seriesSumSeries{result}}, nil
+	// Then we group them by the new spec
+	specs := make(map[string]string)
+	for name, _ := range smap {
+		// given sswwc(a.b.c.d, 1, 2):
+		// spec  => a.*.*.d
+		// alias => a.d
+		parts := strings.Split(name, ".")
+		for _, pos := range poss {
+			if len(parts) > pos {
+				parts[pos] = "*"
+			}
+		}
+		spec := strings.Join(parts, ".")
+		i := 0 // count removals
+		for _, pos := range poss {
+			if len(parts) > pos {
+				parts = append(parts[:pos-i], parts[pos+1-i:]...) // remove element
+				i++
+			}
+		}
+		alias := strings.Join(parts, ".") // NB: bogus series name
+
+		specs[spec] = alias
+	}
+
+	return specs, nil
 }
 
 // percentileOfSeries()

@@ -110,7 +110,7 @@ func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
 	}
 	_, err = td.db.FetchOrCreateDataSource(serde.Ident{"name": "foo.bar2.baz"}, spec)
 
-	sm, err := ParseDsl(td.rcache, `averageSeriesWithWildcards("foo.bleh.baz", 1)`, td.from, td.to, 100)
+	sm, err := ParseDsl(td.rcache, `averageSeriesWithWildcards("foo.*.baz", 1)`, td.from, td.to, 100)
 	if err != nil {
 		t.Error(err)
 	}
@@ -119,7 +119,7 @@ func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 
-	sm, err = ParseDsl(td.rcache, `sumSeriesWithWildcards("foo.bleh.baz", 1)`, td.from, td.to, 100)
+	sm, err = ParseDsl(td.rcache, `sumSeriesWithWildcards("foo.*.baz", 1)`, td.from, td.to, 100)
 	if err != nil {
 		t.Error(err)
 	}
