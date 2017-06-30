@@ -845,7 +845,7 @@ func Test_dsl_aliasByNode(t *testing.T) {
 		t.Error(err)
 	}
 	for _, sm := range sm {
-		if sm.Alias() != "sinusoid()" {
+		if sm.Alias() != "" {
 			t.Errorf("incorrect alias: %v", sm.Alias())
 		}
 	}

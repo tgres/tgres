@@ -940,11 +940,16 @@ func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 	result := args["seriesList"].(SeriesMap)
 	nodes := args["nodes"].([]interface{})
 	for name, series := range result {
+		// very crude fix for a case of sum(a.b.c.*.d)
+		if strings.Contains(name, "(") {
+			parts := strings.Split(name, "(")
+			name = strings.Replace(strings.Join(parts[1:], ""), ")", "", 1)
+		}
 		parts := strings.Split(name, ".")
 		var alias_parts []string
 		for _, num := range nodes {
 			n := int(num.(float64))
-			if n >= len(parts) {
+			if n >= len(parts) || n < 0 {
 				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
 			}
 			alias_parts = append(alias_parts, parts[n])
