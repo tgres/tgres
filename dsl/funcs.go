@@ -2116,17 +2116,16 @@ func dslCountSeries(args map[string]interface{}) (SeriesMap, error) {
 // alignToInterval is ignored because I think we sort of do that anyway
 
 type seriesHitcount struct {
-	*aliasSeriesSlice
+	AliasSeries
 	factor float64
 }
 
 func (sl *seriesHitcount) CurrentValue() float64 {
-	return sl.Sum() * sl.factor
+	return sl.AliasSeries.CurrentValue() * sl.factor
 }
 
 func dslHitcount(args map[string]interface{}) (SeriesMap, error) {
-	series := args["seriesList"].(SeriesMap).toAliasSeriesSlice()
-	name := args["_legend_"].(string)
+	series := args["seriesList"].(SeriesMap)
 	is := args["intervalString"].(string)
 
 	dur, err := misc.BetterParseDuration(is)
@@ -2135,7 +2134,11 @@ func dslHitcount(args map[string]interface{}) (SeriesMap, error) {
 	}
 	factor := dur.Seconds()
 
-	return SeriesMap{name: &seriesHitcount{series, factor}}, nil
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("hitcount(%v,%v)", name, factor))
+		series[name] = &seriesHitcount{s, factor}
+	}
+	return series, nil
 }
 
 // keepLastValue()
