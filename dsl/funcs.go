@@ -214,6 +214,9 @@ var preprocessArgFuncs = funcMap{
 	"color": dslFuncType{dslColor, true, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"color", argString, "green"}}},
+	"exclude": dslFuncType{dslExclude, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"pattern", argString, nil}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -280,7 +283,7 @@ var preprocessArgFuncs = funcMap{
 	// ?? averageBelow
 	// ?? currentAbove
 	// ?? currentBelow
-	// ?? exclude
+	// ++ exclude
 	// ?? grep
 	// ++ highestCurrent
 	// ++ highestMax
@@ -2163,6 +2166,22 @@ func dslKeepLastValue(args map[string]interface{}) (SeriesMap, error) {
 		series[name] = &seriesKeepLastValue{AliasSeries: s, maxCnt: int(maxCnt)}
 	}
 	return series, nil
+}
+
+// exclude()
+func dslExclude(args map[string]interface{}) (SeriesMap, error) {
+	result := args["seriesList"].(SeriesMap)
+	exclude := args["pattern"].(string)
+	reg, err := regexp.Compile(exclude)
+	if err != nil {
+		return nil, err
+	}
+	for name, _ := range result {
+		if reg.MatchString(name) {
+			delete(result, name)
+		}
+	}
+	return result, nil
 }
 
 // holtWintersForecast

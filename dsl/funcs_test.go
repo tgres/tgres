@@ -78,7 +78,8 @@ func Test_dsl_averageSeries(t *testing.T) {
 // averageSeriesWithWildcards
 // sumSeriesWithWildcards
 // groupByNode
-func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
+// exclude
+func Test_dsl_multiseriesStuff(t *testing.T) {
 	td := setupTestData()
 
 	rspec := rrd.RRASpec{
@@ -135,6 +136,15 @@ func Test_dsl_averageSeriesWithWildcards(t *testing.T) {
 	}
 
 	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	sm, err = ParseDsl(td.rcache, `sum(exclude("foo.*.baz", "bar1"))`, td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
