@@ -949,8 +949,11 @@ func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 		var alias_parts []string
 		for _, num := range nodes {
 			n := int(num.(float64))
+			if n < 0 {
+				n = len(parts) + n
+			}
 			if n >= len(parts) || n < 0 {
-				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", n, len(parts))
+				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", int(num.(float64)), len(parts))
 			}
 			alias_parts = append(alias_parts, parts[n])
 		}
