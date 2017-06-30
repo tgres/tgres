@@ -195,8 +195,13 @@ func parseTime(s string) (*time.Time, error) {
 func quoteIdentifiers(target string) string {
 	result := target
 	// Note that commas are only allowed inside {} (aka "value expression")
-	parts := regexp.MustCompile(`("?[\w*][\w\-.*]*({[\w\-.*,]*})?[\w\-.*]*[\w*]"?)`).FindAllString(target, -1)
+	parts := regexp.MustCompile(`(('.*?')|"?[\w*][\w\-.*]*({[\w\-.*,]*})?[\w\-.*]*[\w*]"?)`).FindAllString(target, -1)
 	for _, part := range parts {
+		// 'abc' => "abc"
+		if strings.HasPrefix(part, "'") && strings.HasSuffix(part, "'") {
+			part = "\"" + part[1:len(part)-1] + "\""
+		}
+
 		if strings.Contains(part, ".") && !strings.HasPrefix(part, "\"") {
 			result = quoteIdentifiers(strings.Replace(result, part, fmt.Sprintf("%q", part), -1))
 			break

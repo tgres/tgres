@@ -982,13 +982,17 @@ func dslAliasSub(args map[string]interface{}) (SeriesMap, error) {
 	result := args["seriesList"].(SeriesMap)
 	search := args["search"].(string)
 	replace := args["replace"].(string)
+
+	// convert graphite groups to go: \3 => $3
+	groups := regexp.MustCompile(`\\\\([0-9]+)`)
+	replace = groups.ReplaceAllString(replace, "$$$1")
+
 	reg, err := regexp.Compile(search)
 	if err != nil {
 		return nil, err
 	}
 	for name, series := range result {
-		rname := reg.ReplaceAllString(name, replace)
-		series.Alias(rname)
+		series.Alias(reg.ReplaceAllString(name, replace))
 	}
 	return result, nil
 }
