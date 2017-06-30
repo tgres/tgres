@@ -211,6 +211,9 @@ var preprocessArgFuncs = funcMap{
 	"keepLastValue": dslFuncType{dslKeepLastValue, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"limit", argNumber, 0.0}}},
+	"color": dslFuncType{dslColor, true, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"color", argString, "green"}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -910,6 +913,12 @@ func dslAverageSeries(args map[string]interface{}) (SeriesMap, error) {
 // group()
 
 func dslGroup(args map[string]interface{}) (SeriesMap, error) {
+	return args["seriesList"].(SeriesMap), nil
+}
+
+// color()
+
+func dslColor(args map[string]interface{}) (SeriesMap, error) {
 	return args["seriesList"].(SeriesMap), nil
 }
 
