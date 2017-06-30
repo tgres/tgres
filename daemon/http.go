@@ -31,16 +31,16 @@ import (
 	"github.com/tgres/tgres/receiver"
 )
 
-func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher) {
+func httpServer(addr string, l net.Listener, rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher, origHdr string) {
 
 	// Not sure why, but we need both trailing slash and not versions. It has
 	// something to do with whether you use Grafana direct or proxy modes.
-	http.HandleFunc("/metrics/find", h.GraphiteMetricsFindHandler(rcache))
-	http.HandleFunc("/metrics/find/", h.GraphiteMetricsFindHandler(rcache))
-	http.HandleFunc("/render", h.GraphiteRenderHandler(rcache))
-	http.HandleFunc("/render/", h.GraphiteRenderHandler(rcache))
-	http.HandleFunc("/events/get_data", h.GraphiteAnnotationsHandler(rcache))
-	http.HandleFunc("/events/get_data/", h.GraphiteAnnotationsHandler(rcache))
+	http.HandleFunc("/metrics/find", setOriginHdr(h.GraphiteMetricsFindHandler(rcache), origHdr))
+	http.HandleFunc("/metrics/find/", setOriginHdr(h.GraphiteMetricsFindHandler(rcache), origHdr))
+	http.HandleFunc("/render", setOriginHdr(h.GraphiteRenderHandler(rcache), origHdr))
+	http.HandleFunc("/render/", setOriginHdr(h.GraphiteRenderHandler(rcache), origHdr))
+	http.HandleFunc("/events/get_data", setOriginHdr(h.GraphiteAnnotationsHandler(rcache), origHdr))
+	http.HandleFunc("/events/get_data/", setOriginHdr(h.GraphiteAnnotationsHandler(rcache), origHdr))
 
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "OK\n") })
 
@@ -68,6 +68,7 @@ type wwwServer struct {
 	blstr      *blaster.Blaster
 	listener   *graceful.Listener
 	listenSpec string
+	originHdr  string
 	stop       int32
 }
 
@@ -119,7 +120,16 @@ func (g *wwwServer) Start(file *os.File) error {
 
 	log.Printf("HTTP protocol Listening on %s\n", processListenSpec(g.listenSpec))
 
-	go httpServer(g.listenSpec, g.listener, g.rcvr, g.rcache)
+	go httpServer(g.listenSpec, g.listener, g.rcvr, g.rcache, g.originHdr)
 
 	return nil
+}
+
+func setOriginHdr(h http.HandlerFunc, hdr string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if hdr != "" {
+			w.Header().Set("Access-Control-Allow-Origin", hdr)
+		}
+		h(w, r)
+	}
 }

@@ -47,6 +47,7 @@ type Config struct { // Needs to be exported for TOML to work
 	StatsdTextListenSpec     string   `toml:"statsd-text-listen-spec"`
 	StatsdUdpListenSpec      string   `toml:"statsd-udp-listen-spec"`
 	HttpListenSpec           string   `toml:"http-listen-spec"`
+	HttpAllowOrigin          string   `toml:"http-allow-origin"`
 	Workers                  int
 	DSs                      []ConfigDSSpec `toml:"ds"`
 	StatFlush                duration       `toml:"stat-flush-interval"`

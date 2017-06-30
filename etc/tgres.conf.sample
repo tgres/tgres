@@ -19,6 +19,7 @@ log-file =                 "log/tgres.log"
 log-cycle-interval =       "24h"
 
 http-listen-spec            = "0.0.0.0:8888"
+#http-allow-origin           = "*" # Sets Access-Control-Allow-Origin HTTP header
 graphite-line-listen-spec   = "0.0.0.0:2003"
 graphite-text-listen-spec   = "0.0.0.0:2003"
 graphite-udp-listen-spec    = "0.0.0.0:2003"

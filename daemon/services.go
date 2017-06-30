@@ -46,7 +46,7 @@ func newServiceManager(rcvr *receiver.Receiver, rcache dsl.NamedDSFetcher, cfg *
 			"gp":  &graphitePickleServiceManager{rcvr: rcvr, listenSpec: cfg.GraphitePickleListenSpec},
 			"st":  &statsdTextServiceManager{rcvr: rcvr, listenSpec: cfg.StatsdTextListenSpec, timeout: 30 * time.Second},
 			"su":  &statsdTextServiceManager{rcvr: rcvr, listenSpec: cfg.StatsdUdpListenSpec, udp: true},
-			"www": &wwwServer{rcvr: rcvr, rcache: rcache, listenSpec: cfg.HttpListenSpec},
+			"www": &wwwServer{rcvr: rcvr, rcache: rcache, listenSpec: cfg.HttpListenSpec, originHdr: cfg.HttpAllowOrigin},
 		},
 	}
 }
