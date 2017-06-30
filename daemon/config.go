@@ -48,6 +48,7 @@ type Config struct { // Needs to be exported for TOML to work
 	StatsdUdpListenSpec      string   `toml:"statsd-udp-listen-spec"`
 	HttpListenSpec           string   `toml:"http-listen-spec"`
 	HttpAllowOrigin          string   `toml:"http-allow-origin"`
+	QueryCacheSize           int      `toml:"query-cache-size"`
 	Workers                  int
 	DSs                      []ConfigDSSpec `toml:"ds"`
 	StatFlush                duration       `toml:"stat-flush-interval"`

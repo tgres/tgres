@@ -34,7 +34,7 @@ func NewNamedDSFetcherMap(dss map[string]rrd.DataSourcer) *namedDsFetcher {
 			ds:    ds,
 		}
 	}
-	return NewNamedDSFetcher(result, nil)
+	return NewNamedDSFetcher(result, nil, 0)
 }
 
 type mapCacheEntry struct {

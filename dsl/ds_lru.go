@@ -45,9 +45,7 @@ type DataPoint struct {
 }
 
 // Returns a new dsCache object.
-func newDsLRU(db dsFetcher, dsc watcher) *dsLRU {
-	const LRU_SIZE = 9276 // TODO make me configurable?
-
+func newDsLRU(db dsFetcher, dsc watcher, size int) *dsLRU {
 	// If db does not provide rraDataLoader none of this is possible.
 	dl, _ := db.(rraDataLoader)
 	d := &dsLRU{
@@ -57,8 +55,14 @@ func newDsLRU(db dsFetcher, dsc watcher) *dsLRU {
 		dsc:   dsc,
 		Mutex: &sync.Mutex{},
 	}
-	d.Cache, _ = lru.NewWithEvict(LRU_SIZE, d.unwatch)
-	go d.worker()
+	// 0 size == diable LRU
+	if size == 0 {
+		d.dl = nil
+	} else {
+		d.Cache, _ = lru.NewWithEvict(size, d.unwatch)
+		go d.worker()
+	}
+
 	return d
 }
 

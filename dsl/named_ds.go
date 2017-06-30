@@ -79,12 +79,12 @@ type watcher interface {
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
-func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher) *namedDsFetcher {
+func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher, lruSize int) *namedDsFetcher {
 	return &namedDsFetcher{
 		dsns:   &fsFindCache{key: "name", db: db.(serde.DataSourceSearcher)},
 		Mutex:  &sync.Mutex{},
 		minAge: time.Minute,
-		dsLRU:  newDsLRU(db.(dsFetcher), dsc),
+		dsLRU:  newDsLRU(db.(dsFetcher), dsc, lruSize),
 	}
 }
 
@@ -129,6 +129,9 @@ type NamedDsFetcherStats struct {
 }
 
 func (r *namedDsFetcher) Stats() NamedDsFetcherStats {
+	if r.dsLRU.Cache == nil {
+		return NamedDsFetcherStats{}
+	}
 	r.dsLRU.Lock()
 	defer r.dsLRU.Unlock()
 	result := NamedDsFetcherStats{

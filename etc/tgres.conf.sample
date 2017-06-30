@@ -30,6 +30,11 @@ statsd-udp-listen-spec      = "0.0.0.0:8125"
 stat-flush-interval         = "10s"
 stats-name-prefix           = "stats"
 
+# Number of DSs whose entire data are kept in memory for faster query response
+# NB: A DS's memory footprint can very greatly depending on RRA configuration.
+# (Default is 0 == cache disabled)
+query-cache-size            = 512
+
 # RedHat and some others:
 db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
 # Debian and some others:
