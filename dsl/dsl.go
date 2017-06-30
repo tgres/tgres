@@ -73,7 +73,7 @@ func ParseDsl(db ctxDSFetcher, src string, from, to time.Time, maxPoints int64) 
 func newDslCtx(db ctxDSFetcher, src string, from, to time.Time, maxPoints int64) *dslCtx {
 	return &dslCtx{
 		src:          src,
-		escSrc:       fixQuotes(escapeBadChars(src)),
+		escSrc:       fixBackSlashes(fixQuotes(escapeBadChars(src))),
 		from:         from,
 		to:           to,
 		maxPoints:    maxPoints,
@@ -279,4 +279,8 @@ func fixQuotes(target string) string {
 	// e.g. '"Foo"Bar"' is a problem, it becomes ""Foo"Bar"", but
 	// should become "\"Foo\"Bar\""
 	return strings.Replace(target, "'", "\"", -1)
+}
+
+func fixBackSlashes(target string) string {
+	return strings.Replace(target, "\\", "\\\\", -1)
 }
