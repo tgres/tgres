@@ -30,17 +30,84 @@ import (
 // elements using same rules as filepath.Match, as well as
 // comma-separated values in curly braces such as "foo.{bar,baz}".
 type fsFindCache struct {
-	sync.RWMutex
-	db       serde.DataSourceSearcher
-	key      string // name of the ident key, required
-	names    map[string]serde.Ident
-	prefixes map[string]bool
+	*sync.RWMutex
+	db  serde.DataSourceSearcher
+	key string // name of the ident key, required
+	*fsFindNode
+}
+
+type fsFindNode struct {
+	ident serde.Ident // leaf node
+	name  string      // my dot.name
+	names map[string]*fsFindNode
+}
+
+func (n *fsFindNode) insert(parts []string, pos int, ident serde.Ident) {
+	if pos >= len(parts) {
+		return
+	}
+
+	if n.names == nil {
+		n.names = make(map[string]*fsFindNode)
+	}
+
+	key := parts[pos]
+	if _, ok := n.names[key]; !ok {
+		n.names[key] = &fsFindNode{name: strings.Join(parts[0:pos+1], ".")}
+	}
+	node := n.names[key]
+
+	// Note that a node can end up being both leaf and expandable, and
+	// in theory there shouldn't be anyhting wrong with that, though
+	// Grafana doesn't deal with it very well..
+	if pos < len(parts)-1 {
+		node.insert(parts, pos+1, ident)
+	} else {
+		node.ident = ident
+	}
+}
+
+func (n *fsFindNode) search(pattern, key string, result map[string]*FsFindNode) {
+
+	parts := strings.SplitN(pattern, ".", 2)
+	prefix := parts[0]
+
+	for k, child := range n.names {
+		if yes, _ := filepath.Match(prefix, k); yes {
+
+			parent := len(child.names) > 0
+			leaf := child.ident != nil
+
+			if parent {
+				if len(parts) > 1 {
+					child.search(parts[1], key, result)
+				} else {
+					// it's a prefix
+					result[child.name] = &FsFindNode{Name: child.name, Leaf: leaf, Expandable: parent}
+				}
+			}
+			if leaf {
+				result[child.name] = &FsFindNode{Name: child.name, Leaf: leaf, Expandable: parent, ident: child.ident}
+			}
+		}
+	}
+}
+
+func (f *fsFindCache) insert(ident serde.Ident) error {
+	if name := ident[f.key]; name != "" {
+		parts := strings.Split(name, ".")
+		f.fsFindNode.insert(parts, 0, ident)
+	} else {
+		return fmt.Errorf("insert: '%s' tag missing for DS ident: %s", f.key, ident.String())
+	}
+	return nil
 }
 
 type FsFindNode struct {
-	Name  string
-	Leaf  bool
-	ident serde.Ident
+	Name       string
+	Leaf       bool
+	Expandable bool
+	ident      serde.Ident
 }
 
 type fsNodes []*FsFindNode
@@ -56,19 +123,12 @@ func (fns fsNodes) Swap(i, j int) {
 	fns[i], fns[j] = fns[j], fns[i]
 }
 
-// Add prefixes given a name:
-// "abcd" => []
-// "abcd.efg.hij" => ["abcd.efg", "abcd"]
-func (dsns *fsFindCache) addPrefixes(name string) {
-	prefix := name
-	for ext := filepath.Ext(prefix); ext != ""; {
-		prefix = name[0 : len(prefix)-len(ext)]
-		if prefix != "" {
-			// Do not allow blank prefixes (malformed names like '.org.apache'), Grafana doesn't like blanks
-			// TODO: Is there a better solution, e.g. not allowing datapoints from those?
-			dsns.prefixes[prefix] = true
-		}
-		ext = filepath.Ext(prefix)
+func newFsFindCache(db serde.DataSourceSearcher, key string) *fsFindCache {
+	return &fsFindCache{
+		RWMutex:    &sync.RWMutex{},
+		db:         db,
+		key:        key,
+		fsFindNode: &fsFindNode{},
 	}
 }
 
@@ -85,27 +145,20 @@ func (dsns *fsFindCache) reload() error {
 	dsns.Lock()
 	defer dsns.Unlock()
 
-	dsns.names = make(map[string]serde.Ident)
-	dsns.prefixes = make(map[string]bool)
-
 	for sr.Next() {
-		name := sr.Ident()[dsns.key]
-		if name == "" {
-			return fmt.Errorf("reload(): '%s' tag missing for DS ident: %s", dsns.key, sr.Ident().String())
+		if err := dsns.insert(sr.Ident()); err != nil {
+			return err
 		}
-		dsns.names[name] = sr.Ident()
-		dsns.addPrefixes(name)
 	}
 
 	return nil
 }
 
 func (dsns *fsFindCache) fsFind(pattern string) []*FsFindNode {
-
 	if strings.Count(pattern, ",") > 0 {
 		subres := make(fsNodes, 0)
 
-		parts := regexp.MustCompile("{[^{}]*}").FindAllString(pattern, -1)
+		parts := regexp.MustCompile("{[^{}]*}").FindAllString(pattern, -1) // TODO pre-compile me
 		for _, part := range parts {
 			subs := strings.Split(strings.Trim(part, "{}"), ",")
 
@@ -120,23 +173,11 @@ func (dsns *fsFindCache) fsFind(pattern string) []*FsFindNode {
 	dsns.RLock()
 	defer dsns.RUnlock()
 
-	dots := strings.Count(pattern, ".")
-
 	set := make(map[string]*FsFindNode)
-	for k, ident := range dsns.names {
-		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: true, ident: ident}
-		}
-	}
-
-	for k, _ := range dsns.prefixes {
-		if yes, _ := filepath.Match(pattern, k); yes && dots == strings.Count(k, ".") {
-			set[k] = &FsFindNode{Name: k, Leaf: false}
-		}
-	}
+	dsns.search(pattern, dsns.key, set)
 
 	// convert to array
-	result := make(fsNodes, 0)
+	result := make(fsNodes, 0, len(set))
 	for _, v := range set {
 		result = append(result, v)
 	}

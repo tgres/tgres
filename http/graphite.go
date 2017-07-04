@@ -38,19 +38,34 @@ const BATCH_LIMIT = 64
 
 func GraphiteMetricsFindHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// w.Header().Set("Access-Control-Allow-Origin", "*") // TODO Make me configurable
-
 		start := time.Now()
 		fmt.Fprintf(w, "[\n")
 		nodes := rcache.FsFind(r.FormValue("query"))
-		for n, node := range nodes {
+		dupe := make(map[string]bool)
+		uniq := make([]*dsl.FsFindNode, 0, len(nodes))
+		for _, node := range nodes {
 			parts := strings.Split(node.Name, ".")
-			if node.Leaf {
-				fmt.Fprintf(w, `{"leaf": 1, "context": {}, "text": "%s", "expandable": 0, "id": "%s", "allowChildren": 0}`, parts[len(parts)-1], node.Name)
-			} else {
-				fmt.Fprintf(w, `{"leaf": 0, "context": {}, "text": "%s", "expandable": 1, "id": "%s", "allowChildren": 1}`, parts[len(parts)-1], node.Name)
+			suffix := parts[len(parts)-1]
+			if !dupe[suffix] {
+				uniq = append(uniq, node)
 			}
-			if n < len(nodes)-1 {
+			dupe[suffix] = true
+		}
+		for n, node := range uniq {
+			parts := strings.Split(node.Name, ".")
+			suffix := parts[len(parts)-1]
+
+			var ileaf, iexp int
+			if node.Leaf {
+				ileaf = 1
+			}
+			if node.Expandable {
+				iexp = 1
+			}
+			// not very clear on how we can be expandable and not allow children...
+			fmt.Fprintf(w, `{"leaf": %d, "context": {}, "text": "%s", "expandable": %d, "id": "%s", "allowChildren": %d}`,
+				ileaf, suffix, iexp, node.Name, iexp)
+			if n < len(uniq)-1 {
 				fmt.Fprintf(w, ",\n")
 			}
 		}
@@ -63,7 +78,6 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 	return makeGzipHandler(
 		func(w http.ResponseWriter, r *http.Request) {
-			// w.Header().Set("Access-Control-Allow-Origin", "*") // TODO Make me configurable
 			w.Header().Set("Content-Type", "application/json")
 
 			start := time.Now()

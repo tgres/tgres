@@ -707,6 +707,20 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 		rras = append(rras, rra)
 	}
 
+	// Don't forget the very last one
+	if lastDsr != nil && len(rras) > 0 {
+		if lastDsr.lastupdate == nil {
+			lastDsr.lastupdate = &time.Time{}
+		}
+
+		dss = append(dss, &dsRecWithRRAs{lastDsr, rras})
+
+		// Keep track of the absolute latest
+		if maxLastUpdate.Before(*lastDsr.lastupdate) {
+			maxLastUpdate = *lastDsr.lastupdate
+		}
+	}
+
 	// Weed out DSs that are older than some time period
 	// TODO: max idle time should be configurable?
 	skipped := 0
@@ -1178,7 +1192,7 @@ func (p *pgvSerDe) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints
 
 	rra := dbds.BestRRA(from, to, maxPoints)
 	if rra == nil {
-		return nil, fmt.Errorf("FetchSeries: No adequate RRA found for DS id: %v from: %v to: maxPoints: %v", dbds.Id(), from, to, maxPoints)
+		return nil, fmt.Errorf("FetchSeries: No adequate RRA found for DS id: %v from: %v to: %v maxPoints: %v", dbds.Id(), from, to, maxPoints)
 	}
 
 	// If from/to are nil - assign the rra boundaries
@@ -1338,6 +1352,10 @@ func handleDeleteNotifications(l *pq.Listener, handler func(Ident)) {
 		case n := <-l.Notify:
 			// TODO: Should we be checking the n.Channel value to make sure
 			// it is not some other event?
+			if n.Extra == "" {
+				log.Printf("handleDeleteNotifications: Warning: ignoring empty n.Extra string.")
+				continue
+			}
 			var ident Ident
 			err := json.Unmarshal([]byte(n.Extra), &ident)
 			if err != nil {

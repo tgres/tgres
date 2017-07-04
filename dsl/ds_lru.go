@@ -121,6 +121,11 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 
 		// Submit load job
 		go d.loadDs(wds)
+	} else {
+		// This DS is not watchable, which means it is somehow bogus,
+		// and we shouldn't bother with it. DSL should warn about it
+		// (it's a TODO).
+		return nil, nil
 	}
 
 	// revert to non-cache behavior because it is being loaded (or not)
@@ -164,7 +169,7 @@ func (d *dsLRU) FetchSeries(ds rrd.DataSourcer, from, to time.Time, maxPoints in
 
 	rra := wds.BestRRA(from, to, maxPoints)
 	if rra == nil {
-		return nil, fmt.Errorf("FetchSeries (ds_lru.go): No adequate RRA found for DS from: %v to: maxPoints: %v", from, to, maxPoints)
+		return nil, fmt.Errorf("FetchSeries (ds_lru.go): No adequate RRA found for DS from: %v to: %v maxPoints: %v", from, to, maxPoints)
 	}
 
 	// We pass the wds lock here, so that when whatever downstream locks the rra,

@@ -81,7 +81,7 @@ type watcher interface {
 // cannot be found. TODO: Make this better.
 func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher, lruSize int) *namedDsFetcher {
 	return &namedDsFetcher{
-		dsns:   &fsFindCache{key: "name", db: db.(serde.DataSourceSearcher)},
+		dsns:   newFsFindCache(db.(serde.DataSourceSearcher), "name"),
 		Mutex:  &sync.Mutex{},
 		minAge: time.Minute,
 		dsLRU:  newDsLRU(db.(dsFetcher), dsc, lruSize),

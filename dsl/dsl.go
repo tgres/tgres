@@ -106,8 +106,7 @@ func (dc *dslCtx) seriesFromSeriesOrIdent(what interface{}) (SeriesMap, error) {
 	case SeriesMap:
 		return obj, nil
 	case string:
-		series, err := dc.seriesFromPattern(obj, dc.from, dc.to)
-		return series, err
+		return dc.seriesFromPattern(obj, dc.from, dc.to)
 	}
 	return nil, fmt.Errorf("seriesFromSeriesOrIdent(): unknown type: %T of %v", what, what)
 }
@@ -119,6 +118,11 @@ func (dc *dslCtx) seriesFromPattern(pattern string, from, to time.Time) (SeriesM
 		ds, err := dc.FetchOrCreateDataSource(ident, nil)
 		if err != nil {
 			return nil, fmt.Errorf("seriesFromPattern(): Error %v", err)
+		}
+		if ds == nil {
+			// Strange, it does not exist, ignore it
+			// TODO: The DSL should support warnings, this is a good case for it
+			continue
 		}
 		dps, err := dc.FetchSeries(ds, from, to, dc.maxPoints)
 		if err != nil {
