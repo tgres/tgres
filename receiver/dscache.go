@@ -36,18 +36,15 @@ type dsCache struct {
 	finder   MatchingDSSpecFinder
 	clstr    clusterer
 	rraCount int
-	evicted  int
-	maxInact time.Duration
 }
 
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	return &dsCache{
-		byIdent:  make(map[string]*cachedDs),
-		db:       db,
-		finder:   finder,
-		dsf:      dsf,
-		maxInact: time.Hour, // TODO: Make configurable?
+		byIdent: make(map[string]*cachedDs),
+		db:      db,
+		finder:  finder,
+		dsf:     dsf,
 	}
 }
 
@@ -82,7 +79,7 @@ func (d *dsCache) delete(ident serde.Ident) {
 }
 
 func (d *dsCache) preLoad() error {
-	dss, err := d.db.FetchDataSources(time.Hour * 3 * 24) // TODO: Make me configurable
+	dss, err := d.db.FetchDataSources()
 	if err != nil {
 		return err
 	}
@@ -140,7 +137,7 @@ func (d *dsCache) register(ds serde.DbDataSourcer) {
 }
 
 type dscStats struct {
-	dsCount, rraCount, evicted int
+	dsCount, rraCount int
 }
 
 func (d *dsCache) stats() dscStats {
@@ -149,27 +146,9 @@ func (d *dsCache) stats() dscStats {
 	st := dscStats{
 		dsCount:  len(d.byIdent),
 		rraCount: d.rraCount,
-		evicted:  d.evicted,
 	}
 
-	d.evicted = 0
 	return st
-}
-
-func (d *dsCache) evictInact() {
-	now := time.Now()
-	d.Lock()
-	defer d.Unlock()
-	for _, cds := range d.byIdent {
-		cds.mu.Lock()
-		if !cds.sentToLoader && cds.DbDataSourcer != nil && !cds.lastProcess.IsZero() && now.Add(-d.maxInact).After(cds.lastProcess) {
-			d.rraCount -= len(cds.RRAs())
-			delete(d.byIdent, cds.Ident().String())
-			d.evicted++
-		}
-		cds.mu.Unlock()
-	}
-	return
 }
 
 // Watch checks the cache for presence of ident, if found, it marks it
@@ -205,13 +184,6 @@ func (d *dsCache) Unwatch(ident serde.Ident) {
 		cds.mu.Lock()
 		defer cds.mu.Unlock()
 		cds.watchCh = nil
-	}
-}
-
-func dsCachePeriodicCleanup(dsc *dsCache) {
-	for {
-		time.Sleep(time.Minute)
-		dsc.evictInact()
 	}
 }
 

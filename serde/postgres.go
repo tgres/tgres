@@ -619,7 +619,7 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 	return &pgSearchResult{rows: rows}, nil
 }
 
-func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, error) {
+func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
 	const sql = `
     SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
@@ -721,31 +721,15 @@ func (p *pgvSerDe) FetchDataSources(window time.Duration) ([]rrd.DataSourcer, er
 		}
 	}
 
-	// Weed out DSs that are older than some time period
-	// TODO: max idle time should be configurable?
-	skipped := 0
 	result := make([]rrd.DataSourcer, 0, len(dss))
-	var limit time.Time
-	if window != 0 {
-		limit = maxLastUpdate.Add(-window)
-	}
 	for i := 0; i < len(dss); i++ {
-		// Always include DS with null lastupdate. TODO: perhaps rely
-		// on created_at when lastupdate is null instead?
-		if (*dss[i].dsr.lastupdate).IsZero() || limit.Before(*dss[i].dsr.lastupdate) {
-			ds, err := dataSourceFromDsRec(dss[i].dsr)
-			if err != nil {
-				return nil, fmt.Errorf("error scanning: %v", err)
-			}
-			ds.SetRRAs(dss[i].rras)
-			result = append(result, ds)
-		} else {
-			skipped++
+		ds, err := dataSourceFromDsRec(dss[i].dsr)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning: %v", err)
 		}
+		ds.SetRRAs(dss[i].rras)
+		result = append(result, ds)
 	}
-
-	log.Printf("FetchDataSources: skipped %d data sources older than %v", skipped, limit)
-
 	return result, nil
 }
 

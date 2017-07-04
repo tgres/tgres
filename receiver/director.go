@@ -339,7 +339,6 @@ var director = func(wc wController, dpChIn chan<- interface{}, dpChOut <-chan in
 			st := dsc.stats()
 			sr.reportStatGauge("receiver.cache.ds_count", float64(st.dsCount))
 			sr.reportStatGauge("receiver.cache.rra_count", float64(st.rraCount))
-			sr.reportStatCount("receiver.cache.evicted", float64(st.evicted))
 		}
 	}
 }

@@ -34,7 +34,7 @@ import (
 
 func fetchDataSources(db serde.SerDe) (map[string]serde.DbDataSourcer, error) {
 	start := time.Now()
-	dss, err := db.Fetcher().FetchDataSources(0)
+	dss, err := db.Fetcher().FetchDataSources()
 	if err != nil {
 		return nil, err
 	}
