@@ -621,22 +621,38 @@ func (p *pgvSerDe) Search(query SearchQuery) (SearchResult, error) {
 
 func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
+	// This statement is slightly faster than the non-CTE version, but
+	// I'm not exactly sure why.
 	const sql = `
-    SELECT ds.id, ds.ident, ds.step_ms, ds.heartbeat_ms, ds.seg, ds.idx,
-           dsst.lastupdate[ds.idx] AS lastupdate,
-           dsst.value[ds.idx] AS value,
-           dsst.duration_ms[ds.idx] AS duration_ms,
-           rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
-           b.id, b.step_ms, b.size, b.width,
-           rs.latest[rra.idx] AS latest,
-           rs.value[rra.idx] AS value,
-           rs.duration_ms[rra.idx] AS duration_ms
-    FROM %[1]sds ds
-    LEFT OUTER JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
-    JOIN %[1]srra rra ON rra.ds_id = ds.id
+WITH rra AS (
+  SELECT rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
+         rs.latest[rra.idx] AS latest, rs.value[rra.idx] AS value, rs.duration_ms[rra.idx] AS duration_ms,
+         b.step_ms, b.size, b.width
+    FROM %[1]srra
     JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
-    LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = b.id AND rs.seg = rra.seg
-    ORDER BY ds.id
+    LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = rra.rra_bundle_id AND rs.seg = rra.seg
+), ds AS (
+  SELECT ds.id, ds.ident, ds.step_ms,
+         ds.heartbeat_ms, ds.seg, ds.idx,
+         dsst.lastupdate[ds.idx] AS lastupdate,
+         dsst.value[ds.idx] AS ds_value,
+         dsst.duration_ms[ds.idx] AS ds_duration_ms
+   FROM %[1]sds ds
+   LEFT OUTER JOIN %[1]sds_state dsst ON ds.seg = dsst.seg
+)
+SELECT ds.id, ds.ident, ds.step_ms,
+           ds.heartbeat_ms, ds.seg, ds.idx,
+           ds.lastupdate,
+           ds.ds_value,
+           ds.ds_duration_ms,
+           rra.id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
+           rra.step_ms, rra.size, rra.width,
+           rra.latest,
+           rra.value,
+           rra.duration_ms
+    FROM ds ds
+    JOIN rra rra ON rra.ds_id = ds.id
+    ORDER BY ds.id;
 `
 
 	rows, err := p.dbConn.Query(fmt.Sprintf(sql, p.prefix))
@@ -668,12 +684,15 @@ func (p *pgvSerDe) FetchDataSources() ([]rrd.DataSourcer, error) {
 
 		err = rows.Scan(
 			&dsr.id, &dsr.identJson, &dsr.stepMs, &dsr.hbMs, &dsr.seg, &dsr.idx, &dsr.lastupdate, &dsr.value, &dsr.durationMs, // DS
-			&rrar.id, &rrar.dsId, &rrar.bundleId, &rrar.pos, &rrar.seg, &rrar.idx, &rrar.cf, &rrar.xff, // RRA
-			&bundle.id, &bundle.stepMs, &bundle.size, &bundle.width, // Bundle
+			&rrar.id, &rrar.bundleId, &rrar.pos, &rrar.seg, &rrar.idx, &rrar.cf, &rrar.xff, // RRA
+			&bundle.stepMs, &bundle.size, &bundle.width, // Bundle
 			&state.latest, &state.value, &state.durationMs) // RRA State
 		if err != nil {
 			return nil, fmt.Errorf("error scanning: %v", err)
 		}
+
+		rrar.dsId = dsr.id
+		bundle.id = rrar.bundleId
 
 		if state.latest == nil {
 			state.latest = &time.Time{}
