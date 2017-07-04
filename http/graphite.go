@@ -134,6 +134,15 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 
 			for tn, target := range targets {
 
+				// empty target, deal with it
+				if len(target) == 0 {
+					if tn < len(targets)-1 {
+						fmt.Fprintf(w, "\n{\"datapoints\":[]},\n")
+					} else {
+						fmt.Fprintf(w, "\n{\"datapoints\":[]}\n")
+					}
+				}
+
 				nn := 0
 				for _, series := range target {
 					fmt.Fprintf(w, "\n"+`{"target": "%s", "datapoints": [`+"\n", series.name)
@@ -152,7 +161,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 						}
 					}
 
-					if nn < len(target)-1 || tn < len(r.Form["target"])-1 {
+					if nn < len(target)-1 || tn < len(targets)-1 {
 						fmt.Fprintf(w, "]},\n")
 					} else {
 						fmt.Fprintf(w, "]}")
