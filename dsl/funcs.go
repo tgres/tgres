@@ -220,6 +220,11 @@ var preprocessArgFuncs = funcMap{
 	"scaleToSeconds": dslFuncType{dslScaleToSeconds, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seconds", argNumber, nil}}},
+	"useSeriesAbove": dslFuncType{dslUseSeriesAbove, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"value", argNumber, 0.0},
+		argDef{"search", argString, nil},
+		argDef{"replace", argString, nil}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -305,7 +310,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ removeBelowPercentile
 	// ++ removeBelowValue
 	// ++ stdev
-	// ?? useSeriesAbove // ?
+	// ++ useSeriesAbove
 	// ++ weightedAverage
 
 	// SPECIAL
@@ -2216,6 +2221,24 @@ func dslScaleToSeconds(args map[string]interface{}) (SeriesMap, error) {
 		series[name] = &seriesScaleToSeconds{s, factor}
 	}
 	return series, nil
+}
+
+// useSeriesAbove()
+
+func dslUseSeriesAbove(args map[string]interface{}) (SeriesMap, error) {
+	sers := args["seriesList"].(SeriesMap)
+	value := args["value"].(float64)
+	search := args["search"].(string)
+	replace := args["replace"].(string)
+
+	for name, s := range sers {
+		s.Alias(strings.Replace(name, search, replace, -1))
+		ss := series.SummarySeries{s}
+		if ss.Max() <= value {
+			delete(sers, name)
+		}
+	}
+	return sers, nil
 }
 
 // holtWintersForecast

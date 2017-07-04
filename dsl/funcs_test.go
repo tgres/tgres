@@ -976,3 +976,15 @@ func Test_dsl_scaleToSeconds(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
+
+// useSeriesAbove
+func Test_dsl_useSeriesAbove(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "useSeriesAbove(group(constantLine(10), constantLine(20), constantLine(30)), 20, foo, bar)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 30); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
