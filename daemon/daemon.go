@@ -252,7 +252,9 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	for i := 0; i < attempts; i++ {
 		c, err = initCluster(bindAddr, advAddr, joinIps)
 		if err != nil {
-			log.Printf("Error initializing cluster, will try again in %v (up to %v times): %v", clusterPause, attempts, err)
+			if i > 1 { // silence the first message
+				log.Printf("Error initializing cluster, will try again in %v (up to %v times): %v", clusterPause, attempts, err)
+			}
 			time.Sleep(clusterPause)
 			continue
 		}

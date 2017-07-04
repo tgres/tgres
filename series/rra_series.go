@@ -31,8 +31,9 @@ type RLocker interface {
 type RRASeries struct {
 	rra       rrd.RoundRobinArchiver
 	lck       RLocker
-	latest    time.Time     // for Latest()
-	step      time.Duration // for Step()
+	latest    time.Time
+	step      time.Duration
+	size      int64
 	pos       int64
 	tim       time.Time // if timeRange was set
 	alias     string
@@ -40,7 +41,6 @@ type RRASeries struct {
 	groupBy   time.Duration
 	maxPoints int64
 	grpVal    float64 // if there is a group by
-	rraLocked bool
 }
 
 func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
@@ -52,6 +52,7 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 		pos:    -1,
 		latest: rra.Latest(),
 		step:   rra.Step(),
+		size:   rra.Size(),
 	}
 	if srra, ok := rra.(RLocker); ok {
 		result.lck = srra
@@ -62,15 +63,10 @@ func NewRRASeries(rra rrd.RoundRobinArchiver) *RRASeries {
 func (s *RRASeries) Next() bool {
 
 	if s.pos == -1 {
-		if s.lck != nil && !s.rraLocked {
-			s.rraLocked = true
-			s.lck.RLock()
-		}
-
 		// Set initial values to from/to if they were not set by TimeRange()
 		if s.from.IsZero() && s.to.IsZero() && !s.latest.IsZero() {
-			s.from = s.rra.Latest().Add(-s.rra.Step() * time.Duration(s.rra.Size()))
-			s.to = s.rra.Latest()
+			s.from = s.latest.Add(-s.step * time.Duration(s.size))
+			s.to = s.latest
 		}
 	}
 
@@ -83,8 +79,8 @@ func (s *RRASeries) Next() bool {
 
 	// Approximate the number of advances a group by contains.
 	moves := 1
-	if groupBy > 0 && groupBy > s.rra.Step() {
-		moves = int(groupBy.Seconds()/s.rra.Step().Seconds() + 0.5)
+	if groupBy > 0 && groupBy > s.step {
+		moves = int(groupBy.Seconds()/s.step.Seconds() + 0.5)
 	}
 
 	// Compute agerage if we are grouping
@@ -92,10 +88,6 @@ func (s *RRASeries) Next() bool {
 	for i := 0; i < moves; i++ {
 		if !s.advance() {
 			s.grpVal = math.NaN()
-			if s.lck != nil && s.rraLocked {
-				s.lck.RUnlock()
-				s.rraLocked = false
-			}
 			return false
 		}
 		val := s.curVal()
@@ -118,19 +110,18 @@ func (s *RRASeries) advance() bool {
 	if s.tim.IsZero() {
 		s.tim = s.from
 	} else if s.tim.Before(s.to) {
-		s.tim = s.tim.Add(s.rra.Step())
+		s.tim = s.tim.Add(s.step)
 	} else {
 		s.tim = time.Time{}
 		s.pos = -1
 		return false
 	}
 
-	latest, step, size := s.rra.Latest(), s.rra.Step(), s.rra.Size()
-	if latest.IsZero() || s.tim.After(latest) || s.tim.Before(latest.Add(-step*time.Duration(size))) {
+	if s.latest.IsZero() || s.tim.After(s.latest) || s.tim.Before(s.latest.Add(-s.step*time.Duration(s.size))) {
 		// pos is invalid, but we're still returning true, because we can advance
 		s.pos = -1
 	} else {
-		s.pos = rrd.SlotIndex(s.tim, step, size)
+		s.pos = rrd.SlotIndex(s.tim, s.step, s.size)
 	}
 	return true
 }
@@ -143,6 +134,10 @@ func (s *RRASeries) CurrentValue() float64 {
 }
 
 func (s *RRASeries) curVal() float64 {
+	if s.lck != nil {
+		s.lck.RLock()
+		defer s.lck.RUnlock()
+	}
 	if result, ok := s.rra.DPs()[s.pos]; ok {
 		return result
 	}
@@ -154,12 +149,6 @@ func (s *RRASeries) CurrentTime() time.Time {
 }
 
 func (s *RRASeries) Close() error {
-	if s.pos != -1 {
-		if s.lck != nil && s.rraLocked {
-			s.lck.RUnlock()
-			s.rraLocked = false
-		}
-	}
 	s.pos = -1
 	return nil
 }

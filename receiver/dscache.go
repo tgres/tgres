@@ -245,6 +245,9 @@ func (cds *cachedDs) processIncoming() (int, int, error) {
 			select {
 			case cds.watchCh <- dsl.DataPoint{Ident: cds.Ident(), T: dp.timeStamp, V: dp.value}:
 			default:
+				// TODO: This means the in-memory series never gets
+				// this data point. There should be a better solution
+				// to this.
 				blocked++
 			}
 		}

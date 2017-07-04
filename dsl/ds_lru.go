@@ -81,7 +81,20 @@ func (d *dsLRU) worker() {
 		}
 		if wds != nil {
 			wds.Lock()
-			wds.ProcessDataPoint(dp.V, dp.T)
+			if wds.loading {
+				// do not process, queue them up
+				wds.pending = append(wds.pending, dp)
+			} else {
+				if len(wds.pending) > 0 {
+					// process pending first, if any
+					for _, dp := range wds.pending {
+						wds.ProcessDataPoint(dp.V, dp.T)
+					}
+					wds.pending = nil
+				}
+				// finally process the dp that just came in
+				wds.ProcessDataPoint(dp.V, dp.T)
+			}
 			wds.Unlock()
 		}
 	}
@@ -187,6 +200,7 @@ type watchedDs struct {
 	rrd.DataSourcer
 	*sync.RWMutex
 	loading bool
+	pending []DataPoint
 }
 
 type watchedRRA struct {
