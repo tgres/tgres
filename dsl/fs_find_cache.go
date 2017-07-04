@@ -67,6 +67,10 @@ func (n *fsFindNode) insert(parts []string, pos int, ident serde.Ident) {
 	}
 }
 
+func (n *fsFindNode) empty() bool {
+	return len(n.names) == 0
+}
+
 func (n *fsFindNode) search(pattern, key string, result map[string]*FsFindNode) {
 
 	parts := strings.SplitN(pattern, ".", 2)

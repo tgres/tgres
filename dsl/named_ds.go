@@ -89,12 +89,10 @@ func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher, lruSize int) *namedDsF
 }
 
 func (r *namedDsFetcher) identsFromPattern(ident string) map[string]serde.Ident {
-	result := r.dsns.identsFromPattern(ident)
-	if len(result) == 0 {
+	if r.dsns.empty() {
 		r.dsns.reload()
-		result = r.dsns.identsFromPattern(ident)
 	}
-	return result
+	return r.dsns.identsFromPattern(ident)
 }
 
 func (r *namedDsFetcher) Preload() {
