@@ -217,6 +217,9 @@ var preprocessArgFuncs = funcMap{
 	"exclude": dslFuncType{dslExclude, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"pattern", argString, nil}}},
+	"scaleToSeconds": dslFuncType{dslScaleToSeconds, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"seconds", argNumber, nil}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -261,7 +264,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ offsetToZero // would require whole series min()
 	// -- perSecond // everything here is perSedond() already
 	// ++ scale()
-	// -- scaleToSeconds()
+	// ++ scaleToSeconds()
 	// -- smartSummarize
 	// -- summarize // seems complicated
 	// ++ timeShift
@@ -2189,6 +2192,30 @@ func dslExclude(args map[string]interface{}) (SeriesMap, error) {
 		}
 	}
 	return result, nil
+}
+
+// scaleToSeconds()
+// Since everything here is per second, this is same as scale()
+
+type seriesScaleToSeconds struct {
+	AliasSeries
+	factor float64
+}
+
+func (f *seriesScaleToSeconds) CurrentValue() float64 {
+	return f.AliasSeries.CurrentValue() * f.factor
+}
+
+func dslScaleToSeconds(args map[string]interface{}) (SeriesMap, error) {
+
+	series := args["seriesList"].(SeriesMap)
+	factor := args["seconds"].(float64)
+
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("scaleToSeconds(%v,%v)", name, factor))
+		series[name] = &seriesScaleToSeconds{s, factor}
+	}
+	return series, nil
 }
 
 // holtWintersForecast

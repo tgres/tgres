@@ -964,3 +964,15 @@ func Test_dsl_keepLastValue(t *testing.T) {
 		}
 	}
 }
+
+// scaleToSeconds
+func Test_dsl_scaleToSeconds(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "scaleToSeconds(constantLine(10), 2)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
