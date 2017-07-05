@@ -280,6 +280,16 @@ func Init(cfgPath, gracefulProtos, join string) (cfg *Config) { // not to be con
 	startReceiver(rcvr)
 	log.Printf("Receiver started, Tgres is ready.")
 
+	// start the rcache warmup
+	if cfg.QueryCacheSize > 0 {
+		go func() {
+			log.Printf("Starting the query cache warm up...")
+			rcache.Warmup()
+			log.Printf("Query cache warm up done.")
+			rcache.StartStateSaver() // it starts a goroutine
+		}()
+	}
+
 	// Wait for HUP or TERM, etc.
 	waitForSignal(rcvr, serviceMgr, cfgPath, join)
 

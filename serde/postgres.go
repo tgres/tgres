@@ -303,6 +303,10 @@ func (p *pgvSerDe) createTablesIfNotExist() error {
        ver SMALLINT[] NOT NULL DEFAULT '{}');
 
        CREATE UNIQUE INDEX IF NOT EXISTS %[1]sidx_ts_rra_bundle_id_seg_i ON %[1]sts (rra_bundle_id, seg, i);
+
+       CREATE TABLE IF NOT EXISTS %[1]sdsl_cache (
+       ident JSONB NOT NULL DEFAULT '{}'
+       )
     `
 	if _, err := p.dbConn.Exec(fmt.Sprintf(create_sql, p.prefix, PgSegmentWidth)); err != nil {
 		log.Printf("ERROR: initial CREATE TABLE failed: %v", err)
@@ -1371,4 +1375,63 @@ func handleDeleteNotifications(l *pq.Listener, handler func(Ident)) {
 			go l.Ping()
 		}
 	}
+}
+
+// DSL LSU keys
+
+func (p *pgvSerDe) SaveDSLCacheKeys(idents []Ident) error {
+
+	// Truncate the table
+	_, err := p.dbConn.Exec(fmt.Sprintf("TRUNCATE %[1]sdsl_cache", p.prefix))
+	if err != nil {
+		log.Printf("SaveDSLCacheKeys(): %v", err)
+		return err
+	}
+
+	// Dump them.
+	rows := make([]string, 0, len(idents))
+	for _, ident := range idents {
+		rows = append(rows, fmt.Sprintf("('%s')", ident.String()))
+	}
+
+	stmt := fmt.Sprintf(`INSERT INTO %[1]sdsl_cache (ident) VALUES %s`, p.prefix, strings.Join(rows, ","))
+	_, err = p.dbConn.Exec(stmt)
+	if err != nil {
+		log.Printf("SaveDSLCacheKeys(): %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (p *pgvSerDe) LoadDSLCacheKeys() ([]Ident, error) {
+
+	stmt := fmt.Sprintf("SELECT ident FROM %[1]sdsl_cache", p.prefix)
+
+	rows, err := p.dbConn.Query(stmt)
+	if err != nil {
+		log.Printf("LoadDSLCacheKeys(): %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []Ident
+	for rows.Next() {
+		var istr string
+		if err := rows.Scan(&istr); err != nil {
+			log.Printf("LoadDSLCacheKeys(): %v", err)
+			return nil, err
+		}
+
+		var ident Ident
+		err := json.Unmarshal([]byte(istr), &ident)
+		if err != nil {
+			log.Printf("LoadDSLCacheKeys(): error unmarshalling ident: %v", err)
+			continue
+		}
+
+		result = append(result, ident)
+	}
+
+	return result, nil
 }

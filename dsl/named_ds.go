@@ -79,12 +79,12 @@ type watcher interface {
 // Returns a new instance of a NamedDSFetcher. The current
 // implementation will re-fetch all series names any time a series
 // cannot be found. TODO: Make this better.
-func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher, lruSize int) *namedDsFetcher {
+func NewNamedDSFetcher(db dsFetcherSearcher, dsc watcher, lruCap int) *namedDsFetcher {
 	return &namedDsFetcher{
 		dsns:   newFsFindCache(db.(serde.DataSourceSearcher), "name"),
 		Mutex:  &sync.Mutex{},
 		minAge: time.Minute,
-		dsLRU:  newDsLRU(db.(dsFetcher), dsc, lruSize),
+		dsLRU:  newDsLRU(db.(dsFetcher), dsc, lruCap),
 	}
 }
 
@@ -100,6 +100,18 @@ func (r *namedDsFetcher) Preload() {
 	r.dsns.reload()
 	r.lastReload = time.Now()
 	r.Unlock()
+}
+
+func (r *namedDsFetcher) Warmup() {
+	if r.dsLRU != nil {
+		r.dsLRU.loadState()
+	}
+}
+
+func (r *namedDsFetcher) StartStateSaver() {
+	if r.dsLRU != nil {
+		go r.dsLRU.stateSaver(30 * time.Second) // TODO configurable?
+	}
 }
 
 // FsFind provides a way of searching dot-separated names using same

@@ -23,6 +23,8 @@ how Tgres stores data see this
 
 ### Current Status
 
+Jul 5 2017: See this [status update](https://grisha.org/blog/2017/07/04/tgres-status-july-2017/)
+
 Jun 15 2017: Many big changes since March, most notably data point
 versioning and instoduction of ds_state and rra_state tables which
 contain frequently changed attributes as arrays, similar to the way

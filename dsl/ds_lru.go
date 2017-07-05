@@ -33,6 +33,7 @@ type dsLRU struct {
 	dl        rraDataLoader
 	ch        chan DataPoint
 	dsc       watcher
+	cap       int
 	evictions int
 	hits      int
 	misses    int
@@ -45,7 +46,7 @@ type DataPoint struct {
 }
 
 // Returns a new dsCache object.
-func newDsLRU(db dsFetcher, dsc watcher, size int) *dsLRU {
+func newDsLRU(db dsFetcher, dsc watcher, cap int) *dsLRU {
 	// If db does not provide rraDataLoader none of this is possible.
 	dl, _ := db.(rraDataLoader)
 	d := &dsLRU{
@@ -54,12 +55,13 @@ func newDsLRU(db dsFetcher, dsc watcher, size int) *dsLRU {
 		ch:    make(chan DataPoint, 256),
 		dsc:   dsc,
 		Mutex: &sync.Mutex{},
+		cap:   cap,
 	}
-	// 0 size == diable LRU
-	if size == 0 {
+	// 0 cap == diable LRU
+	if cap == 0 {
 		d.dl = nil
 	} else {
-		d.Cache, _ = lru.NewWithEvict(size, d.unwatch)
+		d.Cache, _ = lru.NewWithEvict(cap, d.unwatch)
 		go d.worker()
 	}
 
@@ -100,6 +102,84 @@ func (d *dsLRU) worker() {
 	}
 }
 
+type lruStateSaver interface {
+	SaveDSLCacheKeys(idents []serde.Ident) error
+	LoadDSLCacheKeys() ([]serde.Ident, error)
+}
+
+func (d *dsLRU) saveState() error {
+	if db, ok := d.db.(lruStateSaver); ok {
+
+		keys := make([]serde.Ident, 0, d.Len())
+		for _, key := range d.Keys() {
+			if val, ok := d.Peek(key); ok {
+				if wds, ok := val.(*watchedDs); ok {
+					keys = append(keys, wds.ident)
+				}
+			}
+		}
+		if len(keys) > 0 {
+			if err := db.SaveDSLCacheKeys(keys); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *dsLRU) loadState() error {
+	if d.cap == 0 {
+		return nil
+	}
+	if db, ok := d.db.(lruStateSaver); ok {
+		idents, err := db.LoadDSLCacheKeys()
+		if err != nil {
+			return err
+		}
+		var wg sync.WaitGroup
+		jobs := 0
+		for n, ident := range idents {
+			if n >= d.cap {
+				break // enough
+			}
+			istr := ident.String()
+			if !d.Contains(istr) {
+				if ds := d.dsc.Watch(ident, d.ch); ds != nil {
+					wds := &watchedDs{
+						RWMutex:     &sync.RWMutex{},
+						loading:     true,
+						DataSourcer: ds,
+						ident:       ident,
+					}
+					if d.Add(istr, wds) {
+						// LRU is full
+						d.Remove(istr)
+						break
+					}
+					wg.Add(1)
+					go d.loadDs(wds, &wg)
+					jobs++
+					if jobs >= 32 {
+						wg.Wait()
+					}
+				}
+			}
+		}
+		wg.Wait()
+	}
+	return nil
+}
+
+func (d *dsLRU) stateSaver(nap time.Duration) {
+	if d.cap == 0 {
+		return
+	}
+	for {
+		time.Sleep(nap)
+		d.saveState()
+	}
+}
+
 func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.DataSourcer, error) {
 	if d.dl == nil { // RRA loading not available
 		return d.db.FetchOrCreateDataSource(ident, nil)
@@ -129,11 +209,18 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 
 	if ds := d.dsc.Watch(ident, d.ch); ds != nil {
 
-		wds = &watchedDs{RWMutex: &sync.RWMutex{}, loading: true, DataSourcer: ds}
+		wds = &watchedDs{
+			RWMutex:     &sync.RWMutex{},
+			loading:     true,
+			DataSourcer: ds,
+			ident:       ident,
+		}
 		d.Add(ident.String(), wds) // Can cause an eviction
 
 		// Submit load job
-		go d.loadDs(wds)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go d.loadDs(wds, &wg)
 	} else {
 		// This DS is not watchable, which means it is somehow bogus,
 		// and we shouldn't bother with it. DSL should warn about it
@@ -148,7 +235,8 @@ func (d *dsLRU) FetchOrCreateDataSource(ident serde.Ident, _ *rrd.DSSpec) (rrd.D
 	return d.db.FetchOrCreateDataSource(ident, nil)
 }
 
-func (d *dsLRU) loadDs(wds *watchedDs) {
+func (d *dsLRU) loadDs(wds *watchedDs, wg *sync.WaitGroup) {
+	defer wg.Done()
 	rras := wds.RRAs()
 	newRRAs := make([]rrd.RoundRobinArchiver, len(rras))
 	for i, rra := range rras {
@@ -200,6 +288,7 @@ type watchedDs struct {
 	rrd.DataSourcer
 	*sync.RWMutex
 	loading bool
+	ident   serde.Ident
 	pending []DataPoint
 }
 
