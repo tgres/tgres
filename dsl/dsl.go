@@ -235,7 +235,7 @@ func (v *funcVisitor) processStack() ast.Visitor {
 		ret, v.err = seriesFromFunction(v.dc, name, c.args)
 	}
 
-	v.ret = ret.(SeriesMap)
+	v.ret, _ = ret.(SeriesMap)
 	return v
 }
 
