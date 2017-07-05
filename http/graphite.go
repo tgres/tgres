@@ -119,7 +119,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 						// run readDataPoints.
 						targets[n] = readDataPoints(sm)
 					} else {
-						log.Printf("RenderHandler(): %v", err)
+						log.Printf("RenderHandler() %q: %v", target, err)
 					}
 					wg.Done()
 				}(&wg, target, targets, n)

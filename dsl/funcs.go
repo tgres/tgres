@@ -225,6 +225,14 @@ var preprocessArgFuncs = funcMap{
 		argDef{"value", argNumber, 0.0},
 		argDef{"search", argString, nil},
 		argDef{"replace", argString, nil}}},
+	"consolidateBy": dslFuncType{dslConsolidateBy, false, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"consolidationFunc", argString, nil}}},
+	"summarize": dslFuncType{dslSummarize, true, []argDef{
+		argDef{"seriesList", argSeries, nil},
+		argDef{"intervalString", argString, nil},
+		argDef{"func", argString, "sum"},
+		argDef{"alignToFrom", argBool, "false"}}},
 	"holtWintersForecast": dslFuncType{dslHoltWintersForecast, false, []argDef{
 		argDef{"seriesList", argSeries, nil},
 		argDef{"seasonLen", argString, "1d"},
@@ -271,7 +279,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ scale()
 	// ++ scaleToSeconds()
 	// -- smartSummarize
-	// -- summarize // seems complicated
+	// ++ summarize
 	// ++ timeShift
 	// ?? timeStack // TODO?
 	// ++ transformNull
@@ -320,7 +328,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ aliasSub
 	// ?? cactiStyle // TODO should be easy to do?
 	// ++ changed
-	// ?? consolidateBy // doesn't apply to us, it's always avg?
+	// ++ consolidateBy
 	// ++ constantLine
 	// ++ countSeries
 	// -- cumulative // == consolidateBy
@@ -973,7 +981,8 @@ func dslAliasByNode(args map[string]interface{}) (SeriesMap, error) {
 				n = len(parts) + n
 			}
 			if n >= len(parts) || n < 0 {
-				return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", int(num.(float64)), len(parts))
+				//return nil, fmt.Errorf("node index %v out of range for number of nodes: %v", int(num.(float64)), parts)
+				continue
 			}
 			alias_parts = append(alias_parts, parts[n])
 		}
@@ -1679,7 +1688,7 @@ func (f *seriesMovingAverage) CurrentValue() float64 {
 func dslMovingAverage(args map[string]interface{}) (SeriesMap, error) {
 	series := args["seriesList"].(SeriesMap)
 	window := args["windowSize"].(string)
-	if dur, err := parseTimeShift(window); err == nil {
+	if dur, err := misc.BetterParseDuration(window); err == nil {
 		for name, s := range series {
 			s.Alias(fmt.Sprintf("movingAverage(%v,%v)", name, window))
 			series[name] = &seriesMovingAverage{AliasSeries: s, window: make([]float64, 0), dur: dur, n: -1}
@@ -2239,6 +2248,77 @@ func dslUseSeriesAbove(args map[string]interface{}) (SeriesMap, error) {
 		}
 	}
 	return sers, nil
+}
+
+// consolidateBy()
+// this is fake
+type seriesConsolidateBy struct {
+	AliasSeries
+	factor float64
+}
+
+func (sl *seriesConsolidateBy) CurrentValue() float64 {
+	return sl.AliasSeries.CurrentValue() * sl.factor
+}
+
+func dslConsolidateBy(args map[string]interface{}) (SeriesMap, error) {
+
+	series := args["seriesList"].(SeriesMap)
+	fname := args["consolidationFunc"].(string)
+	maxPoints := args["_maxPoints_"].(int64)
+
+	var factor float64 = 1
+
+	if fname == "sum" && maxPoints > 0 {
+		from := args["_from_"].(time.Time)
+		to := args["_to_"].(time.Time)
+		// factor is seconds per point
+		factor = to.Sub(from).Seconds() / float64(maxPoints)
+	}
+
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("consolidateBy(%v,%v)", name, fname))
+		series[name] = &seriesConsolidateBy{s, factor}
+	}
+	return series, nil
+}
+
+// summarize()
+//
+type seriesSummarize struct {
+	AliasSeries
+	factor float64
+}
+
+func (sl *seriesSummarize) CurrentValue() float64 {
+	return sl.AliasSeries.CurrentValue() * sl.factor
+}
+
+func dslSummarize(args map[string]interface{}) (SeriesMap, error) {
+	series := args["seriesList"].(SeriesMap)
+	is := args["intervalString"].(string)
+	fname := args["func"].(string)
+
+	var factor float64
+	if fname == "sum" {
+		dur, err := misc.BetterParseDuration(is)
+		if err != nil {
+			return nil, err
+		}
+		factor = dur.Seconds()
+	} else {
+		// assume avg
+		// max and min cannot really be supported
+		// and do not make much sense here
+		factor = 1
+	}
+
+	for name, s := range series {
+		s.Alias(fmt.Sprintf("summarize(%v,%v,%v)", name, is, fname))
+		series[name] = &seriesSummarize{s, factor}
+	}
+
+	return series, nil
 }
 
 // holtWintersForecast

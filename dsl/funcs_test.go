@@ -988,3 +988,27 @@ func Test_dsl_useSeriesAbove(t *testing.T) {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }
+
+// consolidateBy
+func Test_dsl_consolidateBy(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "consolidateBy(constantLine(10), sum)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 360); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}
+
+// summarize
+func Test_dsl_summarize(t *testing.T) {
+	td := setupTestData()
+	sm, err := ParseDsl(nil, "summarize(sum(constantLine(10), constantLine(20), constantLine(30)), '1min', sum)", td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+	if ok, unexpected := checkEveryValueIs(sm, 3600); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+}

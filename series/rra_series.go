@@ -75,6 +75,7 @@ func (s *RRASeries) Next() bool {
 
 	if groupBy == 0 && s.maxPoints > 0 {
 		groupBy = s.to.Sub(s.from) / time.Duration(s.maxPoints)
+		s.groupBy = groupBy
 	}
 
 	// Approximate the number of advances a group by contains.
@@ -168,7 +169,12 @@ func (s *RRASeries) setTimeRange(from, to time.Time) {
 	if to.IsZero() {
 		to = s.latest // which can be zero too
 	}
-	s.from, s.to = from.Truncate(s.step), to.Truncate(s.step)
+	s.from, s.to = from, to
+	if s.maxPoints > 0 {
+		// set groupBy
+		from, to := s.from.Truncate(s.step), s.to.Truncate(s.step)
+		s.groupBy = to.Sub(from) / time.Duration(s.maxPoints)
+	}
 }
 
 func (s *RRASeries) TimeRange(t ...time.Time) (time.Time, time.Time) {
@@ -189,7 +195,14 @@ func (s *RRASeries) Latest() time.Time {
 
 func (s *RRASeries) MaxPoints(n ...int64) int64 {
 	if len(n) > 0 {
-		defer func() { s.maxPoints = n[0] }()
+		defer func() {
+			s.maxPoints = n[0]
+			if !s.from.IsZero() && !s.to.IsZero() && s.maxPoints > 0 {
+				// set groupBy
+				from, to := s.from.Truncate(s.step), s.to.Truncate(s.step)
+				s.groupBy = to.Sub(from) / time.Duration(s.maxPoints)
+			}
+		}()
 	}
 	return s.maxPoints
 }
