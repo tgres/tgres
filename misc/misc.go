@@ -40,14 +40,24 @@ func BetterParseDuration(s string) (time.Duration, error) {
 
 	if strings.HasSuffix(s, "min") {
 		s = s[0 : len(s)-2] // min -> m
+	} else if strings.HasSuffix(s, "minutes") {
+		s = s[0 : len(s)-6] // minutes -> m
+	} else if strings.HasSuffix(s, "minute") {
+		s = s[0 : len(s)-5] // minute -> m
 	} else if strings.HasSuffix(s, "hour") {
 		s = s[0 : len(s)-3] // hour -> h
+	} else if strings.HasSuffix(s, "hours") {
+		s = s[0 : len(s)-4] // hours -> h
 	} else if strings.HasSuffix(s, "mon") {
 		fd, err := strconv.ParseFloat(s[0:len(s)-3], 64)
 		if err != nil {
 			return 0, err
 		}
 		s = fmt.Sprintf("%vh", fd*30*24)
+	} else if strings.HasSuffix(s, "week") {
+		s = s[0 : len(s)-3] // week -> w
+	} else if strings.HasSuffix(s, "weeks") {
+		s = s[0 : len(s)-4] // weeks -> w
 	}
 	if d, err := time.ParseDuration(s); err != nil {
 		if strings.HasPrefix(err.Error(), "time: unknown unit ") {
