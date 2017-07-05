@@ -1654,7 +1654,7 @@ func (f *seriesMovingAverage) Next() bool {
 	// join with the time generate_series, and thus never skip a time
 	// period
 	if f.dur != 0 && f.points == 0 {
-		f.points = int(f.dur / (f.GroupBy() + 1)) // +1 to avoid div by 0
+		f.points = int(f.dur/(f.GroupBy()+1)) + 1 // +1 to avoid div by 0
 	}
 	// initial build up
 	for len(f.window) < f.points {
