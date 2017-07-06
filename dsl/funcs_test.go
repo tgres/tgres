@@ -79,6 +79,7 @@ func Test_dsl_averageSeries(t *testing.T) {
 // sumSeriesWithWildcards
 // groupByNode
 // exclude
+// timeStack
 func Test_dsl_multiseriesStuff(t *testing.T) {
 	td := setupTestData()
 
@@ -145,6 +146,15 @@ func Test_dsl_multiseriesStuff(t *testing.T) {
 	}
 
 	if ok, unexpected := checkEveryValueIs(sm, 20); !ok {
+		t.Errorf("Unexpected value: %v", unexpected)
+	}
+
+	sm, err = ParseDsl(td.rcache, `sum(timeStack("foo.bar1.baz", '10min', 0, 3))`, td.from, td.to, 100)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if ok, unexpected := checkEveryValueIs(sm, 40); !ok {
 		t.Errorf("Unexpected value: %v", unexpected)
 	}
 }

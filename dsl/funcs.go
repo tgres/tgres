@@ -58,6 +58,7 @@ var dslCtxFuncs = dslCtxFuncMap{ // functions that require the dslCtx to do thei
 	"sumSeriesWithWildcards":     dslSumSeriesWithWildcards,
 	"averageSeriesWithWildcards": dslAverageSeriesWithWildcards,
 	"groupByNode":                dslGroupByNode,
+	"timeStack":                  dslTimeStack,
 }
 
 var preprocessArgFuncs = funcMap{
@@ -281,7 +282,7 @@ var preprocessArgFuncs = funcMap{
 	// -- smartSummarize
 	// ++ summarize
 	// ++ timeShift
-	// ?? timeStack // TODO?
+	// ++ timeStack
 	// ++ transformNull
 
 	// CALCULATE
@@ -332,7 +333,7 @@ var preprocessArgFuncs = funcMap{
 	// ++ constantLine
 	// ++ countSeries
 	// -- cumulative // == consolidateBy
-	// ?? groupByNode // similar to alias by metric
+	// ++ groupByNode
 	// ++ keepLastValue
 	// ?? randomWalk // later?
 	// ?? sortByMaxima
@@ -1335,6 +1336,7 @@ func dslOffsetToZero(args map[string]interface{}) (SeriesMap, error) {
 // timeShift()
 // We're not implementing resetEnd - it doesn't make much sense if
 // we're not actually generating graphs.
+// also used by dslTimeStack
 
 type seriesTimeShift struct {
 	AliasSeries
@@ -2316,6 +2318,75 @@ func dslSummarize(args map[string]interface{}) (SeriesMap, error) {
 	for name, s := range series {
 		s.Alias(fmt.Sprintf("summarize(%v,%v,%v)", name, is, fname))
 		series[name] = &seriesSummarize{s, factor}
+	}
+
+	return series, nil
+}
+
+// timeStack
+func dslTimeStack(dc *dslCtx, args []interface{}) (SeriesMap, error) {
+
+	if len(args) != 4 {
+		return nil, fmt.Errorf("Expecting 4 arguments, got %d", len(args))
+	}
+	sspec, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("%v is not a string", args[0])
+		// TODO: timeStack of a SeriesMap would be nice, but the
+		// problem is that we cannot iterate over the same series in
+		// parallel from different places, and there is no "mechanism"
+		// for copying a series at this point.
+	}
+	ispec, ok := args[1].(string)
+	if !ok {
+		return nil, fmt.Errorf("second arg %v is not a string", args[1])
+	}
+	period, err := misc.BetterParseDuration(ispec)
+	if err != nil {
+		return nil, err
+	}
+
+	fbegin, ok := args[2].(float64)
+	if !ok {
+		return nil, fmt.Errorf("third argument arg %v is not a number", args[2])
+	}
+	begin := int(fbegin)
+
+	fnum, ok := args[3].(float64)
+	if !ok {
+		return nil, fmt.Errorf("forth argument arg %v is not a number", args[3])
+	}
+	num := int(fnum)
+
+	// establish the wide from / to
+	span := period * time.Duration(num)
+	from := dc.to.Add(-span)
+	to := dc.to
+
+	series := make(SeriesMap)
+	idents := dc.identsFromPattern(sspec)
+	for name, ident := range idents {
+		ds, err := dc.FetchOrCreateDataSource(ident, nil)
+		if err != nil {
+			return nil, fmt.Errorf("timeStack(): Error %v", err)
+		}
+		if ds == nil {
+			continue
+		}
+
+		for i := begin; i <= num; i++ {
+			// Give FS the "big" range, TimeRange later
+			dps, err := dc.FetchSeries(ds, from, to, dc.maxPoints)
+			if err != nil {
+				return nil, fmt.Errorf("timeStack(): Error %v", err)
+			}
+			t := to.Add(-period * time.Duration(i))
+			f := t.Add(-period)
+			shift := to.Sub(t)
+			dps.TimeRange(f, t)
+			name := fmt.Sprintf("timeShift(%s, -%s, %d)", name, ispec, i)
+			series[name] = &seriesTimeShift{&aliasSeries{Series: dps}, shift}
+		}
 	}
 
 	return series, nil
