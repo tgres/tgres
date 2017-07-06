@@ -84,23 +84,31 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 			from, err := parseTime(r.FormValue("from"))
 			if err != nil {
 				log.Printf("RenderHandler(): (from) %v", err)
+				w.Header().Set("X-Tgres-DSL-Error", fmt.Sprintf("from: %v", err))
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			to, err := parseTime(r.FormValue("until"))
 			if err != nil {
 				log.Printf("RenderHandler(): (unitl) %v", err)
+				w.Header().Set("X-Tgres-DSL-Error", fmt.Sprintf("to: %v", err))
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			} else if to == nil {
 				tmp := time.Now()
 				to = &tmp
 			}
-			points, err := strconv.Atoi(r.FormValue("maxDataPoints"))
-			if err != nil {
-				log.Printf("RenderHandler(): (maxDataPoints) %v", err)
-				w.WriteHeader(http.StatusBadRequest)
-				return
+
+			points := 512
+			mdp := r.FormValue("maxDataPoints")
+			if mdp != "" {
+				points, err = strconv.Atoi(mdp)
+				if err != nil {
+					log.Printf("RenderHandler(): (maxDataPoints) %v", err)
+					w.Header().Set("X-Tgres-DSL-Error", fmt.Sprintf("maxDataPoints: %v", err))
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 			}
 
 			var wg sync.WaitGroup
@@ -119,6 +127,7 @@ func GraphiteRenderHandler(rcache dsl.NamedDSFetcher) http.HandlerFunc {
 						// run readDataPoints.
 						targets[n] = readDataPoints(sm)
 					} else {
+						w.Header().Set("X-Tgres-DSL-Error", fmt.Sprintf("%v", err))
 						log.Printf("RenderHandler() %q: %v", target, err)
 					}
 					wg.Done()
@@ -218,7 +227,8 @@ func parseTime(s string) (*time.Time, error) {
 func quoteIdentifiers(target string) string {
 	result := target
 	// Note that commas are only allowed inside {} (aka "value expression")
-	parts := regexp.MustCompile(`(('.*?')|"?[\w*][\w\-.*\[\]\{\}]*({\w\-.*,]*})?[\w\-.*]*[\w*]"?)`).FindAllString(target, -1)
+	parts := regexp.MustCompile(`(('.*?')|"?[\w*][\w\-.*\[\]]*({[\w\-.*,]*})?[\w\-.*\[\]]*[\w*\]]"?)`).FindAllString(target, -1)
+
 	for _, part := range parts {
 		// 'abc' => "abc"
 		if strings.HasPrefix(part, "'") && strings.HasSuffix(part, "'") {
@@ -226,7 +236,16 @@ func quoteIdentifiers(target string) string {
 		}
 
 		if strings.Contains(part, ".") && !strings.HasPrefix(part, "\"") {
-			result = quoteIdentifiers(strings.Replace(result, part, fmt.Sprintf("%q", part), -1))
+			// our part followed by a non-string character or eol
+			// this is to avoid replacing unintentionally a smaller substring in a larger one
+			// e.g. if our match is a.b.c, we want to replace just it, without affecting a.b.c.d
+			repl, err := regexp.Compile(fmt.Sprintf("%s([ ,)$])", regexp.QuoteMeta(part)))
+			if err != nil {
+				continue // ignore error
+			}
+			// replace the match followed by $1 (the group that follows it)
+			newarg := repl.ReplaceAllString(result, fmt.Sprintf("%q$1", part))
+			result = quoteIdentifiers(newarg)
 			break
 		}
 	}
