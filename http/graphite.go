@@ -227,7 +227,7 @@ func parseTime(s string) (*time.Time, error) {
 func quoteIdentifiers(target string) string {
 	result := target
 	// Note that commas are only allowed inside {} (aka "value expression")
-	parts := regexp.MustCompile(`(('.*?')|"?[\w*][\w\-.*\[\]]*({[\w\-.*,]*})?[\w\-.*\[\]]*[\w*\]]"?)`).FindAllString(target, -1)
+	parts := regexp.MustCompile(`(('.*?')|"?[\w*][\w\-.*\[\]]*({[\[\]\w\-.*,]*})?[\w\-.*\[\]]*"?)`).FindAllString(target, -1)
 
 	for _, part := range parts {
 		// 'abc' => "abc"
@@ -239,16 +239,20 @@ func quoteIdentifiers(target string) string {
 			// our part followed by a non-string character or eol
 			// this is to avoid replacing unintentionally a smaller substring in a larger one
 			// e.g. if our match is a.b.c, we want to replace just it, without affecting a.b.c.d
-			repl, err := regexp.Compile(fmt.Sprintf("%s([ ,)$])", regexp.QuoteMeta(part)))
+			repl, err := regexp.Compile(fmt.Sprintf("%s([ ,)]|$)", regexp.QuoteMeta(part)))
 			if err != nil {
-				continue // ignore error
+				return "ParseError" // this should never happen
 			}
 			// replace the match followed by $1 (the group that follows it)
 			newarg := repl.ReplaceAllString(result, fmt.Sprintf("%q$1", part))
+			if newarg == result {
+				return "\"ParseError2\"" // something is wrong, replacement didn't happen
+			}
 			result = quoteIdentifiers(newarg)
 			break
 		}
 	}
+
 	return result
 }
 
