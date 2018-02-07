@@ -23,6 +23,10 @@ how Tgres stores data see this
 
 ### Current Status
 
+Feb 7 2018: This project is not actively maintained. You may find
+quite a bit of time-series wisdom here, but there are probably still a
+lot of bugs.
+
 Jul 5 2017: See this [status update](https://grisha.org/blog/2017/07/04/tgres-status-july-2017/)
 
 Jun 15 2017: Many big changes since March, most notably data point
