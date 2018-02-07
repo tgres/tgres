@@ -192,7 +192,7 @@ func (c *fakeCluster) Shutdown() error {
 
 // IncomingDP must be gob encodable
 func TestIncomingDP_gobEncodable(t *testing.T) {
-	now := time.Now()
+	now := time.Now().Round(0)
 	dp1 := &incomingDP{
 		cachedIdent: newCachedIdent(serde.Ident{"name": "foo.bar"}),
 		timeStamp:   now,
