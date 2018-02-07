@@ -1359,7 +1359,7 @@ func handleDeleteNotifications(l *pq.Listener, handler func(Ident)) {
 		case n := <-l.Notify:
 			// TODO: Should we be checking the n.Channel value to make sure
 			// it is not some other event?
-			if n.Extra == "" {
+			if n == nil || n.Extra == "" {
 				log.Printf("handleDeleteNotifications: Warning: ignoring empty n.Extra string.")
 				continue
 			}
