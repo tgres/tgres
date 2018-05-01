@@ -97,7 +97,7 @@ bug fix, or for anything else - use Github.
 ### Migrating Graphite Data
 
 Included in cmd/whisper_import is a program that can copy whisper data
-into Tgres, itss command-line arguments are self-explanatory. You
+into Tgres, its command-line arguments are self-explanatory. You
 should be able to start sending data to Tgres and then migrate your
 Graphite data retroactively by running whisper_import to avoid gaps in
 data. It's probably a good idea to test a small subset of series first,
