@@ -204,7 +204,7 @@ func (g *graphitePickleServiceManager) handleGraphitePickleProtocol(conn net.Con
 
 	if err != nil {
 		if !strings.Contains(err.Error(), "use of closed") {
-			log.Println("handleGraphitePickleProtocol(): Error reading: %v", err.Error())
+			log.Printf("handleGraphitePickleProtocol(): Error reading: %v", err)
 		}
 	}
 }

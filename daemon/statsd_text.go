@@ -200,7 +200,7 @@ func (g *statsdTextServiceManager) handleStatsdTextProtocol(conn net.Conn) {
 
 	if err := connbuf.Err(); err != nil {
 		if !strings.Contains(err.Error(), "use of closed") {
-			log.Println("handleStatsdTextProtocol(): Error reading: %v", err)
+			log.Printf("handleStatsdTextProtocol(): Error reading: %v", err)
 		}
 	}
 }

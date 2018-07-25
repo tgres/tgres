@@ -191,7 +191,7 @@ func (g *graphiteTextServiceManager) handleGraphiteTextProtocol(conn net.Conn) {
 		packetStr := connbuf.Text()
 
 		if name, ts, v, err := parseGraphitePacket(packetStr); err != nil {
-			log.Printf("handleGraphiteTextProtocol(): bad backet: %v")
+			log.Printf("handleGraphiteTextProtocol(): bad packet: %v", packetStr)
 		} else {
 			g.rcvr.QueueDataPoint(serde.Ident{"name": name}, ts, v)
 		}
@@ -207,7 +207,7 @@ func (g *graphiteTextServiceManager) handleGraphiteTextProtocol(conn net.Conn) {
 
 	if err := connbuf.Err(); err != nil {
 		if !strings.Contains(err.Error(), "use of closed") {
-			log.Println("handleGraphiteTextProtocol(): Error reading: %v", err)
+			log.Printf("handleGraphiteTextProtocol(): Error reading: %v", err)
 		}
 	}
 }
