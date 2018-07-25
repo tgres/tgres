@@ -29,7 +29,7 @@ import (
 
 // A collection of data sources kept by serde.Ident.
 type dsCache struct {
-	sync.RWMutex
+	*sync.RWMutex
 	byIdent  map[string]*cachedDs
 	db       serde.Fetcher
 	dsf      dsFlusherBlocking
@@ -41,6 +41,7 @@ type dsCache struct {
 // Returns a new dsCache object.
 func newDsCache(db serde.Fetcher, finder MatchingDSSpecFinder, dsf dsFlusherBlocking) *dsCache {
 	return &dsCache{
+		RWMutex: new(sync.RWMutex),
 		byIdent: make(map[string]*cachedDs),
 		db:      db,
 		finder:  finder,

@@ -206,7 +206,7 @@ func TestIncomingDP_gobEncodable(t *testing.T) {
 
 	err := enc.Encode(dp1)
 	if err != nil {
-		t.Errorf("gob encode error:", err)
+		t.Errorf("gob encode error: %v", err)
 	}
 
 	var dp2 *incomingDP
