@@ -62,11 +62,11 @@ func BetterParseDuration(s string) (time.Duration, error) {
 	if d, err := time.ParseDuration(s); err != nil {
 		if strings.HasPrefix(err.Error(), "time: unknown unit ") {
 			d, _ := strconv.ParseInt(s[0:len(s)-1], 10, 64)
-			if strings.HasPrefix(err.Error(), "time: unknown unit d in") {
+			if strings.HasPrefix(err.Error(), `time: unknown unit "d" in`) {
 				return time.Duration(d*24) * time.Hour, nil
-			} else if strings.HasPrefix(err.Error(), "time: unknown unit w in") {
+			} else if strings.HasPrefix(err.Error(), `time: unknown unit "w" in`) {
 				return time.Duration(d*168) * time.Hour, nil
-			} else if strings.HasPrefix(err.Error(), "time: unknown unit y in") {
+			} else if strings.HasPrefix(err.Error(), `time: unknown unit "y" in`) {
 				return time.Duration(d*8760) * time.Hour, nil
 			}
 		}
