@@ -79,6 +79,7 @@ func Test_directorIncomingDPMessages(t *testing.T) {
 	m, _ := cluster.NewMsg(&cluster.Node{}, dp)
 	rcv <- m
 	rcv <- m
+	rcv <- m
 
 	if count < 1 {
 		t.Errorf("At least 1 data point should have been sent to dpCh")
