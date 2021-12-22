@@ -35,10 +35,7 @@ stats-name-prefix           = "stats"
 # (Default is 0 == cache disabled)
 query-cache-size            = 512
 
-# RedHat and some others:
-db-connect-string = "host=/tmp dbname=tgres sslmode=disable"
-# Debian and some others:
-#db-connect-string = "host=/var/run/postgresql dbname=tgres sslmode=disable"
+db-connect-string = "postgresql:///tgres?host=/var/run/postgresql"
 
 [[ds]]
 regexp = ".*"

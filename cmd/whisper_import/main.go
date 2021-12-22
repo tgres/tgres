@@ -77,7 +77,7 @@ func main() {
 
 	flag.StringVar(&cfg.whisperDir, "whisper-dir", "/opt/graphite/storage/whisper/", "location where all whisper files are stored")
 	flag.StringVar(&cfg.root, "root", "", "location of files to be imported, should be subdirectory of whisperDir, defaults to whisperDir")
-	flag.StringVar(&cfg.dbConnect, "dbconnect", "host=/var/run/postgresql dbname=tgres sslmode=disable", "db connect string")
+	flag.StringVar(&cfg.dbConnect, "dbconnect", "postgresql:///tgres?host=/var/run/postgresql", "db connect string")
 	flag.StringVar(&cfg.namePrefix, "prefix", "", "series name prefix (no trailing dot)")
 	flag.IntVar(&cfg.staleDays, "stale-days", 0, "Max days since last update before we ignore this DS (0 = process all)")
 	flag.StringVar(&cfg.specStr, "spec", "", "Spec (config file format, comma-separated) to use for new DSs (Blank = infer from whisper file)")
