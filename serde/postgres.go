@@ -632,7 +632,7 @@ WITH rra AS (
   SELECT rra.id, rra.ds_id, rra.rra_bundle_id, rra.pos, rra.seg, rra.idx, rra.cf, rra.xff,
          rs.latest[rra.idx] AS latest, rs.value[rra.idx] AS value, rs.duration_ms[rra.idx] AS duration_ms,
          b.step_ms, b.size, b.width
-    FROM %[1]srra
+    FROM %[1]srra rra
     JOIN %[1]srra_bundle b ON b.id = rra.rra_bundle_id
     LEFT OUTER JOIN %[1]srra_state AS rs ON rs.rra_bundle_id = rra.rra_bundle_id AND rs.seg = rra.seg
 ), ds AS (
