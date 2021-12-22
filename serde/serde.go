@@ -32,7 +32,6 @@ var debug bool
 
 func init() {
 	debug = os.Getenv("TGRES_SERDE_DEBUG") != ""
-	fmt.Printf("ZZZ DEBUG %v\n", debug)
 }
 
 // An iterator, similar to sql.Rows.
