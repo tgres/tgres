@@ -74,7 +74,12 @@ func InitDb(connect_string, prefix string) (*pgvSerDe, error) {
 	} else {
 		// NB: disabling materialization (enable_material=off) speeds up
 		// sqlSelectSeries.
-		dbQConn, err := sql.Open("postgres", connect_string+"&enable_material=off")
+		if strings.Contains(connect_string, "?") {
+			connect_string = connect_string + "&enable_material=off"
+		} else {
+			connect_string = connect_string + "?enable_material=off"
+		}
+		dbQConn, err := sql.Open("postgres", connect_string)
 		if err != nil {
 			return nil, err
 		}
